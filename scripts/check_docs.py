@@ -108,7 +108,32 @@ def expected_for(
     return total, "the suite"
 
 
-def main() -> int:
+def fix_line(line: str, total: int, per_file: dict[str, int]) -> str:
+    """Rewrite every stale number on one line, leaving the rest untouched.
+
+    Spans are replaced right-to-left so an earlier replacement cannot shift the
+    offsets of a later one.
+    """
+    resolved = expected_for(line, total, per_file)
+    if resolved is None:
+        return line
+    expected, _ = resolved
+
+    spans = [
+        m.span(1)
+        for pattern in PATTERNS
+        for m in pattern.finditer(line)
+        if int(m.group(1)) != expected
+    ]
+    for start, end in sorted(spans, reverse=True):
+        line = line[:start] + str(expected) + line[end:]
+    return line
+
+
+def main(argv: list[str] | None = None) -> int:
+    argv = sys.argv[1:] if argv is None else argv
+    fix = "--fix" in argv
+
     total, per_file = collect()
 
     wrong: list[str] = []
@@ -117,8 +142,12 @@ def main() -> int:
         path = ROOT / name
         if not path.exists():
             continue
-        lines = path.read_text(encoding="utf-8").splitlines()
-        for lineno, line in enumerate(lines, 1):
+        text = path.read_text(encoding="utf-8")
+        lines = text.splitlines(keepends=True)
+        changed = False
+
+        for index, raw in enumerate(lines):
+            line = raw.rstrip("\r\n")
             if IGNORE.search(line):
                 continue
             for pattern in PATTERNS:
@@ -129,16 +158,37 @@ def main() -> int:
                         continue
                     expected, what = resolved
                     checked += 1
-                    if claimed != expected:
+                    if claimed == expected:
+                        continue
+                    if fix:
+                        changed = True
+                    else:
                         wrong.append(
-                            f"  {name}:{lineno}: claims {claimed}, "
+                            f"  {name}:{index + 1}: claims {claimed}, "
                             f"{what} has {expected}\n      {line.strip()}"
                         )
+
+            if fix:
+                fixed = fix_line(line, total, per_file)
+                if fixed != line:
+                    lines[index] = fixed + raw[len(line) :]
+
+        if fix and changed:
+            path.write_text("".join(lines), encoding="utf-8")
+            print(f"fixed: {name}")
+
+    if fix:
+        # Re-check, so --fix can never report success on something it did not
+        # actually correct.
+        return main([])
 
     if wrong:
         print(f"error: docs quote a stale test count (pytest collects {total}):")
         print("\n".join(wrong))
-        print("\nUpdate the figure(s) above, or adjust scripts/check_docs.py")
+        print(
+            "\nRun `python scripts/check_docs.py --fix` to update them, "
+            "or adjust scripts/check_docs.py"
+        )
         return 1
 
     print(

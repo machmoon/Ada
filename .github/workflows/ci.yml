@@ -21,5 +21,6 @@ jobs:
       - run: ruff check engine service scripts
       - run: pytest -q
       # Fails if README/DEVPOST quote a test count that is no longer true.
-      # That figure has already gone stale twice (40 -> 54 -> 143 -> 160).
+      # That figure has gone stale repeatedly (40 -> 54 -> 143 -> 160 -> 183).
+      # If this is what broke your build: python scripts/check_docs.py --fix
       - run: python scripts/check_docs.py
