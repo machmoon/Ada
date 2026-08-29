@@ -74,7 +74,7 @@ Found in a verification pass over the docs and recent commits; left open on purp
 1. `engine/silkscreen/agents/model.py:111` passes `media_resolution="high"`, which matches no member of the SDK's `MediaResolution` enum (values are `MEDIA_RESOLUTION_HIGH` etc.), so high-resolution datasheet reading is likely silently not applied.
 2. ~~The Firestore fact cache is a placeholder~~ — resolved in `4249c5b`: the write-back stores real facts and cache hits feed `preloaded_facts` into the pipeline, with service tests.
 3. `.env.example` documents `GOOGLE_CLOUD_LOCATION`, which nothing reads (no Vertex AI path exists); `USE_FIRESTORE` is read by `service/app.py` but documented nowhere (documentation half now tracked as the ops-polish row under TODO.txt feature 8).
-4. No test, even a key-gated one, exercises the live `GeminiModel`.
+4. ~~No test, even a key-gated one, exercises the live `GeminiModel`~~ — resolved on the `web-tdd` branch by `engine/tests/test_live_model.py`: one gated call to `CHEAP_MODEL` asserts the response is non-empty text carrying a requested marker, plus an ungated test that construction without `GOOGLE_API_KEY` raises `ModelError`. The live tests skip unless `GOOGLE_API_KEY` is set, so the default suite stays offline and free.
 5. `build_store()` constructs a fresh Firestore client per request in production (also tracked as the ops-polish row under TODO.txt feature 8).
 6. The `google-genai>=1.0` pin is unbounded upward; PyPI is at 2.x and a breaking 3.0 has been announced.
 7. `engine/silkscreen/mcp/server.py`'s docstring says "four useful operations"; `TOOLS` defines five.
