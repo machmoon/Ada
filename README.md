@@ -269,8 +269,9 @@ UI at `/`, same origin as `/generate`, so there is no CORS anywhere.
 
 ### Running the web UI
 
-The UI is a Svelte SPA in `web/`. In development it runs on Vite's dev server,
-which proxies `/generate` and `/healthz` to the Python service — two terminals:
+The UI is a Svelte SPA in `web/`; you need Node 22 or newer (`node --version`).
+In development it runs on Vite's dev server, which proxies `/generate` and
+`/healthz` to the Python service — two terminals:
 
 ```bash
 PORT=8081 python -m service.app       # terminal 1: the API
@@ -283,6 +284,8 @@ For the production path, build the bundle and let the service serve it itself:
 cd web && npm run build    # writes web/dist/
 python -m service.app      # http://localhost:8080 serves both the UI and the API
 ```
+
+The UI's own unit tests (Vitest, no browser needed) run with `cd web && npm test`.
 
 ### As an MCP server
 
