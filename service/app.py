@@ -1,0 +1,224 @@
+"""Cloud Run service: prompt in, KiCad board out.
+
+A single HTTP surface over :func:`silkscreen.agents.generate_pcb`, built on the
+standard library so the container stays small and the dependency list stays
+honest. Datasheet facts persist to Firestore, so the second request for a part
+skips the most expensive stage in the pipeline.
+
+Run locally::
+
+    python -m service.app
+
+Deploy::
+
+    gcloud run deploy silkscreen --source . --region us-central1
+"""
+
+from __future__ import annotations
+
+import json
+import os
+import sys
+import traceback
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
+from typing import Any
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "engine"))
+
+from silkscreen.agents import ModelError, generate_pcb  # noqa: E402
+from silkscreen.agents.model import GeminiModel  # noqa: E402
+from silkscreen.agents.resilience import (  # noqa: E402
+    AllProvidersFailed,
+    FallbackModel,
+    Provider,
+)
+from silkscreen.board import emit_kicad_pcb  # noqa: E402
+from silkscreen.units import to_mm  # noqa: E402
+
+from .cache import FactStore, MemoryFactStore  # noqa: E402
+
+__all__ = [
+    "Handler",
+    "build_model",
+    "build_store",
+    "caused_by_model_failure",
+    "generate",
+    "make_server",
+]
+
+MAX_BODY_BYTES = 1 << 20
+DEFAULT_TIME_LIMIT = 20.0
+
+
+def caused_by_model_failure(exc: BaseException) -> bool:
+    """True if a model outage is anywhere under this exception.
+
+    The pipeline wraps a failed call in ProposalError, which is a RuntimeError
+    and not a ModelError -- so a Gemini outage and a Gemini response we could
+    not use arrive as the same type. They are different failures: one is ours
+    to retry, the other is the caller's prompt to fix. Walking the cause chain
+    is what keeps a 503 upstream from being reported as our 500.
+    """
+    seen: set[int] = set()
+    current: BaseException | None = exc
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        if isinstance(current, (ModelError, AllProvidersFailed)):
+            return True
+        current = current.__cause__ or current.__context__
+    return False
+
+
+def build_store() -> FactStore:
+    """Firestore when deployed, in-memory when not configured."""
+    if os.getenv("GOOGLE_CLOUD_PROJECT") and os.getenv("USE_FIRESTORE", "1") != "0":
+        from .cache import FirestoreFactStore
+
+        return FirestoreFactStore()
+    return MemoryFactStore()
+
+
+def build_model():
+    """Primary Gemini model with a cheaper tier behind it.
+
+    Two tiers, not one: a rate limit or a transient 5xx on the primary should
+    degrade the answer, not lose the request.
+    """
+    from silkscreen.agents.model import CHEAP_MODEL, DEFAULT_MODEL
+
+    return FallbackModel(
+        providers=[
+            Provider("gemini-primary", GeminiModel(DEFAULT_MODEL), attempts=2),
+            Provider("gemini-cheap", GeminiModel(CHEAP_MODEL), attempts=2),
+        ]
+    )
+
+
+def generate(
+    payload: dict[str, Any],
+    *,
+    model,
+    store: FactStore,
+) -> dict[str, Any]:
+    """Run the pipeline for one request body."""
+    intent = str(payload.get("intent") or "").strip()
+    if not intent:
+        raise ValueError("'intent' is required")
+
+    datasheets = payload.get("datasheets") or {}
+    if not isinstance(datasheets, dict):
+        raise ValueError("'datasheets' must be an object of {part: url}")
+
+    # Anything already in Firestore is not read again.
+    cached = {p: store.get(p) for p in datasheets}
+    to_read = {p: u for p, u in datasheets.items() if cached.get(p) is None}
+
+    result = generate_pcb(
+        model,
+        intent,
+        datasheets=to_read,
+        time_limit_s=float(payload.get("time_limit_s", DEFAULT_TIME_LIMIT)),
+        review=bool(payload.get("review", True)),
+    )
+
+    for fact in result.facts:
+        part = getattr(fact, "part_number", None)
+        if part:
+            store.put(part, {"part_number": part})
+
+    board = result.board
+    return {
+        "intent": intent,
+        "board_mm": [round(to_mm(board.width_nm), 3), round(to_mm(board.height_nm), 3)],
+        "status": str(board.solver_status),
+        "parts": [{"ref": p.ref, "footprint": p.footprint.name} for p in board.parts],
+        "kicad_pcb": emit_kicad_pcb(board),
+        "repair_rounds": result.repair_rounds,
+        "blockers": [str(b) for b in result.blockers],
+        "cache": {
+            "hit": sorted(p for p, v in cached.items() if v is not None),
+            "read": sorted(to_read),
+        },
+        "served_by": getattr(model, "last_provider", None),
+    }
+
+
+class Handler(BaseHTTPRequestHandler):
+    """Two routes: a health check Cloud Run can probe, and the generator."""
+
+    model_factory = staticmethod(build_model)
+    store: FactStore | None = None
+
+    def _send(self, code: int, payload: dict[str, Any]) -> None:
+        body = json.dumps(payload).encode()
+        self.send_response(code)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def do_GET(self) -> None:
+        if self.path in ("/", "/healthz"):
+            self._send(200, {"ok": True, "service": "silkscreen"})
+        else:
+            self._send(404, {"error": f"no route {self.path}"})
+
+    def do_POST(self) -> None:
+        if self.path not in ("/generate", "/"):
+            self._send(404, {"error": f"no route {self.path}"})
+            return
+
+        length = int(self.headers.get("Content-Length") or 0)
+        if length > MAX_BODY_BYTES:
+            self._send(413, {"error": "request body too large"})
+            return
+        try:
+            payload = json.loads(self.rfile.read(length) or b"{}")
+        except json.JSONDecodeError as exc:
+            self._send(400, {"error": f"invalid JSON: {exc}"})
+            return
+        if not isinstance(payload, dict):
+            self._send(400, {"error": "body must be a JSON object"})
+            return
+
+        try:
+            store = self.store if self.store is not None else build_store()
+            result = generate(payload, model=self.model_factory(), store=store)
+        except ValueError as exc:
+            self._send(400, {"error": str(exc)})
+        except (AllProvidersFailed, ModelError) as exc:
+            # Upstream is down, not the caller's fault: 502, not 500.
+            self._send(502, {"error": str(exc)})
+        except Exception as exc:
+            if caused_by_model_failure(exc):
+                self._send(502, {"error": str(exc)})
+            else:
+                self._send(
+                    500,
+                    {
+                        "error": f"{type(exc).__name__}: {exc}",
+                        "trace": traceback.format_exc(limit=3),
+                    },
+                )
+        else:
+            self._send(200, result)
+
+    def log_message(self, fmt: str, *args: Any) -> None:
+        sys.stderr.write(f"{self.address_string()} - {fmt % args}\n")
+
+
+def make_server(port: int | None = None) -> ThreadingHTTPServer:
+    port = port if port is not None else int(os.getenv("PORT", "8080"))
+    return ThreadingHTTPServer(("0.0.0.0", port), Handler)
+
+
+def main() -> int:  # pragma: no cover - process entry
+    server = make_server()
+    sys.stderr.write(f"listening on :{server.server_port}\n")
+    server.serve_forever()
+    return 0
+
+
+if __name__ == "__main__":  # pragma: no cover
+    raise SystemExit(main())

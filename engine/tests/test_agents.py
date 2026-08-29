@@ -281,3 +281,18 @@ def test_pipeline_can_skip_review(tmp_path):
                           review=False, time_limit_s=10.0)
     assert result.findings == []
     assert len(model.calls) == 1
+
+
+def test_transport_failure_is_not_a_proposal_failure():
+    """An upstream outage and a bad proposal are different conditions.
+
+    Wrapping the first in the second loses the distinction, and a caller that
+    must choose between "retry later" and "give up" cannot tell them apart --
+    an HTTP service deciding 502 versus 500, for instance.
+    """
+    class Dead:
+        def generate(self, *args, **kwargs):
+            raise ModelError("upstream 503")
+
+    with pytest.raises(ModelError, match="503"):
+        propose_circuit(Dead(), "a motor driver")

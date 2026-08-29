@@ -199,6 +199,54 @@ and has no two overlapping courtyards.
 
 ---
 
+## Prompt to PCB
+
+```bash
+cp .env.example .env          # add your GOOGLE_API_KEY
+python -m silkscreen "a 3.3V motor driver with an STM32F103" -o board.kicad_pcb
+```
+
+Reads any datasheets you point it at, proposes a circuit into the validated IR,
+repairs it against the validation errors until it passes, places it with CP-SAT,
+writes the `.kicad_pcb`, then reviews its own work and cites the page.
+
+| Stage | Module |
+|---|---|
+| Datasheet reading (Gemini native PDF vision) | `agents/datasheet.py` |
+| Retrieval over datasheet text, page-cited | `agents/retrieval.py` |
+| Circuit proposal into the IR | `agents/propose.py` |
+| Validation + bounded repair loop | `netlist.py` |
+| Footprint generation, board emission | `footprints.py`, `board.py` |
+| Placement | `packing.py` |
+| Adversarial review | `agents/review.py` |
+
+Every model call goes through a provider chain that validates the response
+before accepting it, so a rate limit or a malformed reply falls through to the
+next tier instead of failing the request.
+
+### As a service
+
+```bash
+gcloud run deploy silkscreen --source . --region us-central1 \
+  --set-env-vars GOOGLE_API_KEY=...,GOOGLE_CLOUD_PROJECT=your-project
+```
+
+`POST /generate` with `{"intent": "...", "datasheets": {"PART": "url"}}` returns
+the board plus the emitted `.kicad_pcb`. Extracted datasheet facts persist to
+Firestore, so the second request for a part skips the most expensive stage.
+`GET /healthz` is the readiness probe.
+
+### As an MCP server
+
+```bash
+silkscreen-mcp        # JSON-RPC 2.0 over stdio
+```
+
+Five tools: `validate_circuit`, `build_board`, `emit_kicad_pcb`, `place_parts`,
+`generate_footprint`.
+
+---
+
 ## The placer
 
 CP-SAT. Variables are each part's bottom-left corner on an integer grid;

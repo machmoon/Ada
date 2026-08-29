@@ -14,7 +14,7 @@ from dataclasses import dataclass, field
 
 from ..netlist import CircuitSpec, ValidationError, parse_circuit_spec
 from .datasheet import PartFacts
-from .model import Model, ModelError
+from .model import Model
 
 __all__ = ["propose_circuit", "ProposalError", "ProposalAttempt", "PROPOSE_PROMPT"]
 
@@ -112,7 +112,10 @@ def propose_circuit(
     how many rounds it took -- which is a genuinely useful quality signal.
 
     Raises:
-        ProposalError: if no valid circuit emerged within ``max_repairs``.
+        ProposalError: the model answered, but never with a valid circuit.
+        ModelError: the model could not be reached at all. Deliberately not
+            wrapped -- an upstream outage is a different condition from a bad
+            proposal, and callers route them differently.
     """
     facts = facts or []
     attempts: list[ProposalAttempt] = []
@@ -124,10 +127,12 @@ def propose_circuit(
     )
 
     for round_no in range(max_repairs + 1):
-        try:
-            raw = model.generate(prompt, temperature=0.0, max_output_tokens=16384)
-        except ModelError as exc:
-            raise ProposalError(f"Model call failed: {exc}", attempts) from exc
+        # A transport failure is deliberately NOT wrapped in ProposalError.
+        # "the model was unreachable" and "the model could not produce a valid
+        # circuit" are different conditions with different remedies -- retry
+        # versus give up -- and a caller (an HTTP service deciding between 502
+        # and 500) has to be able to tell them apart. ModelError propagates.
+        raw = model.generate(prompt, temperature=0.0, max_output_tokens=16384)
 
         attempt = ProposalAttempt(round=round_no, raw=raw)
         attempts.append(attempt)

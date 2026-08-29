@@ -18,6 +18,7 @@ dependencies = [
 [project.optional-dependencies]
 # The engine is model-free; agents/ is the only place a network call lives.
 agents = ["google-genai>=1.0"]
+cloud = ["google-genai>=1.0", "google-cloud-firestore>=2.16"]
 dev = ["pytest>=8.0", "ruff>=0.6"]
 
 [project.scripts]
@@ -31,8 +32,8 @@ build-backend = "setuptools.build_meta"
 where = ["engine"]
 
 [tool.pytest.ini_options]
-testpaths = ["engine/tests"]
-pythonpath = ["engine"]
+testpaths = ["engine/tests", "service/tests"]
+pythonpath = ["engine", "."]
 
 [tool.ruff]
 line-length = 88
