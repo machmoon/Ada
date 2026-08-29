@@ -265,7 +265,35 @@ plus total HPWL.
 | **Symmetry breaking** | 24 identical caps admit 24! relabelings. Forcing a lexicographic order collapses each orbit to one representative — on a 27-part board, optimality in 0.72 s instead of 16.7 s. |
 | **HPWL, one box per net** | A pairwise clique makes a 50-pad ground net contribute 1,225 terms that swamp every signal. A star overestimates length and makes layout depend on footprint order in the file. |
 | **Power rails down-weighted, not dropped** | A decap's only connections are VCC and GND — drop power nets and it has no objective term and drifts. Measured: excluding power put a cap 9.65 mm from its IC pin; weighting at 0.25 brings it to 5.15 mm. |
-| **Degrades, doesn't fail** | If CP-SAT finds nothing in budget, a deterministic shelf packer returns a valid layout flagged `FALLBACK`, warning about every constraint it couldn't honour. |
+| **Pinned parts** | `Part(fixed_at_nm=(x, y))` holds a part where you put it. Without this every re-solve reshuffles the board, so you can't keep a placement you like and let the solver work around it. |
+| **Keepouts** | `Keepout(x, y, w, h)` reserves a region — mounting holes, a connector's mating envelope, a mechanical boss. Modelled as an immovable participant in the same no-overlap constraint as the parts, because that's what it is. |
+| **Degrades, doesn't fail** | If CP-SAT finds nothing in budget, a deterministic shelf packer returns a valid layout flagged `FALLBACK`, warning about every constraint it couldn't honour — including the pins and keepouts it can't. |
+
+### Iterating on a placement
+
+Keep what you like and re-solve the rest:
+
+```python
+from silkscreen import Keepout, Part
+
+first = pack(parts, nets=nets)
+good  = {p.ref: p for p in first.placements}
+
+parts = [
+    Part(..., ref="J1", fixed_at_nm=(good["J1"].x_nm, good["J1"].y_nm))
+    if p.ref == "J1" else p
+    for p in parts
+]
+second = pack(
+    parts,
+    nets=nets,
+    keepouts=[Keepout(mm(3), mm(3), mm(3.2), mm(3.2), name="MH1")],  # M3 hole
+)
+```
+
+`fixed_at_nm` names where the **part** goes, not its clearance-inflated box, and is
+snapped to the solver grid. Pinning closer to the origin than `clearance_nm/2` raises,
+because the clearance ring has to exist.
 
 ### Limits
 
@@ -275,9 +303,10 @@ Coarsening the grid from 0.025 mm to 0.5 mm barely moves the result, so the bott
 is combinatorial, not resolution. **Treat the output as a strong starting placement,
 not a proof.**
 
-No support for: two-sided placement, locked/pre-placed parts, keepouts, connector
-orientation, thermal relief, or differential pairs. The first two are what stop it
-being usable iteratively on a real design.
+No support for: **two-sided placement** (everything is one layer), **connector
+orientation** (`must_be_on_edge` puts a part on an edge but says nothing about which
+way it faces), **thermal relief**, or **differential pairs**. Two-sided placement is
+the one that most limits real use.
 
 ---
 
@@ -376,7 +405,7 @@ On Windows, use `.venv\Scripts\python.exe` in place of `./.venv/bin/python`.
 **1. Test suite** — 170 tests, no skips, no warnings:
 
 ```
-170 passed in 123.92s
+170 passed in 142.14s
 ```
 
 The suite is dominated by the 20-second solver budget in a handful of placement
