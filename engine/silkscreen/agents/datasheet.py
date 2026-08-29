@@ -11,7 +11,7 @@ useful in a domain where being wrong costs four weeks and a fab run.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field, fields
 
 from .model import Document, Model, ModelError, parse_json
 
@@ -41,6 +41,54 @@ class PartFacts:
     auxiliaries: list[dict] = field(default_factory=list)
     notes: str = ""
     source_url: str = ""
+
+    def to_dict(self) -> dict:
+        """A JSON-safe copy, for storing in a cache.
+
+        Reading a datasheet is the slowest and most expensive stage in the
+        pipeline and its result is a pure function of the part number, so the
+        facts are worth persisting. Persisting them requires that they survive
+        a round trip *whole* -- a cache that stores only a part number lets the
+        caller skip the read and then design with nothing.
+        """
+        return asdict(self)
+
+    @classmethod
+    def from_dict(cls, data: dict) -> PartFacts:
+        """Rebuild from :meth:`to_dict`, ignoring fields we do not know.
+
+        Unknown keys are dropped rather than raising: a cache entry written by
+        a newer version of this class must not break an older instance still
+        serving traffic, which on Cloud Run is a normal state during a rollout.
+
+        Malformed input raises :class:`ValueError` -- one type, so a caller can
+        treat a corrupt entry as a miss without having to enumerate every way a
+        dict can be wrong.
+        """
+        if not isinstance(data, dict):
+            raise ValueError(f"expected a dict of facts, got {type(data).__name__}")
+
+        known = {f.name for f in fields(cls)} - {"pins"}
+        kwargs = {k: v for k, v in data.items() if k in known}
+
+        raw_pins = data.get("pins") or ()
+        if not isinstance(raw_pins, (list, tuple)):
+            raise ValueError(f"'pins' must be a list, got {type(raw_pins).__name__}")
+
+        pin_fields = {f.name for f in fields(PinFact)}
+        pins = []
+        for pin in raw_pins:
+            if not isinstance(pin, dict):
+                raise ValueError(
+                    f"each pin must be an object, got {type(pin).__name__}"
+                )
+            pins.append(PinFact(**{k: v for k, v in pin.items() if k in pin_fields}))
+        kwargs["pins"] = pins
+
+        try:
+            return cls(**kwargs)
+        except TypeError as exc:  # a known key carrying the wrong shape
+            raise ValueError(f"malformed facts: {exc}") from exc
 
     def pin_map(self) -> dict[str, str]:
         """``{pin_name: pin_number}`` in the shape :mod:`silkscreen.netlist` wants."""

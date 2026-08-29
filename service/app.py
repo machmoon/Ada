@@ -20,6 +20,7 @@ import json
 import os
 import sys
 import traceback
+import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
@@ -27,6 +28,7 @@ from typing import Any
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "engine"))
 
 from silkscreen.agents import ModelError, generate_pcb  # noqa: E402
+from silkscreen.agents.datasheet import PartFacts  # noqa: E402
 from silkscreen.agents.model import GeminiModel  # noqa: E402
 from silkscreen.agents.resilience import (  # noqa: E402
     AllProvidersFailed,
@@ -110,14 +112,31 @@ def generate(
     if not isinstance(datasheets, dict):
         raise ValueError("'datasheets' must be an object of {part: url}")
 
-    # Anything already in Firestore is not read again.
+    # Anything already in Firestore is not read again -- but the facts we
+    # stored are handed to the pipeline in the read's place. Skipping the read
+    # without supplying the facts would design the board blind, which is
+    # strictly worse than not caching at all.
     cached = {p: store.get(p) for p in datasheets}
     to_read = {p: u for p, u in datasheets.items() if cached.get(p) is None}
+
+    preloaded: list[PartFacts] = []
+    unusable: list[str] = []
+    for part, raw in cached.items():
+        if raw is None:
+            continue
+        try:
+            preloaded.append(PartFacts.from_dict(raw))
+        except (TypeError, ValueError):
+            # A malformed or legacy entry is a cache miss, not a failed
+            # request: fall back to reading the datasheet again.
+            unusable.append(part)
+            to_read[part] = datasheets[part]
 
     result = generate_pcb(
         model,
         intent,
         datasheets=to_read,
+        preloaded_facts=preloaded,
         time_limit_s=float(payload.get("time_limit_s", DEFAULT_TIME_LIMIT)),
         review=bool(payload.get("review", True)),
     )
@@ -125,7 +144,7 @@ def generate(
     for fact in result.facts:
         part = getattr(fact, "part_number", None)
         if part:
-            store.put(part, {"part_number": part})
+            store.put(part, fact.to_dict())
 
     board = result.board
     return {
@@ -136,9 +155,15 @@ def generate(
         "kicad_pcb": emit_kicad_pcb(board),
         "repair_rounds": result.repair_rounds,
         "blockers": [str(b) for b in result.blockers],
+        # A "hit" is an entry we could actually use. An entry that was present
+        # but unreadable is reported as a miss and a re-read, because that is
+        # what happened.
         "cache": {
-            "hit": sorted(p for p, v in cached.items() if v is not None),
+            "hit": sorted(
+                p for p, v in cached.items() if v is not None and p not in unusable
+            ),
             "read": sorted(to_read),
+            "unusable": sorted(unusable),
         },
         "served_by": getattr(model, "last_provider", None),
     }
@@ -169,7 +194,17 @@ class Handler(BaseHTTPRequestHandler):
             self._send(404, {"error": f"no route {self.path}"})
             return
 
-        length = int(self.headers.get("Content-Length") or 0)
+        # A malformed Content-Length is the client's error. Parsing it outside
+        # a guard lets a header of "abc" raise before any response is sent, so
+        # the caller sees a dropped connection instead of a 400.
+        try:
+            length = int(self.headers.get("Content-Length") or 0)
+        except ValueError:
+            self._send(400, {"error": "invalid Content-Length"})
+            return
+        if length < 0:
+            self._send(400, {"error": "invalid Content-Length"})
+            return
         if length > MAX_BODY_BYTES:
             self._send(413, {"error": "request body too large"})
             return
@@ -194,11 +229,20 @@ class Handler(BaseHTTPRequestHandler):
             if caused_by_model_failure(exc):
                 self._send(502, {"error": str(exc)})
             else:
+                # The traceback goes to the log, not to the caller. This is a
+                # public endpoint, and a stack trace hands an anonymous client
+                # our file layout and internal call structure. The id is what
+                # makes the two halves joinable when someone reports a failure.
+                error_id = uuid.uuid4().hex[:12]
+                sys.stderr.write(
+                    f"error {error_id}: {type(exc).__name__}: {exc}\n"
+                    f"{traceback.format_exc()}\n"
+                )
                 self._send(
                     500,
                     {
-                        "error": f"{type(exc).__name__}: {exc}",
-                        "trace": traceback.format_exc(limit=3),
+                        "error": "internal error",
+                        "error_id": error_id,
                     },
                 )
         else:

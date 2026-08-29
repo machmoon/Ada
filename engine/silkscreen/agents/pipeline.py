@@ -67,6 +67,7 @@ def generate_pcb(
     intent: str,
     *,
     datasheets: dict[str, str] | None = None,
+    preloaded_facts: list[PartFacts] | None = None,
     output: str | Path | None = None,
     max_repairs: int = 3,
     time_limit_s: float = 20.0,
@@ -79,6 +80,11 @@ def generate_pcb(
         intent: What to build, in plain language.
         datasheets: ``{part_number: pdf_url}`` to read before designing. Parts
             without a datasheet still work, but nothing can be cited about them.
+        preloaded_facts: Facts already read for some parts, from a cache. These
+            join the freshly-read ones and are used identically. A caller that
+            skips a datasheet read because it has the facts already **must**
+            pass them here: omitting them does not merely lose a citation, it
+            designs and reviews the board as though the part were undocumented.
         output: Where to write the ``.kicad_pcb``. Skipped if omitted.
         max_repairs: How many times the proposal may be sent back for repair.
         time_limit_s: Placement solver budget.
@@ -88,8 +94,13 @@ def generate_pcb(
         ProposalError: no valid circuit emerged within the repair budget.
         UnsupportedPackage: a part's pin count has no footprint rule.
     """
-    facts: list[PartFacts] = []
+    facts: list[PartFacts] = list(preloaded_facts or ())
+    already = {f.part_number.strip().lower() for f in facts}
     for part_number, url in (datasheets or {}).items():
+        # A part supplied both ways is read once; the cached copy wins, since
+        # re-reading it is the cost the caller was trying to avoid.
+        if part_number.strip().lower() in already:
+            continue
         facts.append(read_datasheet(model, part_number, pdf_url=url))
 
     spec, attempts = propose_circuit(

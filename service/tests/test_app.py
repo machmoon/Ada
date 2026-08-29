@@ -25,12 +25,30 @@ CIRCUIT = {
 }
 REVIEW = {"findings": []}
 
+#: What the model returns when it is asked to read a datasheet. Without this
+#: the scripted model has no answer for a read, so any test that actually
+#: triggers one fails as an upstream error rather than exercising the path.
+DATASHEET = {
+    "part_number": "AMS1117-3.3",
+    "package": "SOT-223-3",
+    "pin_count": 3,
+    "pins": [
+        {"number": "1", "name": "GND", "kind": "ground", "page": 1},
+        {"number": "2", "name": "VOUT", "kind": "output", "page": 1},
+        {"number": "3", "name": "VIN", "kind": "input", "page": 1},
+    ],
+    "requirements": [{"requirement": "22uF tantalum on VOUT", "page": 9}],
+    "auxiliaries": [],
+    "notes": "",
+}
+
 
 def scripted():
     return ScriptedModel(
         by_marker={
             "designing a printed circuit board": json.dumps(CIRCUIT),
             "reviewing a circuit someone else designed": json.dumps(REVIEW),
+            "reading an electronic component datasheet": json.dumps(DATASHEET),
         }
     )
 
@@ -118,8 +136,26 @@ def test_non_object_body_is_400(server):
     assert status == 400
 
 
+def _cached_facts(part="AMS1117-3.3"):
+    """A cache entry with real content, as the service now writes them."""
+    return {
+        "part_number": part,
+        "package": "SOT-223-3",
+        "pin_count": 3,
+        "pins": [
+            {"number": "1", "name": "GND", "kind": "ground", "page": 1},
+            {"number": "2", "name": "VOUT", "kind": "output", "page": 1},
+            {"number": "3", "name": "VIN", "kind": "input", "page": 1},
+        ],
+        "requirements": [{"requirement": "22uF tantalum on VOUT", "page": 9}],
+        "auxiliaries": [],
+        "notes": "",
+        "source_url": "https://x/a.pdf",
+    }
+
+
 def test_a_cached_part_is_not_read_again(server):
-    server.store.put("AMS1117-3.3", {"part_number": "AMS1117-3.3"})
+    server.store.put("AMS1117-3.3", _cached_facts())
     status, body = post(
         server,
         {
@@ -131,6 +167,60 @@ def test_a_cached_part_is_not_read_again(server):
     assert status == 200
     assert body["cache"]["hit"] == ["AMS1117-3.3"]
     assert body["cache"]["read"] == [], "a cache hit must skip the datasheet read"
+
+
+def test_a_cache_hit_still_supplies_the_facts(monkeypatch, server):
+    """Skipping the read must not mean designing without the facts.
+
+    The first version of this cache stored only a part number and passed
+    nothing to the pipeline, so a hit silently produced a board designed as
+    though the part were undocumented -- strictly worse than not caching.
+    """
+    seen = {}
+
+    import service.app as app
+
+    real = app.generate_pcb
+
+    def spy(model, intent, **kw):
+        seen.update(kw)
+        return real(model, intent, **kw)
+
+    monkeypatch.setattr(app, "generate_pcb", spy)
+
+    server.store.put("AMS1117-3.3", _cached_facts())
+    status, _ = post(
+        server,
+        {
+            "intent": "a regulator",
+            "datasheets": {"AMS1117-3.3": "https://x/a.pdf"},
+            "time_limit_s": 5,
+        },
+    )
+    assert status == 200
+
+    preloaded = seen.get("preloaded_facts") or []
+    assert [f.part_number for f in preloaded] == ["AMS1117-3.3"]
+    assert preloaded[0].pin_map() == {"GND": "1", "VOUT": "2", "VIN": "3"}, (
+        "the cached pins must reach the pipeline, not just the part number"
+    )
+
+
+def test_an_unreadable_cache_entry_falls_back_to_reading(server):
+    """A legacy or corrupt entry is a miss, not a failed request."""
+    server.store.put("AMS1117-3.3", {"pins": "not a list"})
+    status, body = post(
+        server,
+        {
+            "intent": "a regulator",
+            "datasheets": {"AMS1117-3.3": "https://x/a.pdf"},
+            "time_limit_s": 5,
+        },
+    )
+    assert status == 200
+    assert body["cache"]["unusable"] == ["AMS1117-3.3"]
+    assert body["cache"]["read"] == ["AMS1117-3.3"]
+    assert body["cache"]["hit"] == []
 
 
 def test_upstream_failure_is_502_not_500(server):
