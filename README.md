@@ -285,15 +285,119 @@ scripts/
 
 ---
 
-## Development
+## Reproducible testing
+
+Every result in this README can be reproduced from a clean clone in about four
+minutes. **No KiCad install, no network access, and no API keys are required** —
+the test suite and the demo both run fully offline.
+
+### Requirements
+
+| | |
+|---|---|
+| Python | 3.11 or newer (`python3 -V`) |
+| OS | macOS, Linux, or Windows — all three run in CI |
+| Network | Not needed after `pip install` |
+| API keys | None. `agents/` tests use a scripted stand-in model, not a live provider |
+| KiCad | Not needed. Board files are parsed by `kiutils`, which is pure Python |
+| Disk | ~400 MB, almost all of it OR-Tools |
+
+### From a clean clone
 
 ```bash
-./.venv/bin/python -m pytest -q          # 143 tests
-./.venv/bin/python -m ruff check engine  # lint
-./.venv/bin/python scripts/demo.py       # end-to-end run
+git clone https://github.com/machmoon/silkscreen.git
+cd silkscreen
+python3 -m venv .venv && ./.venv/bin/pip install -e ".[dev]"
 ```
 
-CI runs all three on Linux, macOS, and Windows.
+Then run all three checks:
+
+```bash
+./.venv/bin/python -m pytest -q           # 1. test suite   (~2 min)
+./.venv/bin/python -m ruff check engine   # 2. lint         (~1 s)
+./.venv/bin/python scripts/demo.py        # 3. end-to-end   (~20 s)
+```
+
+On Windows, use `.venv\Scripts\python.exe` in place of `./.venv/bin/python`.
+
+### Expected output
+
+**1. Test suite** — 143 tests, no skips, no warnings:
+
+```
+143 passed in 114.36s
+```
+
+The suite is dominated by the 20-second solver budget in a handful of placement
+tests; the rest run in milliseconds.
+
+| File | Tests | Covers |
+|---|---:|---|
+| `test_packing.py` | 26 | CP-SAT model: no-overlap, clearance, edge pinning, rotation, symmetry breaking, fallback, determinism |
+| `test_mcp.py` | 23 | MCP tool surface and schemas |
+| `test_agents.py` | 21 | Datasheet extraction, proposal repair loop, review — against a scripted model |
+| `test_board.py` | 16 | Emitting a `.kicad_pcb` from a circuit spec |
+| `test_retrieval.py` | 15 | Symbol and footprint lookup |
+| `test_netlist.py` | 15 | Circuit IR validation — every rejection rule |
+| `test_resilience.py` | 14 | Malformed input, degenerate footprints, timeout paths |
+| `test_kicad.py` | 13 | Board read/write, coordinate conversion, round-trip |
+
+**2. Lint:**
+
+```
+All checks passed!
+```
+
+**3. End-to-end demo** — reads the 11-footprint fixture board, places it, writes a
+real `.kicad_pcb`, and re-parses it to prove the round-trip:
+
+```
+3. Solve (OR-Tools CP-SAT)
+--------------------------------------------------------------
+  status     : feasible
+  board size : 19.60 x 15.05 mm  (295.0 mm^2)
+  HPWL       : 52.4 mm
+  solve time : 20.00 s
+  warning    : Time limit reached; solution is feasible but not proven
+               optimal (gap bound 669000 vs 1740000).
+
+4. Write a real .kicad_pcb
+--------------------------------------------------------------
+  placed 11/11 -> placed.kicad_pcb  (43,933 bytes)
+
+5. Prove the round-trip
+--------------------------------------------------------------
+  reparsed OK, 11 footprints preserved
+```
+
+These are the exact figures quoted in [The placer](#the-placer). To inspect the
+result, open `placed.kicad_pcb` in KiCad's PCB Editor — but note that installing
+KiCad is only ever needed to *look* at the output, never to produce it.
+
+### On determinism
+
+Placement is reproducible **only with `workers=1`**, which is the default. CP-SAT's
+multi-worker portfolio search interleaves results non-deterministically regardless
+of `seed`, so raising `workers` trades byte-identical output for speed. The
+determinism test in `test_packing.py` asserts this contract by solving the same
+model twice and comparing placements exactly.
+
+Two caveats worth stating plainly:
+
+- **`status: feasible` is expected, not a failure.** 2D packing with a wirelength
+  objective is NP-hard; inside a 20-second budget the solver returns a valid
+  solution plus a bound rather than a proof. The reported gap is genuine.
+- **Solve *time* varies with your machine**, even though the *result* does not. The
+  20-second figure is the budget, not a benchmark.
+
+### Continuous integration
+
+[`.github/workflows/ci.yml`](.github/workflows/ci.yml) runs `ruff check engine` and
+`pytest -q` on **Ubuntu, macOS, and Windows** against Python 3.11, on every push to
+`main` and every pull request. `fail-fast` is off, so one platform failing does not
+mask the others.
+
+---
 
 ## License
 
