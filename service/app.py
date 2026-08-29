@@ -19,7 +19,9 @@ from __future__ import annotations
 import json
 import os
 import sys
+import time
 import traceback
+import urllib.parse
 import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -51,6 +53,52 @@ __all__ = [
 
 MAX_BODY_BYTES = 1 << 20
 DEFAULT_TIME_LIMIT = 20.0
+
+#: Where the built web bundle lives. The override exists because the container
+#: copies the bundle to a path the repo layout does not imply.
+WEB_DIST = Path(
+    os.getenv("SILKSCREEN_WEB_DIST")
+    or Path(__file__).resolve().parent.parent / "web" / "dist"
+)
+
+# Spelled out rather than taken from mimetypes: on Windows mimetypes reads the
+# registry, which routinely maps .js to text/plain, and a browser hard-refuses
+# a module script served with the wrong type. That failure would appear on a
+# developer's machine and disappear in the container.
+_CONTENT_TYPES = {
+    ".css": "text/css; charset=utf-8",
+    ".html": "text/html; charset=utf-8",
+    ".ico": "image/x-icon",
+    ".jpg": "image/jpeg",
+    ".js": "text/javascript; charset=utf-8",
+    ".json": "application/json",
+    ".map": "application/json",
+    ".png": "image/png",
+    ".svg": "image/svg+xml",
+    ".ttf": "font/ttf",
+    ".txt": "text/plain; charset=utf-8",
+    ".webp": "image/webp",
+    ".woff": "font/woff",
+    ".woff2": "font/woff2",
+}
+_DEFAULT_CONTENT_TYPE = "application/octet-stream"
+
+
+def _finding_dict(finding) -> dict[str, Any]:
+    """One review finding, whole.
+
+    ``blockers`` flattens a finding to a single string, dropping the severity,
+    the detail, the citation and the suggested fix -- everything a reader needs
+    in order to act on it.
+    """
+    return {
+        "severity": finding.severity.value,
+        "title": finding.title,
+        "detail": finding.detail,
+        "parts": list(finding.parts),
+        "citation": finding.citation,
+        "suggested_fix": finding.suggested_fix,
+    }
 
 
 def caused_by_model_failure(exc: BaseException) -> bool:
@@ -104,6 +152,8 @@ def generate(
     store: FactStore,
 ) -> dict[str, Any]:
     """Run the pipeline for one request body."""
+    started = time.monotonic()
+
     intent = str(payload.get("intent") or "").strip()
     if not intent:
         raise ValueError("'intent' is required")
@@ -155,6 +205,22 @@ def generate(
         "kicad_pcb": emit_kicad_pcb(board),
         "repair_rounds": result.repair_rounds,
         "blockers": [str(b) for b in result.blockers],
+        "findings": [_finding_dict(f) for f in result.findings],
+        "duration_s": round(time.monotonic() - started, 3),
+        "warnings": list(board.warnings),
+        "nets": list(board.nets),
+        # Both freshly read and cache-supplied facts land in result.facts, so
+        # this reports what the design was actually informed by.
+        "datasheets": [
+            {
+                "part": f.part_number,
+                "package": f.package,
+                "pins": len(f.pins),
+                "requirements": len(f.requirements),
+                "url": f.source_url,
+            }
+            for f in result.facts
+        ],
         # A "hit" is an entry we could actually use. An entry that was present
         # but unreadable is reported as a miss and a re-read, because that is
         # what happened.
@@ -170,10 +236,17 @@ def generate(
 
 
 class Handler(BaseHTTPRequestHandler):
-    """Two routes: a health check Cloud Run can probe, and the generator."""
+    """Three routes: a health check Cloud Run can probe, the generator, and
+    the built web bundle."""
 
     model_factory = staticmethod(build_model)
     store: FactStore | None = None
+    #: Root of the built bundle; None serves no static files at all.
+    web_root: Path | None = WEB_DIST
+
+    # There are deliberately no CORS headers and no do_OPTIONS: the bundle is
+    # served from this same origin, so nothing the UI sends is cross-origin.
+    # Adding them defensively would only widen who may call /generate.
 
     def _send(self, code: int, payload: dict[str, Any]) -> None:
         body = json.dumps(payload).encode()
@@ -183,11 +256,79 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
-    def do_GET(self) -> None:
-        if self.path in ("/", "/healthz"):
-            self._send(200, {"ok": True, "service": "silkscreen"})
-        else:
+    def _resolve_static(self, route: str) -> Path | None:
+        """The bundle file ``route`` names, or None if it names none.
+
+        Two independent defences, because each covers what the other misses.
+        The segment whitelist runs on the *decoded* path, so ``%2e%2e%2f`` and
+        the Windows ``..%5c`` are refused before any filesystem call; the
+        resolve/relative_to containment catches a symlink pointing out of the
+        bundle, which no string check can see.
+        """
+        root = self.web_root
+        if root is None:
+            return None
+
+        segments = urllib.parse.unquote(route).lstrip("/").split("/")
+        if segments == [""]:
+            segments = ["index.html"]
+        for segment in segments:
+            if segment in ("", ".", "..") or "\\" in segment or ":" in segment:
+                return None
+
+        try:
+            resolved = root.joinpath(*segments).resolve()
+            resolved.relative_to(root.resolve())
+        except (OSError, ValueError):
+            return None
+        return resolved if resolved.is_file() else None
+
+    def _send_file(self, path: Path) -> None:
+        try:
+            body = path.read_bytes()
+        except OSError:
             self._send(404, {"error": f"no route {self.path}"})
+            return
+        self.send_response(200)
+        self.send_header(
+            "Content-Type",
+            _CONTENT_TYPES.get(path.suffix.lower(), _DEFAULT_CONTENT_TYPE),
+        )
+        self.send_header("Content-Length", str(len(body)))
+        # index.html names the fingerprinted assets, so caching it would pin a
+        # client to the previous deploy. Everything else carries a content hash
+        # in its filename and can never go stale under it.
+        if path.name == "index.html":
+            self.send_header("Cache-Control", "no-cache")
+        else:
+            self.send_header("Cache-Control", "public, max-age=31536000, immutable")
+        self.end_headers()
+        self.wfile.write(body)
+
+    def do_GET(self) -> None:
+        route = urllib.parse.urlsplit(self.path).path
+
+        # The probe is answered before the bundle is consulted, so a build
+        # output file named "healthz" can never shadow the check Cloud Run
+        # uses to decide whether this revision is alive.
+        if route == "/healthz":
+            self._send(200, {"ok": True, "service": "silkscreen"})
+            return
+
+        static = self._resolve_static(route)
+        if static is not None:
+            self._send_file(static)
+            return
+
+        # No blanket SPA fallback: the UI's tabs are hash fragments that never
+        # reach the server, so a miss here is a genuinely missing file, and
+        # answering it with index.html turns that into a blank page.
+        root = self.web_root
+        if route == "/" and (root is None or not (root / "index.html").is_file()):
+            self._send(200, {"ok": True, "service": "silkscreen"})
+            return
+
+        self._send(404, {"error": f"no route {self.path}"})
 
     def do_POST(self) -> None:
         if self.path not in ("/generate", "/"):

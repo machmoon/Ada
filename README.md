@@ -13,7 +13,7 @@ python -m silkscreen "a 3.3V motor driver around an STM32F103" -o board.kicad_pc
 ```
 
 ```
-183 passed — no network, no API key, no KiCad install
+203 passed — no network, no API key, no KiCad install
 ```
 
 ---
@@ -52,8 +52,9 @@ that consumes the file. Install it if you are a person who wants to see a board.
 | `agents/retrieval.py` — page-cited datasheet retrieval | **Working** · 15 tests |
 | `agents/resilience.py` — provider failover | **Working** · 14 tests |
 | `mcp/` — MCP server over stdio | **Working** · 23 tests |
-| `service/` — Cloud Run + Firestore cache | **Working** · 18 tests |
-| Overlay UI, guided cursor | Not built (mockups only) |
+| `service/` — Cloud Run + Firestore cache | **Working** · 38 tests |
+| `web/` — Svelte review UI, served by the service | **Working** · design review page |
+| Board well, overlay UI, guided cursor | Not built (mockups only) |
 
 ---
 
@@ -156,7 +157,7 @@ treats the board file as the interface.
 | Requires KiCad running | Yes | **No** |
 | Headless / CI | Hard | **Native** |
 | Platform lock | KiCad's plugin loader | **None — pure Python** |
-| Testable without KiCad | No | **Yes, all 183 tests** |
+| Testable without KiCad | No | **Yes, all 203 tests** |
 
 ### What it reads
 
@@ -263,7 +264,25 @@ gcloud run deploy silkscreen --source . --region us-central1 \
 `POST /generate` with `{"intent": "...", "datasheets": {"PART": "url"}}` returns
 the board plus the emitted `.kicad_pcb`. Extracted datasheet facts persist to
 Firestore, so the second request for a part skips the most expensive stage.
-`GET /healthz` is the readiness probe.
+`GET /healthz` is the readiness probe. The container also serves the built review
+UI at `/`, same origin as `/generate`, so there is no CORS anywhere.
+
+### Running the web UI
+
+The UI is a Svelte SPA in `web/`. In development it runs on Vite's dev server,
+which proxies `/generate` and `/healthz` to the Python service — two terminals:
+
+```bash
+PORT=8081 python -m service.app       # terminal 1: the API
+cd web && npm install && npm run dev  # terminal 2: http://localhost:5173
+```
+
+For the production path, build the bundle and let the service serve it itself:
+
+```bash
+cd web && npm run build    # writes web/dist/
+python -m service.app      # http://localhost:8080 serves both the UI and the API
+```
 
 ### As an MCP server
 
@@ -370,11 +389,17 @@ engine/
       propose.py    intent -> circuit, with a bounded repair loop
       review.py     adversarial design review
       pipeline.py   prompt -> PCB
-  tests/          183 tests — no network, no API keys, no KiCad
+  tests/          203 tests — no network, no API keys, no KiCad
     fixtures/     ref.kicad_pcb -- 11-footprint board fixture
 scripts/
   demo.py         end-to-end: read -> place -> write -> verify
   check_docs.py   fails CI if a quoted test count goes stale
+web/
+  src/
+    lib/          api client, run store, severity + format helpers
+    components/   title bar, intent form, progress, findings, side rail
+    styles/       the Drafting Table design tokens
+  dist/           built bundle -- service/app.py serves it at /
 vendor/
   mudriknow/      third-party (MIT), reference only -- not imported, not tested
 ```
@@ -436,10 +461,10 @@ On Windows, use `.venv\Scripts\python.exe` in place of `./.venv/bin/python`.
 
 ### Expected output
 
-**1. Test suite** — 183 tests, no skips, no warnings:
+**1. Test suite** — 203 tests, no skips, no warnings:
 
 ```
-183 passed in 190.85s
+203 passed in 190.85s
 ```
 
 The suite is dominated by the 20-second solver budget in a handful of placement
@@ -448,6 +473,7 @@ tests; the rest run in milliseconds.
 | File | Tests | Covers |
 |---|---:|---|
 | `test_packing.py` | 43 | CP-SAT model: no-overlap, clearance, edge pinning, rotation, symmetry breaking, keepouts, pinned parts, fallback, determinism |
+| `test_app.py` | 31 | Cloud Run HTTP surface and the served UI bundle, over a real socket |
 | `test_mcp.py` | 23 | MCP protocol — initialize, tools/list, tools/call, stdio transport, every tool |
 | `test_agents.py` | 22 | Datasheet extraction, proposal repair loop, review — against a scripted model |
 | `test_board.py` | 20 | Footprint generation and emitting a `.kicad_pcb` from a circuit spec |
@@ -455,9 +481,8 @@ tests; the rest run in milliseconds.
 | `test_retrieval.py` | 15 | Datasheet chunking, embedding, cosine ranking, page citations |
 | `test_resilience.py` | 14 | Provider failover — every fallback path, forced |
 | `test_kicad.py` | 13 | Board read/write, coordinate conversion, round-trip |
-| `test_app.py` | 11 | Cloud Run HTTP surface, over a real socket |
 | `test_cache.py` | 7 | Firestore fact cache, via a fake client |
-| **Total** | **183** | |
+| **Total** | **203** | |
 
 **2. Lint:**
 
@@ -518,7 +543,9 @@ Two caveats worth stating plainly:
 [`.github/workflows/ci.yml`](.github/workflows/ci.yml) runs `ruff check engine` and
 `pytest -q` on **Ubuntu, macOS, and Windows** against Python 3.11, on every push to
 `main` and every pull request. `fail-fast` is off, so one platform failing does not
-mask the others.
+mask the others. Two further jobs run on Ubuntu only: `web` builds the UI bundle,
+and `docker` builds the container image, which is the only thing that exercises the
+`Dockerfile`.
 
 ---
 

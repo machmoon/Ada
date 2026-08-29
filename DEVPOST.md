@@ -136,7 +136,7 @@ Firestore so the second run on a part is free.
 - Pure-integer nanometre arithmetic end to end, because unit confusion between
   millimetres, mils, and KiCad's internal nanometres is a silent, board-destroying class
   of bug
-- 183 tests that run with no network, no API key, and no KiCad installed
+- 203 tests that run with no network, no API key, and no KiCad installed
 
 Splitting it this way is the point. The parts that must be *correct* are testable
 offline. The parts that must be *smart* are the ones talking to a model.
@@ -194,7 +194,7 @@ valuable engineering artifact we produced was an honest list of what was actuall
 What we're proud of in the new one:
 
 - **The engine has no network calls.** Every correctness-critical path is tested offline.
-- **183 tests, and the interesting ones are regressions** — each pins down a specific bug
+- **203 tests, and the interesting ones are regressions** — each pins down a specific bug
   that shipped in the previous version and can never ship again.
 - **A validation layer whose job is to say no.** The IR makes a floating capacitor and a
   hallucinated pin unrepresentable rather than merely unlikely.
@@ -231,7 +231,7 @@ meant to build. The lesson we took is that the README should be written from the
 at revision `ad58192`, MIT licensed, included unmodified with its licence file
 intact as a working reference for the guided-cursor overlay we have not built
 yet. Nothing in `engine/`, `service/`, or `scripts/` imports from it, it is
-excluded from lint and tests, and it contributes nothing to the 183 tests or to
+excluded from lint and tests, and it contributes nothing to the 203 tests or to
 any figure quoted in this document. Everything else in the repository was
 written during the submission period.
 

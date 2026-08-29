@@ -49,10 +49,15 @@ FEATURES
  ----- FactStore protocol + MemoryFactStore            [DONE]        service/cache.py; tests need no GCP project
  ----- Real write-back + preloaded_facts feed-in       [DONE]        commit 4249c5b
  ----- Ops polish: client reuse, document env var      [OPEN]        USE_FIRESTORE undocumented today
+ 9   Web review UI                                     [PARTIAL]
+ ----- Review page, served by the service at /         [DONE]        web/ Svelte SPA; same origin, so no CORS
+ ----- Board well (Option B), placements in the API    [NOT BUILT]   derivable from BoardResult; no engine change
+ ----- Voice: spoken intent, findings read aloud       [NOT BUILT]   the last phase, by instruction; Whisper
 
 OPEN WORK, SUMMARISED
 ---------------------
 Everything actionable reduces to: feature 2 in full (parallel reads, an SDK
 thread-pool task), feature 6 in full (confirmation gates), the deploy and
-smoke check under 7, and the ops polish under 8. The [IDEA] rows under 4
-and 5 are ideas, not commitments.
+smoke check under 7, the ops polish under 8, and the board well then voice
+under 9 -- in that order, voice last. The [IDEA] rows under 4 and 5 are
+ideas, not commitments.
