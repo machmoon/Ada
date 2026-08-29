@@ -20,8 +20,8 @@ from pathlib import Path
 
 from .footprints import Footprint, UnsupportedPackage, for_passive, lqfp, soic, sot223
 from .netlist import CircuitSpec
+from .packing import Layer, Part, Placement, pack
 from .packing import Net as PackNet
-from .packing import Part, Placement, pack
 from .units import DEFAULT_CLEARANCE_NM, NM_PER_MM, mm
 
 __all__ = [
@@ -60,6 +60,7 @@ class PlacedPart:
     x_nm: int = 0
     y_nm: int = 0
     rotated: bool = False
+    layer: Layer = Layer.TOP
 
 
 @dataclass
@@ -123,8 +124,15 @@ def build_board(
     clearance_nm: int = DEFAULT_CLEARANCE_NM,
     time_limit_s: float = 20.0,
     edge_refs: set[str] | None = None,
+    two_sided: bool = False,
 ) -> BoardResult:
-    """Turn a validated circuit into footprints, nets and a placement."""
+    """Turn a validated circuit into footprints, nets and a placement.
+
+    With ``two_sided``, passives may go on either side while ICs stay on top --
+    an IC on the underside complicates assembly and rework for little area
+    saved, whereas moving decoupling capacitors under their chip is standard
+    practice and shortens the loop.
+    """
     spec.validate()
 
     counters: dict[str, int] = {}
@@ -172,6 +180,8 @@ def build_board(
             height_nm=p.footprint.courtyard_h_nm * 2,
             ref=p.ref,
             must_be_on_edge=p.ref in (edge_refs or set()),
+            layer=Layer.EITHER if two_sided and p.ref.startswith(("C", "R"))
+            else Layer.TOP,
         )
         for p in placed
     ]
@@ -219,6 +229,7 @@ def build_board(
             part.x_nm = placement.x_nm
             part.y_nm = placement.y_nm
             part.rotated = placement.rotated
+            part.layer = placement.layer
 
     return BoardResult(
         parts=placed,
@@ -285,21 +296,25 @@ def emit_kicad_pcb(board: BoardResult, *, margin_nm: int = mm(2.0)) -> str:
         angle = 90 if part.rotated else 0
         at = f"{f(anchor_x)} {f(anchor_y)}" + (f" {angle}" if angle else "")
 
+        # A bottom-side footprint lives on B.Cu with its pads and graphics on
+        # the B layers; KiCad renders it mirrored from the same coordinates.
+        bottom = part.layer is Layer.BOTTOM
+        side = "B" if bottom else "F"
         out.append(f'  (footprint "silkscreen:{fp.name}"')
-        out.append('    (layer "F.Cu")')
+        out.append(f'    (layer "{side}.Cu")')
         out.append(f'    (uuid "{_uuid(part.ref)}")')
         out.append(f"    (at {at})")
         out.append(f'    (descr "{fp.description}")')
         out.append(
             f'    (property "Reference" "{part.ref}"'
             f" (at 0 {f(-fp.courtyard_h_nm - mm(0.7))} 0)"
-            f' (layer "F.SilkS") (uuid "{_uuid(part.ref + "ref")}")'
+            f' (layer "{side}.SilkS") (uuid "{_uuid(part.ref + "ref")}")'
             f" (effects (font (size 0.8 0.8) (thickness 0.12))))"
         )
         out.append(
             f'    (property "Value" "{part.value}"'
             f" (at 0 {f(fp.courtyard_h_nm + mm(0.7))} 0)"
-            f' (layer "F.Fab") (uuid "{_uuid(part.ref + "val")}")'
+            f' (layer "{side}.Fab") (uuid "{_uuid(part.ref + "val")}")'
             f" (effects (font (size 0.8 0.8) (thickness 0.12))))"
         )
 
@@ -310,7 +325,7 @@ def emit_kicad_pcb(board: BoardResult, *, margin_nm: int = mm(2.0)) -> str:
             ex, ey = cpts[(i + 1) % 4]
             out.append(
                 f"    (fp_line (start {f(sx)} {f(sy)}) (end {f(ex)} {f(ey)})"
-                f' (stroke (width 0.05) (type solid)) (layer "F.CrtYd")'
+                f' (stroke (width 0.05) (type solid)) (layer "{side}.CrtYd")'
                 f' (uuid "{_uuid(part.ref + f"crt{i}")}"))'
             )
 
@@ -322,7 +337,7 @@ def emit_kicad_pcb(board: BoardResult, *, margin_nm: int = mm(2.0)) -> str:
                 ex, ey = bpts[(i + 1) % 4]
                 out.append(
                     f"    (fp_line (start {f(sx)} {f(sy)}) (end {f(ex)} {f(ey)})"
-                    f' (stroke (width 0.12) (type solid)) (layer "F.SilkS")'
+                    f' (stroke (width 0.12) (type solid)) (layer "{side}.SilkS")'
                     f' (uuid "{_uuid(part.ref + f"silk{i}")}"))'
                 )
 
@@ -333,7 +348,7 @@ def emit_kicad_pcb(board: BoardResult, *, margin_nm: int = mm(2.0)) -> str:
                 f'    (pad "{pad.number}" smd roundrect'
                 f" (at {f(pad.x_nm)} {f(pad.y_nm)})"
                 f" (size {f(pad.w_nm)} {f(pad.h_nm)})"
-                f' (layers "F.Cu" "F.Paste" "F.Mask")'
+                f' (layers "{side}.Cu" "{side}.Paste" "{side}.Mask")'
                 f" (roundrect_rratio 0.25){net_decl}"
                 f' (uuid "{_uuid(part.ref + "p" + pad.number)}"))'
             )

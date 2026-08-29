@@ -1,15 +1,42 @@
 # Silkscreen
 
-**Reads and writes KiCad boards directly. No KiCad install, no plugin, no mouse automation.**
+**End-to-end PCB design. Describe a board in plain language, get a placed KiCad
+layout back — with the reasoning shown and every claim cited.**
 
-Silkscreen places components on a PCB with a CP-SAT solver and writes the result
-straight into a `.kicad_pcb` file. The board file *is* the API — Silkscreen parses the
-same S-expression format KiCad does, so it runs headless on any OS, in CI, with no
-KiCad process alive anywhere.
+Silkscreen reads the datasheets, proposes a circuit, refuses to build it if it does
+not validate, generates the footprints, places the board with a CP-SAT solver, writes
+a real `.kicad_pcb`, and then argues against its own design and tells you what it
+thinks is wrong.
+
+```bash
+python -m silkscreen "a 3.3V motor driver around an STM32F103" -o board.kicad_pcb
+```
 
 ```
-170 passed — no network, no API key, no KiCad install
+183 passed — no network, no API key, no KiCad install
 ```
+
+---
+
+## Do I need KiCad?
+
+**Not to run Silkscreen. Yes to open what it makes.**
+
+Silkscreen writes the `.kicad_pcb` format itself, so nothing in the pipeline shells
+out to KiCad, imports `pcbnew`, or touches your mouse. But a board file is not much
+use if you cannot look at it — so install KiCad unless you have a reason not to.
+
+| | Without KiCad | With KiCad *(recommended)* |
+|---|---|---|
+| Generate a board from a prompt | ✅ | ✅ |
+| Run the test suite | ✅ | ✅ |
+| Deploy the service, use the MCP server | ✅ | ✅ |
+| **See the board** | ❌ | ✅ |
+| **Edit, route, and run DRC on it** | ❌ | ✅ |
+| **Export Gerbers and get it fabricated** | ❌ | ✅ |
+
+Skip KiCad if you are running Silkscreen in CI, on a server, or inside another tool
+that consumes the file. Install it if you are a person who wants to see a board.
 
 ---
 
@@ -18,27 +45,36 @@ KiCad process alive anywhere.
 | Component | State |
 |---|---|
 | `kicad.py` — `.kicad_pcb` read/write | **Working** · 13 tests |
-| `packing.py` — CP-SAT placer | **Working** · 36 tests |
+| `packing.py` — CP-SAT placer | **Working** · 43 tests |
 | `netlist.py` — validated circuit IR | **Working** · 15 tests |
-| `footprints.py` + `board.py` — land patterns, board emission | **Working** · 16 tests |
+| `footprints.py` + `board.py` — land patterns, board emission | **Working** · 20 tests |
 | `agents/` — datasheet, propose, review, pipeline | **Working** · 22 tests |
 | `agents/retrieval.py` — page-cited datasheet retrieval | **Working** · 15 tests |
 | `agents/resilience.py` — provider failover | **Working** · 14 tests |
 | `mcp/` — MCP server over stdio | **Working** · 23 tests |
-| `service/` — Cloud Run + Firestore cache | **Working** · 16 tests |
+| `service/` — Cloud Run + Firestore cache | **Working** · 18 tests |
 | Overlay UI, guided cursor | Not built (mockups only) |
 
 ---
 
 ## Install
 
-The engine needs **no KiCad**:
+**1. Silkscreen itself** — Python 3.11+, no KiCad required:
 
 ```bash
-python3 -m venv .venv && ./.venv/bin/pip install -e ".[dev]"
+git clone https://github.com/machmoon/silkscreen && cd silkscreen
+python3 -m venv .venv
+./.venv/bin/pip install -e ".[dev,agents]"
 ```
 
-Install KiCad only if you want to *look* at the boards Silkscreen writes:
+**2. A Gemini key**, for the prompt-to-PCB path. The engine and the whole test suite
+run without one; only the agents need it.
+
+```bash
+cp .env.example .env      # then put your GOOGLE_API_KEY in it
+```
+
+**3. KiCad** — recommended, so you can open the result:
 
 | Platform | Command |
 |---|---|
@@ -52,7 +88,123 @@ output with **File → Open** in the PCB Editor, or `pcbnew placed.kicad_pcb`.
 
 ---
 
-## Quickstart
+## Prompt to PCB
+
+```bash
+echo 'GOOGLE_API_KEY=...' >> .env
+python -m silkscreen "a 3.3V motor driver board around an STM32F030" \
+    --datasheet "AMS1117-3.3=https://.../ams1117.pdf" \
+    -o board.kicad_pcb
+```
+
+```
+intent ──► datasheets ──► propose ──► validate/repair ──► place ──► .kicad_pcb
+                                          │                            │
+                                          └────────► review ───────────┘
+```
+
+| Stage | Module |
+|---|---|
+| Datasheet reading (Gemini native PDF vision) | `agents/datasheet.py` |
+| Retrieval over datasheet text, page-cited | `agents/retrieval.py` |
+| Circuit proposal into the IR | `agents/propose.py` |
+| Validation + bounded repair loop | `netlist.py` |
+| Footprint generation, board emission | `footprints.py`, `board.py` |
+| Placement | `packing.py` |
+| Adversarial review | `agents/review.py` |
+
+Two gates sit between the model and the board.
+
+**Structural.** The proposal goes through the circuit IR before anything is built.
+Every validation error is collected and fed back as one repair prompt; the loop is
+bounded and `result.repair_rounds` reports how many corrections it took.
+
+**Semantic.** A reviewer re-reads the datasheets and is prompted to *refute* the
+design — an agent asked "is this correct?" says yes. Findings are graded
+blocker / marginal / note and cite the datasheet page. Findings naming parts that
+aren't on the board are dropped rather than surfaced.
+
+Everything below `agents/` is model-free and network-free, so the whole pipeline —
+including its failure paths — is tested against a scripted model with no API key.
+
+### Generating footprints
+
+Emitting a board means generating real land patterns: pads at real coordinates, a
+courtyard, silkscreen. `footprints.py` builds them parametrically — chip passives
+(0402–1210), SOT-23, SOT-223, SOIC, LQFP — so a board can be written with no KiCad
+install and no footprint library on disk. Courtyards are fitted to enclose every pad
+*and* the body, which is what makes the placer's clearance guarantee mean anything.
+
+Coverage is narrow on purpose and it **raises rather than guessing**. A wrong footprint
+is the most common cause of a dead first-spin board; inventing a land pattern for an
+unrecognised package would be worse than refusing. Capacitor packages widen with value
+(a 22 µF part does not fit an 0603), and output is byte-identical across runs, so a
+regenerated board diffs cleanly in git.
+
+---
+
+## KiCad integration
+
+Most AI-and-KiCad tools are plugins: they live inside KiCad's Python environment and
+drive the IPC API, so they need KiCad running, a supported KiCad version, and a
+platform KiCad's plugin loader is happy on. Silkscreen takes the other route — it
+treats the board file as the interface.
+
+| | Plugin / IPC approach | Silkscreen |
+|---|---|---|
+| Requires KiCad installed | Yes | **No** |
+| Requires KiCad running | Yes | **No** |
+| Headless / CI | Hard | **Native** |
+| Platform lock | KiCad's plugin loader | **None — pure Python** |
+| Testable without KiCad | No | **Yes, all 183 tests** |
+
+### What it reads
+
+`load_board()` → `extract_parts()` returns a `FootprintInfo` per footprint:
+
+| Field | Source |
+|---|---|
+| `width_nm` / `height_nm` | `F.CrtYd` courtyard, falling back to the pad bounding box |
+| `pad_offsets` | Per-pad offsets from the part's bottom-left, **flipped into a Y-up frame** |
+| `pad_nets` | Net name per pad, used to build the wirelength objective |
+| `library_id` | Footprint library nickname |
+
+`extract_nets()` turns shared nets into HPWL nets; `extract_wires()` emits pad-pairs.
+
+### What it writes
+
+- **Footprint positions** — `apply_placements()` moves every footprint, converting the
+  solver's Y-up frame back to KiCad's Y-down, anchoring on the courtyard, not the origin.
+- **`Edge.Cuts` outline** — `set_board_outline()` draws the board rectangle. Without it
+  the file has no boundary at all, and `Edge.Cuts` is both what KiCad measures edge
+  clearance against and the only representation of the edge that `must_be_on_edge` was
+  solved against.
+- Pads, silkscreen, `F.Fab`, courtyards, nets, and zones pass through untouched.
+
+### Units and compatibility
+
+Everything is **integer nanometres**, KiCad's own internal unit, end to end. Unit
+confusion between mm, mils, and nm is a silent, board-destroying class of bug, so there
+are no floats in the pipeline; the solver quantises to a configurable grid (default
+0.05 mm) rather than solving at 1 nm.
+
+| | |
+|---|---|
+| Board format | `kicad_pcb` version `20240108` (KiCad 7–8) |
+| Parser | `kiutils` 1.4.8 — pure Python |
+| Solver | OR-Tools CP-SAT 9.15 |
+| Python | 3.11+ |
+| OS | macOS, Linux, Windows — identical behaviour |
+
+Round-trip is verified by test: a written board reparses, preserves every footprint,
+and has no two overlapping courtyards.
+
+---
+
+## Placing a board you already have
+
+Silkscreen can also be used as a library on an existing `.kicad_pcb`, with no
+model involved at all — read it, re-place it, write it back:
 
 ```python
 from silkscreen.kicad import (
@@ -99,133 +251,7 @@ by unit tests, not by the number above.
 
 ---
 
-## Prompt to PCB
-
-```bash
-echo 'GOOGLE_API_KEY=...' >> .env
-python -m silkscreen "a 3.3V motor driver board around an STM32F030" \
-    --datasheet "AMS1117-3.3=https://.../ams1117.pdf" \
-    -o board.kicad_pcb
-```
-
-```
-intent ──► datasheets ──► propose ──► validate/repair ──► place ──► .kicad_pcb
-                                          │                            │
-                                          └────────► review ───────────┘
-```
-
-Two gates sit between the model and the board.
-
-**Structural.** The proposal goes through the circuit IR before anything is built.
-Every validation error is collected and fed back as one repair prompt; the loop is
-bounded and `result.repair_rounds` reports how many corrections it took.
-
-**Semantic.** A reviewer re-reads the datasheets and is prompted to *refute* the
-design — an agent asked "is this correct?" says yes. Findings are graded
-blocker / marginal / note and cite the datasheet page. Findings naming parts that
-aren't on the board are dropped rather than surfaced.
-
-Everything below `agents/` is model-free and network-free, so the whole pipeline —
-including its failure paths — is tested against a scripted model with no API key.
-
-### Generating footprints
-
-Emitting a board means generating real land patterns: pads at real coordinates, a
-courtyard, silkscreen. `footprints.py` builds them parametrically — chip passives
-(0402–1210), SOT-23, SOT-223, SOIC, LQFP — so a board can be written with no KiCad
-install and no footprint library on disk. Courtyards are fitted to enclose every pad
-*and* the body, which is what makes the placer's clearance guarantee mean anything.
-
-Coverage is narrow on purpose and it **raises rather than guessing**. A wrong footprint
-is the most common cause of a dead first-spin board; inventing a land pattern for an
-unrecognised package would be worse than refusing. Capacitor packages widen with value
-(a 22 µF part does not fit an 0603), and output is byte-identical across runs, so a
-regenerated board diffs cleanly in git.
-
----
-
-## KiCad integration
-
-Most AI-and-KiCad tools are plugins: they live inside KiCad's Python environment and
-drive the IPC API, so they need KiCad running, a supported KiCad version, and a
-platform KiCad's plugin loader is happy on. Silkscreen takes the other route — it
-treats the board file as the interface.
-
-| | Plugin / IPC approach | Silkscreen |
-|---|---|---|
-| Requires KiCad installed | Yes | **No** |
-| Requires KiCad running | Yes | **No** |
-| Headless / CI | Hard | **Native** |
-| Platform lock | KiCad's plugin loader | **None — pure Python** |
-| Testable without KiCad | No | **Yes, all 170 tests** |
-
-### What it reads
-
-`load_board()` → `extract_parts()` returns a `FootprintInfo` per footprint:
-
-| Field | Source |
-|---|---|
-| `width_nm` / `height_nm` | `F.CrtYd` courtyard, falling back to the pad bounding box |
-| `pad_offsets` | Per-pad offsets from the part's bottom-left, **flipped into a Y-up frame** |
-| `pad_nets` | Net name per pad, used to build the wirelength objective |
-| `library_id` | Footprint library nickname |
-
-`extract_nets()` turns shared nets into HPWL nets; `extract_wires()` emits pad-pairs.
-
-### What it writes
-
-- **Footprint positions** — `apply_placements()` moves every footprint, converting the
-  solver's Y-up frame back to KiCad's Y-down, anchoring on the courtyard, not the origin.
-- **`Edge.Cuts` outline** — `set_board_outline()` draws the board rectangle. Without it
-  the file has no boundary at all, and `Edge.Cuts` is both what KiCad measures edge
-  clearance against and the only representation of the edge that `must_be_on_edge` was
-  solved against.
-- Pads, silkscreen, `F.Fab`, courtyards, nets, and zones pass through untouched.
-
-### Units and compatibility
-
-Everything is **integer nanometres**, KiCad's own internal unit, end to end. Unit
-confusion between mm, mils, and nm is a silent, board-destroying class of bug, so there
-are no floats in the pipeline; the solver quantises to a configurable grid (default
-0.05 mm) rather than solving at 1 nm.
-
-| | |
-|---|---|
-| Board format | `kicad_pcb` version `20240108` (KiCad 7–8) |
-| Parser | `kiutils` 1.4.8 — pure Python |
-| Solver | OR-Tools CP-SAT 9.15 |
-| Python | 3.11+ |
-| OS | macOS, Linux, Windows — identical behaviour |
-
-Round-trip is verified by test: a written board reparses, preserves every footprint,
-and has no two overlapping courtyards.
-
----
-
-## Prompt to PCB
-
-```bash
-cp .env.example .env          # add your GOOGLE_API_KEY
-python -m silkscreen "a 3.3V motor driver with an STM32F103" -o board.kicad_pcb
-```
-
-Reads any datasheets you point it at, proposes a circuit into the validated IR,
-repairs it against the validation errors until it passes, places it with CP-SAT,
-writes the `.kicad_pcb`, then reviews its own work and cites the page.
-
-| Stage | Module |
-|---|---|
-| Datasheet reading (Gemini native PDF vision) | `agents/datasheet.py` |
-| Retrieval over datasheet text, page-cited | `agents/retrieval.py` |
-| Circuit proposal into the IR | `agents/propose.py` |
-| Validation + bounded repair loop | `netlist.py` |
-| Footprint generation, board emission | `footprints.py`, `board.py` |
-| Placement | `packing.py` |
-| Adversarial review | `agents/review.py` |
-
-Every model call goes through a provider chain that validates the response
-before accepting it, so a rate limit or a malformed reply falls through to the
-next tier instead of failing the request.
+## Running it other ways
 
 ### As a service
 
@@ -344,7 +370,7 @@ engine/
       propose.py    intent -> circuit, with a bounded repair loop
       review.py     adversarial design review
       pipeline.py   prompt -> PCB
-  tests/          170 tests — no network, no API keys, no KiCad
+  tests/          183 tests — no network, no API keys, no KiCad
     fixtures/     ref.kicad_pcb -- 11-footprint board fixture
 scripts/
   demo.py         end-to-end: read -> place -> write -> verify
@@ -387,25 +413,30 @@ the test suite and the demo both run fully offline.
 ```bash
 git clone https://github.com/machmoon/silkscreen.git
 cd silkscreen
-python3 -m venv .venv && ./.venv/bin/pip install -e ".[dev]"
+python3 -m venv .venv
+./.venv/bin/pip install -e ".[dev,agents,cloud]"
 ```
 
-Then run all three checks:
+Then run the same four checks CI runs, in the same order:
 
 ```bash
-./.venv/bin/python -m pytest -q           # 1. test suite   (~2 min)
-./.venv/bin/python -m ruff check engine   # 2. lint         (~1 s)
-./.venv/bin/python scripts/demo.py        # 3. end-to-end   (~20 s)
+./.venv/bin/python -m pytest -q                            # 1. tests     (~2 min)
+./.venv/bin/python -m ruff check engine service scripts    # 2. lint      (~1 s)
+./.venv/bin/python scripts/check_docs.py                   # 3. doc drift (~5 s)
+./.venv/bin/python scripts/demo.py                         # 4. end-to-end(~20 s)
 ```
+
+Check 3 re-counts the suite and fails if any number quoted in this README or in
+`DEVPOST.md` has gone stale, so the figures below cannot drift from the code.
 
 On Windows, use `.venv\Scripts\python.exe` in place of `./.venv/bin/python`.
 
 ### Expected output
 
-**1. Test suite** — 170 tests, no skips, no warnings:
+**1. Test suite** — 183 tests, no skips, no warnings:
 
 ```
-170 passed in 142.14s
+183 passed in 190.85s
 ```
 
 The suite is dominated by the 20-second solver budget in a handful of placement
@@ -413,14 +444,17 @@ tests; the rest run in milliseconds.
 
 | File | Tests | Covers |
 |---|---:|---|
-| `test_packing.py` | 26 | CP-SAT model: no-overlap, clearance, edge pinning, rotation, symmetry breaking, fallback, determinism |
-| `test_mcp.py` | 23 | MCP tool surface and schemas |
-| `test_agents.py` | 21 | Datasheet extraction, proposal repair loop, review — against a scripted model |
-| `test_board.py` | 16 | Emitting a `.kicad_pcb` from a circuit spec |
-| `test_retrieval.py` | 15 | Symbol and footprint lookup |
+| `test_packing.py` | 43 | CP-SAT model: no-overlap, clearance, edge pinning, rotation, symmetry breaking, keepouts, pinned parts, fallback, determinism |
+| `test_mcp.py` | 23 | MCP protocol — initialize, tools/list, tools/call, stdio transport, every tool |
+| `test_agents.py` | 22 | Datasheet extraction, proposal repair loop, review — against a scripted model |
+| `test_board.py` | 20 | Footprint generation and emitting a `.kicad_pcb` from a circuit spec |
 | `test_netlist.py` | 15 | Circuit IR validation — every rejection rule |
-| `test_resilience.py` | 14 | Malformed input, degenerate footprints, timeout paths |
+| `test_retrieval.py` | 15 | Datasheet chunking, embedding, cosine ranking, page citations |
+| `test_resilience.py` | 14 | Provider failover — every fallback path, forced |
 | `test_kicad.py` | 13 | Board read/write, coordinate conversion, round-trip |
+| `test_app.py` | 11 | Cloud Run HTTP surface, over a real socket |
+| `test_cache.py` | 7 | Firestore fact cache, via a fake client |
+| **Total** | **183** | |
 
 **2. Lint:**
 
@@ -428,7 +462,13 @@ tests; the rest run in milliseconds.
 All checks passed!
 ```
 
-**3. End-to-end demo** — reads the 11-footprint fixture board, places it, writes a
+**3. Doc drift** — re-counts the suite and checks every figure quoted in the docs:
+
+```
+docs ok: 16 claim(s) across 2 files match a suite of 183
+```
+
+**4. End-to-end demo** — reads the 11-footprint fixture board, places it, writes a
 real `.kicad_pcb`, and re-parses it to prove the round-trip:
 
 ```

@@ -20,6 +20,7 @@ from .netlist import (
 )
 from .packing import (
     Keepout,
+    Layer,
     Net,
     PackResult,
     PackStatus,
@@ -43,6 +44,7 @@ __all__ = [
     "Wire",
     "Net",
     "Keepout",
+    "Layer",
     "Placement",
     "PackResult",
     "PackStatus",

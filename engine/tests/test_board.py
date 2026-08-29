@@ -222,3 +222,43 @@ def test_unknown_pin_count_refuses_rather_than_guessing():
     })
     with pytest.raises(UnsupportedPackage, match="No package rule"):
         build_board(spec, time_limit_s=5.0)
+
+
+def test_two_sided_board_emits_footprints_on_both_copper_layers(tmp_path):
+    from kiutils.board import Board
+
+    board = build_board(_spec(), two_sided=True, time_limit_s=15.0)
+    path = write_board(board, tmp_path / "two.kicad_pcb")
+    reloaded = Board.from_file(str(path))
+    layers = {fp.layer for fp in reloaded.footprints}
+    assert layers == {"F.Cu", "B.Cu"}
+
+
+def test_bottom_side_pads_are_on_bottom_layers(tmp_path):
+    from kiutils.board import Board
+
+    board = build_board(_spec(), two_sided=True, time_limit_s=15.0)
+    path = write_board(board, tmp_path / "two.kicad_pcb")
+    reloaded = Board.from_file(str(path))
+    for fp in reloaded.footprints:
+        if fp.layer != "B.Cu":
+            continue
+        for pad in fp.pads:
+            assert "B.Cu" in pad.layers, "a bottom footprint's pads must be on B.Cu"
+            assert "F.Cu" not in pad.layers
+
+
+def test_two_sided_is_smaller_than_single_sided():
+    single = build_board(_spec(), two_sided=False, time_limit_s=15.0)
+    both = build_board(_spec(), two_sided=True, time_limit_s=15.0)
+    assert both.width_nm * both.height_nm < single.width_nm * single.height_nm
+
+
+def test_ics_stay_on_top_even_when_two_sided():
+    """An IC underneath complicates assembly and rework for little area saved."""
+    board = build_board(_spec(), two_sided=True, time_limit_s=15.0)
+    from silkscreen.packing import Layer
+
+    for part in board.parts:
+        if part.ref.startswith("U"):
+            assert part.layer is Layer.TOP

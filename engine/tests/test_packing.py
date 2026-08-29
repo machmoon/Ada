@@ -524,3 +524,93 @@ def test_fallback_warns_about_pins_and_keepouts_it_cannot_honour():
     assert result.status is PackStatus.FALLBACK
     assert any("fixed_at_nm" in w for w in result.warnings)
     assert any("keepout" in w for w in result.warnings)
+
+
+# ------------------------------------------------------- two-sided placement
+
+
+def test_parts_on_opposite_sides_may_share_xy():
+    """That is the entire point of a two-sided board."""
+    from silkscreen import Layer
+
+    parts = [
+        Part(*LQFP48, ref="U1", layer=Layer.TOP),
+        Part(*LQFP48, ref="U2", layer=Layer.BOTTOM),
+    ]
+    result = pack(parts, clearance_nm=0, time_limit_s=10.0)
+    # Both 9x9 parts fit in a 9x9 board because they are on opposite faces.
+    assert result.board_width_nm <= mm(9.5)
+    assert result.board_height_nm <= mm(9.5)
+
+
+def test_parts_on_the_same_side_still_may_not_overlap():
+    from silkscreen import Layer
+
+    parts = [
+        Part(*LQFP48, ref="U1", layer=Layer.BOTTOM),
+        Part(*LQFP48, ref="U2", layer=Layer.BOTTOM),
+    ]
+    result = pack(parts, clearance_nm=0, time_limit_s=10.0)
+    boxes = _boxes(parts, result)
+    assert _overlap_area(boxes[0], boxes[1]) == 0
+
+
+def test_either_layer_halves_the_board():
+    from silkscreen import Layer
+
+    single = pack(
+        [Part(*LQFP48, ref=f"U{i}") for i in range(4)], time_limit_s=10.0
+    )
+    both = pack(
+        [Part(*LQFP48, ref=f"U{i}", layer=Layer.EITHER) for i in range(4)],
+        time_limit_s=10.0,
+    )
+    single_area = single.board_width_nm * single.board_height_nm
+    both_area = both.board_width_nm * both.board_height_nm
+    assert both_area < single_area
+
+
+def test_placement_reports_the_side_it_chose():
+    from silkscreen import Layer
+
+    parts = [Part(*LQFP48, ref=f"U{i}", layer=Layer.EITHER) for i in range(4)]
+    result = pack(parts, time_limit_s=10.0)
+    sides = {p.layer for p in result.placements}
+    assert sides <= {Layer.TOP, Layer.BOTTOM}
+    assert len(sides) == 2, "with 4 equal parts the solver should use both sides"
+
+
+def test_a_fixed_layer_is_honoured():
+    from silkscreen import Layer
+
+    parts = [
+        Part(*R0603, ref="R1", layer=Layer.BOTTOM),
+        Part(*R0603, ref="R2", layer=Layer.TOP),
+        Part(*R0603, ref="R3", layer=Layer.EITHER),
+    ]
+    result = pack(parts, time_limit_s=10.0)
+    by_ref = {p.ref: p.layer for p in result.placements}
+    assert by_ref["R1"] is Layer.BOTTOM
+    assert by_ref["R2"] is Layer.TOP
+
+
+def test_a_keepout_blocks_both_sides():
+    """A mounting hole goes through the board."""
+    from silkscreen import Keepout, Layer
+
+    keep = Keepout(mm(5), mm(5), mm(4), mm(4), name="MH1")
+    parts = [Part(*R0603, ref=f"R{i}", layer=Layer.EITHER) for i in range(8)]
+    result = pack(parts, keepouts=[keep], clearance_nm=0, time_limit_s=15.0)
+    region = (keep.x_nm, keep.y_nm,
+              keep.x_nm + keep.width_nm, keep.y_nm + keep.height_nm)
+    for box in _boxes(parts, result):
+        assert not _overlaps(box, region)
+
+
+def test_fallback_warns_that_it_is_single_sided():
+    from silkscreen import Layer
+
+    parts = [Part(*R0603, ref=f"R{i}", layer=Layer.EITHER) for i in range(40)]
+    result = pack(parts, time_limit_s=0.001, grid_nm=1000)
+    assert result.status is PackStatus.FALLBACK
+    assert any("single-sided" in w for w in result.warnings)

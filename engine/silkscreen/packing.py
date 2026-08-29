@@ -41,11 +41,27 @@ __all__ = [
     "Wire",
     "Net",
     "Keepout",
+    "Layer",
     "Placement",
     "PackResult",
     "PackStatus",
     "pack",
 ]
+
+
+class Layer(StrEnum):
+    """Which side of the board a part sits on.
+
+    Parts on opposite sides may occupy the same X/Y -- that is what a two-sided
+    board is for -- so disjointness is enforced per layer rather than globally.
+    """
+
+    TOP = "top"
+    BOTTOM = "bottom"
+    #: Let the solver choose. Suitable for passives with no mechanical or
+    #: thermal reason to be on a particular side; connectors, indicators and
+    #: anything a human touches generally do have such a reason.
+    EITHER = "either"
 
 
 class PackStatus(StrEnum):
@@ -74,6 +90,8 @@ class Part:
     #: Allow a 90-degree rotation. Off by default: rotating a part invalidates
     #: any silkscreen orientation the caller may care about.
     allow_rotation: bool = False
+    #: Which side of the board this part sits on.
+    layer: Layer = Layer.TOP
     #: Pin this part's bottom-left corner, in nanometres. A placement is only
     #: useful if you can keep the parts you already like: without this, every
     #: re-solve reshuffles the whole board and the tool cannot be used
@@ -165,6 +183,7 @@ class Placement:
     x_nm: int
     y_nm: int
     rotated: bool = False
+    layer: Layer = Layer.TOP
 
 
 @dataclass(frozen=True)
@@ -255,8 +274,9 @@ def pack(
             normalised into a two-terminal :class:`Net`.
         nets: Multi-terminal nets costed as half-perimeter wirelength. Prefer
             these over ``wires`` -- a real net is a tree, not a set of pairs.
-        keepouts: Rectangular regions no part may occupy -- mounting holes, a
-            connector's mating envelope, mechanical bosses.
+        keepouts: Rectangular regions no part may occupy, on either side --
+            mounting holes, a connector's mating envelope, mechanical bosses.
+            A keepout goes through the board, so it blocks both faces.
         grid_nm: Solver resolution. Parts are inflated to a whole number of
             cells, so a coarser grid means faster solving and looser packing.
         clearance_nm: Minimum edge-to-edge gap between two placed courtyards.
@@ -403,8 +423,20 @@ def pack(
     eff_h: list[cp_model.IntVar | int] = []
     rot: list[cp_model.IntVar | None] = []
 
-    x_intervals = []
-    y_intervals = []
+    # Disjointness is per layer: two parts on opposite sides of the board may
+    # occupy the same X/Y. Each part contributes an OPTIONAL interval to each
+    # layer's no-overlap constraint, present only on the side it ends up on.
+    on_top: list[cp_model.IntVar | bool] = []
+    top_x, top_y, bot_x, bot_y = [], [], [], []
+
+    for i, part in enumerate(parts):
+        if part.layer is Layer.EITHER:
+            lit = model.NewBoolVar(f"on_top[{i}]")
+        elif part.layer is Layer.TOP:
+            lit = model.NewConstant(1)
+        else:
+            lit = model.NewConstant(0)
+        on_top.append(lit)
 
     for i, part in enumerate(parts):
         # Compare true extents, not rounded cell counts: a 2.0 x 1.9 mm part
@@ -422,37 +454,59 @@ def pack(
             rot.append(r)
             eff_w.append(w_var)
             eff_h.append(h_var)
-            xe = model.NewIntVar(0, x_max, f"xe[{i}]")
-            ye = model.NewIntVar(0, y_max, f"ye[{i}]")
-            x_intervals.append(model.NewIntervalVar(x[i], w_var, xe, f"xi[{i}]"))
-            y_intervals.append(model.NewIntervalVar(y[i], h_var, ye, f"yi[{i}]"))
+            size_w: cp_model.IntVar | int = w_var
+            size_h: cp_model.IntVar | int = h_var
         else:
             rot.append(None)
             eff_w.append(box_w[i])
             eff_h.append(box_h[i])
-            x_intervals.append(
-                model.NewFixedSizeIntervalVar(x[i], box_w[i], f"xi[{i}]")
+            size_w = box_w[i]
+            size_h = box_h[i]
+
+        lit = on_top[i]
+        if part.layer is not Layer.BOTTOM:
+            xe = model.NewIntVar(0, x_max, f"top_xe[{i}]")
+            ye = model.NewIntVar(0, y_max, f"top_ye[{i}]")
+            top_x.append(
+                model.NewOptionalIntervalVar(x[i], size_w, xe, lit, f"top_xi[{i}]")
             )
-            y_intervals.append(
-                model.NewFixedSizeIntervalVar(y[i], box_h[i], f"yi[{i}]")
+            top_y.append(
+                model.NewOptionalIntervalVar(y[i], size_h, ye, lit, f"top_yi[{i}]")
+            )
+        if part.layer is not Layer.TOP:
+            not_lit = lit.Not() if part.layer is Layer.EITHER else model.NewConstant(1)
+            xe = model.NewIntVar(0, x_max, f"bot_xe[{i}]")
+            ye = model.NewIntVar(0, y_max, f"bot_ye[{i}]")
+            bot_x.append(
+                model.NewOptionalIntervalVar(
+                    x[i], size_w, xe, not_lit, f"bot_xi[{i}]"
+                )
+            )
+            bot_y.append(
+                model.NewOptionalIntervalVar(
+                    y[i], size_h, ye, not_lit, f"bot_yi[{i}]"
+                )
             )
 
-    # Keepouts join the same disjunctness constraint as the parts. They are
-    # inflated by the clearance too, so a part cannot be packed flush against a
-    # mounting hole.
+    # A keepout is a hole or a mechanical envelope: it goes through the board,
+    # so it blocks both sides.
     for k, keep in enumerate(keepouts):
         kx = keep.x_nm // grid_nm
         ky = keep.y_nm // grid_nm
         kw = cells_ceil(keep.width_nm + 2 * pad, grid_nm)
         kh = cells_ceil(keep.height_nm + 2 * pad, grid_nm)
-        x_intervals.append(
-            model.NewFixedSizeIntervalVar(kx, kw, f"keepout_x[{k}]")
-        )
-        y_intervals.append(
-            model.NewFixedSizeIntervalVar(ky, kh, f"keepout_y[{k}]")
-        )
+        for side_x, side_y, tag in ((top_x, top_y, "top"), (bot_x, bot_y, "bot")):
+            side_x.append(
+                model.NewFixedSizeIntervalVar(kx, kw, f"{tag}_keepout_x[{k}]")
+            )
+            side_y.append(
+                model.NewFixedSizeIntervalVar(ky, kh, f"{tag}_keepout_y[{k}]")
+            )
 
-    model.AddNoOverlap2D(x_intervals, y_intervals)
+    if top_x:
+        model.AddNoOverlap2D(top_x, top_y)
+    if bot_x:
+        model.AddNoOverlap2D(bot_x, bot_y)
 
     # Parts the caller has pinned. fixed_at_nm names where the PART goes, not
     # its clearance-inflated box, so the pad is removed before constraining --
@@ -660,6 +714,10 @@ def pack(
             )
         if keepouts:
             warnings.append("Fallback ignores keepouts; regions may be occupied.")
+        if any(p.layer is not Layer.TOP for p in parts):
+            warnings.append(
+                "Fallback is single-sided; every part was placed on the top layer."
+            )
         placements, bw, bh = _shelf_pack(parts, clearance_nm)
         return PackResult(
             placements=placements,
@@ -677,12 +735,17 @@ def pack(
         is_rot = bool(r is not None and solver.Value(r))
         # Undo the clearance inflation: the solver placed the padded box, the
         # caller wants the part itself.
+        if part.layer is Layer.EITHER:
+            side = Layer.TOP if solver.Value(on_top[i]) else Layer.BOTTOM
+        else:
+            side = part.layer
         placements.append(
             Placement(
                 ref=part.ref,
                 x_nm=solver.Value(x[i]) * grid_nm + pad,
                 y_nm=solver.Value(y[i]) * grid_nm + pad,
                 rotated=is_rot,
+                layer=side,
             )
         )
 
