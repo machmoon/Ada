@@ -48,3 +48,6 @@ adjacency_*.json
 # Generated boards
 placed.kicad_pcb
 generated.kicad_pcb
+
+# Seeded design canvas — generated from design/*.dc.html, 2MB of bundled editor
+design/silkscreen-ui.html
