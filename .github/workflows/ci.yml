@@ -24,3 +24,24 @@ jobs:
       # That figure has gone stale repeatedly (40 -> 54 -> 143 -> 160 -> 183).
       # If this is what broke your build: python scripts/check_docs.py --fix
       - run: python scripts/check_docs.py
+
+  web:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - run: npm ci
+        working-directory: web
+      - run: npm run build
+        working-directory: web
+
+  docker:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # Nothing else exercises the Dockerfile; a build is the whole check.
+      - run: docker build .
