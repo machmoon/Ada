@@ -1,0 +1,592 @@
+"""CP-SAT component placement.
+
+This is a corrected rewrite of the original ``packing/rectangles.py``. The
+formulation it inherits is sound -- fixed-size intervals plus ``AddNoOverlap2D``
+for disjointness, ``AddMaxEquality`` for the bounding box, ``AddAbsEquality`` for
+Manhattan wirelength -- but the original had four defects that made it produce
+wrong or unusable answers:
+
+1. ``y_sum`` was summed over ``for h, _ in rects``, which binds ``h`` to the
+   *width*. Any part taller than the sum of all widths made the model infeasible.
+2. Sizes came from ``pcbnew`` bounding boxes in nanometres and were scaled by
+   ``1e-3``, so one solver unit was one micron. An 0603 resistor was 1600 units
+   wide; the domains were enormous and the solver never closed.
+3. Parts were packed flush against each other -- ``AddNoOverlap2D`` with no
+   clearance term yields 0 mm courtyard gaps, which is unmanufacturable.
+4. On ``UNKNOWN`` (i.e. the time limit expired) it raised, discarding a feasible
+   solution the solver had already found.
+
+It also adds optional 90-degree rotation, which real placement needs, and a
+deterministic shelf fallback so the caller always gets a usable placement.
+"""
+
+from __future__ import annotations
+
+import math
+from dataclasses import dataclass, field
+from enum import Enum
+from typing import Sequence
+
+from ortools.sat.python import cp_model
+
+from .units import (
+    DEFAULT_CLEARANCE_NM,
+    DEFAULT_GRID_NM,
+    cells_ceil,
+    cells_round,
+)
+
+__all__ = [
+    "Part",
+    "Wire",
+    "Net",
+    "Placement",
+    "PackResult",
+    "PackStatus",
+    "pack",
+]
+
+
+class PackStatus(str, Enum):
+    """How the returned placement was obtained."""
+
+    OPTIMAL = "optimal"
+    FEASIBLE = "feasible"
+    #: The solver found nothing in time; the shelf fallback produced this.
+    FALLBACK = "fallback"
+
+
+@dataclass(frozen=True)
+class Part:
+    """A footprint to place.
+
+    Dimensions are courtyard extents in nanometres (KiCad internal units), which
+    is exactly what ``pcbnew``'s ``GetBoundingBox().GetWidth()/GetHeight()``
+    return -- no conversion at the call site.
+    """
+
+    width_nm: int
+    height_nm: int
+    ref: str = ""
+    #: Force onto a board edge (USB connectors, antennas, mounting holes).
+    must_be_on_edge: bool = False
+    #: Allow a 90-degree rotation. Off by default: rotating a part invalidates
+    #: any silkscreen orientation the caller may care about.
+    allow_rotation: bool = False
+
+    def __post_init__(self) -> None:
+        if self.width_nm <= 0 or self.height_nm <= 0:
+            raise ValueError(
+                f"Part {self.ref!r} has non-positive extent "
+                f"({self.width_nm} x {self.height_nm} nm)"
+            )
+
+
+@dataclass(frozen=True)
+class Wire:
+    """A connection between two parts, used only to weight the objective.
+
+    ``offset_*`` are pin positions relative to the owning part's bottom-left
+    corner, in nanometres.
+    """
+
+    source: int
+    dest: int
+    offset_source: tuple[int, int]
+    offset_dest: tuple[int, int]
+
+
+@dataclass(frozen=True)
+class Net:
+    """One electrical net, costed as half-perimeter wirelength (HPWL).
+
+    HPWL -- the half-perimeter of the bounding box enclosing every terminal --
+    is the standard placement proxy for routed length, and it replaces two bad
+    alternatives:
+
+    * A **clique** of pairwise distances, which makes a 50-pad ground net
+      contribute 1,225 terms and swamp every signal net.
+    * A **star** to one arbitrarily-chosen terminal, which overestimates length,
+      turns the hub into a gravity well carrying *n-1* terms against every
+      spoke's one, and -- because the hub is whichever pad was read first --
+      makes the layout depend on footprint ordering inside the ``.kicad_pcb``
+      text.
+
+    HPWL costs one bounding box per net regardless of pad count, so power nets
+    can stay *in* the objective at a reduced weight rather than being dropped.
+    That matters more than it sounds: a decoupling capacitor is connected to its
+    IC only by power nets, so excluding them entirely leaves the cap with no
+    objective term at all and it drifts to wherever the packer finds room.
+    """
+
+    #: ``(part_index, (offset_x_nm, offset_y_nm))`` for each terminal.
+    terminals: tuple[tuple[int, tuple[int, int]], ...]
+    name: str = ""
+    #: Relative importance. Power rails are routed as planes rather than traces,
+    #: so their length matters less -- but not zero, because proximity still does.
+    weight: float = 1.0
+
+
+@dataclass(frozen=True)
+class Placement:
+    """Where a part ended up. ``x_nm``/``y_nm`` locate its bottom-left corner."""
+
+    ref: str
+    x_nm: int
+    y_nm: int
+    rotated: bool = False
+
+
+@dataclass(frozen=True)
+class PackResult:
+    placements: list[Placement]
+    board_width_nm: int
+    board_height_nm: int
+    status: PackStatus
+    #: Total Manhattan wirelength in nanometres, or ``None`` when no wires were
+    #: supplied.
+    wirelength_nm: int | None = None
+    solve_time_s: float = 0.0
+    warnings: list[str] = field(default_factory=list)
+
+
+def _shelf_pack(
+    parts: Sequence[Part], clearance_nm: int
+) -> tuple[list[Placement], int, int]:
+    """Deterministic next-fit-decreasing shelf packing.
+
+    Used when CP-SAT finds nothing inside the time limit. It is not a good
+    layout, but it is a *valid* one -- no overlaps, clearance respected -- which
+    beats raising an exception on a large board.
+    """
+    if not parts:
+        return [], 0, 0
+
+    order = sorted(
+        range(len(parts)), key=lambda i: parts[i].height_nm, reverse=True
+    )
+    # Keep shelves roughly square overall.
+    total_area = sum(
+        (p.width_nm + clearance_nm) * (p.height_nm + clearance_nm) for p in parts
+    )
+    target_w = max(
+        int(math.sqrt(total_area)),
+        max(p.width_nm for p in parts) + clearance_nm,
+    )
+
+    placements: list[Placement | None] = [None] * len(parts)
+    cursor_x = 0
+    shelf_y = 0
+    shelf_h = 0
+    width_used = 0
+
+    for i in order:
+        part = parts[i]
+        step_w = part.width_nm + clearance_nm
+        step_h = part.height_nm + clearance_nm
+        if cursor_x > 0 and cursor_x + step_w > target_w:
+            shelf_y += shelf_h
+            cursor_x = 0
+            shelf_h = 0
+        placements[i] = Placement(
+            ref=part.ref,
+            x_nm=cursor_x + clearance_nm // 2,
+            y_nm=shelf_y + clearance_nm // 2,
+        )
+        cursor_x += step_w
+        shelf_h = max(shelf_h, step_h)
+        width_used = max(width_used, cursor_x)
+
+    return [p for p in placements if p is not None], width_used, shelf_y + shelf_h
+
+
+def pack(
+    parts: Sequence[Part],
+    wires: Sequence[Wire] = (),
+    *,
+    nets: Sequence[Net] = (),
+    grid_nm: int = DEFAULT_GRID_NM,
+    clearance_nm: int = DEFAULT_CLEARANCE_NM,
+    max_board_nm: tuple[int, int] | None = None,
+    time_limit_s: float = 10.0,
+    size_weight: float = 1.0,
+    wire_weight: float = 1.0,
+    balance_objective: bool = False,
+    break_symmetry: bool = True,
+    seed: int = 0,
+    workers: int = 1,
+) -> PackResult:
+    """Place ``parts`` to minimise board size and total wirelength.
+
+    Args:
+        parts: Footprints to place. Extents are courtyard size in nanometres.
+        wires: Two-terminal connections, kept for convenience. Each is
+            normalised into a two-terminal :class:`Net`.
+        nets: Multi-terminal nets costed as half-perimeter wirelength. Prefer
+            these over ``wires`` -- a real net is a tree, not a set of pairs.
+        grid_nm: Solver resolution. Parts are inflated to a whole number of
+            cells, so a coarser grid means faster solving and looser packing.
+        clearance_nm: Minimum edge-to-edge gap between two placed courtyards.
+        max_board_nm: Optional hard ``(width, height)`` cap. The model is
+            infeasible if the parts cannot fit inside it.
+        time_limit_s: Wall-clock budget for CP-SAT.
+        size_weight: Relative weight on board half-perimeter. Zero disables it.
+        wire_weight: Relative weight on total HPWL. Multiplied by each net's own
+            ``weight``, so a power rail can be down-weighted without being
+            dropped from the objective.
+        balance_objective: Scale the size term by the net count. This was
+            necessary under the old pairwise-wire model, where the wire sum grew
+            with the number of wires while the size term did not. Under HPWL it
+            over-corrects and board size swamps everything -- measured on a
+            decoupling-capacitor test it pushed the cap from 5.15 mm to 7.75 mm
+            from its IC -- so it now defaults off. Both terms are compared
+            directly in grid units; tune ``size_weight``/``wire_weight`` for a
+            given board rather than relying on an automatic heuristic.
+        break_symmetry: Force interchangeable, unwired parts into a fixed
+            lexicographic order. This removes permutations of identical parts
+            from the search space without excluding any distinct layout.
+        seed: CP-SAT random seed. Note that reproducibility also requires
+            ``workers=1``; a multi-worker portfolio search interleaves results
+            non-deterministically regardless of the seed.
+        workers: CP-SAT search worker count. Defaults to 1 for reproducible
+            output; raise it to trade determinism for speed.
+
+    Returns:
+        A :class:`PackResult`. ``status`` is ``FALLBACK`` when the solver timed
+        out without a solution and the shelf packer was used instead.
+
+    Raises:
+        ValueError: if a wire references a part index that does not exist.
+        RuntimeError: if the model is provably infeasible (only possible when
+            ``max_board_nm`` is set, since the model is otherwise unbounded).
+    """
+    if grid_nm <= 0:
+        raise ValueError("grid_nm must be positive")
+    if clearance_nm < 0:
+        raise ValueError("clearance_nm must be non-negative")
+
+    warnings: list[str] = []
+
+    if not parts:
+        return PackResult([], 0, 0, PackStatus.OPTIMAL, None, 0.0, warnings)
+
+    for w in wires:
+        for idx in (w.source, w.dest):
+            if not 0 <= idx < len(parts):
+                raise ValueError(
+                    f"Wire references part index {idx}, but only "
+                    f"{len(parts)} parts were supplied"
+                )
+
+    # A two-terminal Wire is just a Net with two terminals; normalise so the
+    # model only has one code path.
+    all_nets: list[Net] = list(nets)
+    all_nets += [
+        Net(
+            terminals=((w.source, w.offset_source), (w.dest, w.offset_dest)),
+            name=f"wire{i}",
+        )
+        for i, w in enumerate(wires)
+    ]
+    for net in all_nets:
+        for idx, _ in net.terminals:
+            if not 0 <= idx < len(parts):
+                raise ValueError(
+                    f"Net {net.name!r} references part index {idx}, but only "
+                    f"{len(parts)} parts were supplied"
+                )
+
+    model = cp_model.CpModel()
+    n = len(parts)
+
+    # A part that appears in any net -- power nets included -- is distinguishable
+    # by its connectivity, so constraining its order would exclude real
+    # solutions. Decoupling capacitors connect only via power nets, so counting
+    # those is what stops the symmetry constraint from shoving them into a
+    # corner away from the IC they bypass.
+    wired = [False] * n
+    for net in all_nets:
+        for idx, _ in net.terminals:
+            wired[idx] = True
+
+    # Inflate every part by the clearance so AddNoOverlap2D enforces a real gap.
+    # Each part carries ceil(clearance/2) on every side, so two neighbours end up
+    # at least `clearance_nm` apart (rounding up rather than down means an odd
+    # clearance is met, not missed by 1 nm).
+    pad = (clearance_nm + 1) // 2
+    box_w = [cells_ceil(p.width_nm + 2 * pad, grid_nm) for p in parts]
+    box_h = [cells_ceil(p.height_nm + 2 * pad, grid_nm) for p in parts]
+
+    # An upper bound that is always sufficient: lay every part in one row/column.
+    # (The original computed the y bound from widths, which made tall parts
+    # infeasible.)
+    x_max = max(1, sum(box_w))
+    y_max = max(1, sum(box_h))
+    if max_board_nm is not None:
+        # Floor, not ceil: a hard cap must not be overshot by up to one cell.
+        x_max = min(x_max, max_board_nm[0] // grid_nm)
+        y_max = min(y_max, max_board_nm[1] // grid_nm)
+        if x_max <= 0 or y_max <= 0:
+            raise ValueError(
+                f"max_board_nm {max_board_nm} is smaller than one grid cell "
+                f"({grid_nm} nm)"
+            )
+
+    x = [model.NewIntVar(0, x_max, f"x[{i}]") for i in range(n)]
+    y = [model.NewIntVar(0, y_max, f"y[{i}]") for i in range(n)]
+
+    # Effective (possibly rotated) extents.
+    eff_w: list[cp_model.IntVar | int] = []
+    eff_h: list[cp_model.IntVar | int] = []
+    rot: list[cp_model.IntVar | None] = []
+
+    x_intervals = []
+    y_intervals = []
+
+    for i, part in enumerate(parts):
+        # Compare true extents, not rounded cell counts: a 2.0 x 1.9 mm part
+        # rounds to the same cell count on a coarse grid but its *pads* are not
+        # square, so rotation is still a legal option worth giving the solver.
+        if part.allow_rotation and part.width_nm != part.height_nm:
+            r = model.NewBoolVar(f"rot[{i}]")
+            lo, hi = min(box_w[i], box_h[i]), max(box_w[i], box_h[i])
+            w_var = model.NewIntVar(lo, hi, f"w[{i}]")
+            h_var = model.NewIntVar(lo, hi, f"h[{i}]")
+            model.Add(w_var == box_w[i]).OnlyEnforceIf(r.Not())
+            model.Add(h_var == box_h[i]).OnlyEnforceIf(r.Not())
+            model.Add(w_var == box_h[i]).OnlyEnforceIf(r)
+            model.Add(h_var == box_w[i]).OnlyEnforceIf(r)
+            rot.append(r)
+            eff_w.append(w_var)
+            eff_h.append(h_var)
+            xe = model.NewIntVar(0, x_max, f"xe[{i}]")
+            ye = model.NewIntVar(0, y_max, f"ye[{i}]")
+            x_intervals.append(model.NewIntervalVar(x[i], w_var, xe, f"xi[{i}]"))
+            y_intervals.append(model.NewIntervalVar(y[i], h_var, ye, f"yi[{i}]"))
+        else:
+            rot.append(None)
+            eff_w.append(box_w[i])
+            eff_h.append(box_h[i])
+            x_intervals.append(
+                model.NewFixedSizeIntervalVar(x[i], box_w[i], f"xi[{i}]")
+            )
+            y_intervals.append(
+                model.NewFixedSizeIntervalVar(y[i], box_h[i], f"yi[{i}]")
+            )
+
+    model.AddNoOverlap2D(x_intervals, y_intervals)
+
+    # Symmetry breaking over interchangeable parts.
+    #
+    # A board with eight identical 0402 capacitors admits 8! = 40320 relabelings
+    # of the same physical layout, and CP-SAT will happily explore all of them.
+    # Forcing interchangeable parts into a fixed lexicographic (x, y) order
+    # collapses each of those orbits to a single representative without
+    # excluding any distinct placement.
+    #
+    # The comparison is encoded as a single linear inequality using a positional
+    # index x * (y_max + 1) + y, which is a strict lexicographic ranking because
+    # y never exceeds y_max.
+    if break_symmetry:
+        groups: dict[tuple, list[int]] = {}
+        for i, part in enumerate(parts):
+            if wired[i]:
+                # A part with wires is distinguishable by its connectivity, so
+                # constraining its order would exclude real solutions.
+                continue
+            key = (
+                box_w[i],
+                box_h[i],
+                part.must_be_on_edge,
+                part.allow_rotation,
+            )
+            groups.setdefault(key, []).append(i)
+
+        stride = y_max + 1
+        for members in groups.values():
+            for a, b in zip(members, members[1:]):
+                model.Add(x[a] * stride + y[a] <= x[b] * stride + y[b])
+
+    # Board extent.
+    w_used = model.NewIntVar(0, x_max, "w_used")
+    h_used = model.NewIntVar(0, y_max, "h_used")
+    model.AddMaxEquality(w_used, [x[i] + eff_w[i] for i in range(n)])
+    model.AddMaxEquality(h_used, [y[i] + eff_h[i] for i in range(n)])
+
+    # Edge constraints. Every part is inside the board by construction, so
+    # "on an edge" means flush with one of the four sides.
+    for i, part in enumerate(parts):
+        if not part.must_be_on_edge:
+            continue
+        b_left = model.NewBoolVar(f"edge_left[{i}]")
+        b_bottom = model.NewBoolVar(f"edge_bottom[{i}]")
+        b_right = model.NewBoolVar(f"edge_right[{i}]")
+        b_top = model.NewBoolVar(f"edge_top[{i}]")
+        model.Add(x[i] == 0).OnlyEnforceIf(b_left)
+        model.Add(y[i] == 0).OnlyEnforceIf(b_bottom)
+        model.Add(x[i] + eff_w[i] == w_used).OnlyEnforceIf(b_right)
+        model.Add(y[i] + eff_h[i] == h_used).OnlyEnforceIf(b_top)
+        model.AddBoolOr([b_left, b_bottom, b_right, b_top])
+
+    # Manhattan wirelength.
+    def endpoint(idx: int, offset: tuple[int, int]):
+        """Pin position in grid cells, accounting for rotation."""
+        ox = cells_round(offset[0] + pad, grid_nm)
+        oy = cells_round(offset[1] + pad, grid_nm)
+        r = rot[idx]
+        if r is None:
+            return x[idx] + ox, y[idx] + oy
+        # A 90-degree rotation about the part's own box maps a local offset
+        # (ox, oy) to (H - oy, ox), where H is the unrotated height in cells.
+        # Both branches are constants, so two implications express it exactly.
+        h_cells = box_h[idx]
+        w_cells = box_w[idx]
+        rx = model.NewIntVar(-max(w_cells, h_cells), max(w_cells, h_cells), f"rx[{idx}]")
+        ry = model.NewIntVar(-max(w_cells, h_cells), max(w_cells, h_cells), f"ry[{idx}]")
+        model.Add(rx == ox).OnlyEnforceIf(r.Not())
+        model.Add(ry == oy).OnlyEnforceIf(r.Not())
+        model.Add(rx == h_cells - oy).OnlyEnforceIf(r)
+        model.Add(ry == ox).OnlyEnforceIf(r)
+        return x[idx] + rx, y[idx] + ry
+
+    # Half-perimeter wirelength, one bounding box per net.
+    net_cost_terms: list[tuple[int, object]] = []
+    hpwl_terms = []
+    span = x_max + y_max
+
+    for k, net in enumerate(all_nets):
+        if len(net.terminals) < 2:
+            continue
+        xs = []
+        ys = []
+        for idx, offset in net.terminals:
+            ex, ey = endpoint(idx, offset)
+            xs.append(ex)
+            ys.append(ey)
+
+        xmin = model.NewIntVar(-span, span, f"net{k}_xmin")
+        xmax = model.NewIntVar(-span, span, f"net{k}_xmax")
+        ymin = model.NewIntVar(-span, span, f"net{k}_ymin")
+        ymax = model.NewIntVar(-span, span, f"net{k}_ymax")
+        model.AddMinEquality(xmin, xs)
+        model.AddMaxEquality(xmax, xs)
+        model.AddMinEquality(ymin, ys)
+        model.AddMaxEquality(ymax, ys)
+
+        hpwl = model.NewIntVar(0, 2 * span, f"net{k}_hpwl")
+        model.Add(hpwl == (xmax - xmin) + (ymax - ymin))
+        hpwl_terms.append(hpwl)
+        net_cost_terms.append((net.weight, hpwl))
+
+    # Scale both objective terms by a common denominator before rounding, so a
+    # fractional weight is preserved rather than truncated to zero -- and so
+    # size_weight=0 actually disables the size term instead of clamping to 1.
+    _RESOLUTION = 1000
+    size_scale = max(1, len(hpwl_terms)) if balance_objective else 1
+    size_coeff = int(round(size_weight * size_scale * _RESOLUTION))
+    if size_coeff < 0:
+        raise ValueError("size_weight must be non-negative")
+
+    objective_terms = []
+    if size_coeff:
+        objective_terms.append(size_coeff * (w_used + h_used))
+    for weight, term in net_cost_terms:
+        coeff = int(round(wire_weight * weight * _RESOLUTION))
+        if coeff < 0:
+            raise ValueError("wire_weight and net weights must be non-negative")
+        if coeff:
+            objective_terms.append(coeff * term)
+
+    if not objective_terms:
+        raise ValueError(
+            "Objective is empty: size_weight and wire_weight are both zero "
+            "(or all net weights are zero). Nothing would be optimised."
+        )
+
+    model.Minimize(cp_model.LinearExpr.Sum(objective_terms))
+
+    solver = cp_model.CpSolver()
+    solver.parameters.max_time_in_seconds = float(time_limit_s)
+    solver.parameters.random_seed = seed
+    solver.parameters.num_workers = workers
+    status = solver.Solve(model)
+
+    if status == cp_model.INFEASIBLE:
+        raise RuntimeError(
+            "No valid packing exists. This is only reachable when max_board_nm "
+            "is set; the parts do not fit inside the requested outline."
+        )
+    if status == cp_model.MODEL_INVALID:
+        raise RuntimeError(
+            f"CP-SAT rejected the model: {model.Validate()}"
+        )
+
+    if status not in (cp_model.OPTIMAL, cp_model.FEASIBLE):
+        # Time limit expired with nothing found. Return a valid-but-poor layout
+        # rather than raising, which is what the original did.
+        warnings.append(
+            f"CP-SAT found no solution in {time_limit_s}s "
+            f"({solver.StatusName(status)}); used shelf fallback."
+        )
+        # The fallback packs by size alone. Say so loudly rather than returning
+        # a layout that quietly violates what the caller asked for.
+        if any(p.must_be_on_edge for p in parts):
+            edge_refs = [p.ref for p in parts if p.must_be_on_edge]
+            warnings.append(
+                f"Fallback ignores must_be_on_edge; {edge_refs} are NOT on an edge."
+            )
+        if max_board_nm is not None:
+            warnings.append(
+                f"Fallback ignores max_board_nm; the {max_board_nm} cap may be "
+                f"exceeded."
+            )
+        if any(p.allow_rotation for p in parts):
+            warnings.append("Fallback does not rotate parts.")
+        placements, bw, bh = _shelf_pack(parts, clearance_nm)
+        return PackResult(
+            placements=placements,
+            board_width_nm=bw,
+            board_height_nm=bh,
+            status=PackStatus.FALLBACK,
+            wirelength_nm=None,
+            solve_time_s=solver.WallTime(),
+            warnings=warnings,
+        )
+
+    placements = []
+    for i, part in enumerate(parts):
+        r = rot[i]
+        is_rot = bool(r is not None and solver.Value(r))
+        # Undo the clearance inflation: the solver placed the padded box, the
+        # caller wants the part itself.
+        placements.append(
+            Placement(
+                ref=part.ref,
+                x_nm=solver.Value(x[i]) * grid_nm + pad,
+                y_nm=solver.Value(y[i]) * grid_nm + pad,
+                rotated=is_rot,
+            )
+        )
+
+    wirelength = None
+    if hpwl_terms:
+        wirelength = sum(solver.Value(t) for t in hpwl_terms) * grid_nm
+
+    if status == cp_model.FEASIBLE:
+        warnings.append(
+            f"Time limit reached; solution is feasible but not proven optimal "
+            f"(gap bound {solver.BestObjectiveBound():.0f} vs "
+            f"{solver.ObjectiveValue():.0f})."
+        )
+
+    return PackResult(
+        placements=placements,
+        board_width_nm=solver.Value(w_used) * grid_nm,
+        board_height_nm=solver.Value(h_used) * grid_nm,
+        status=(
+            PackStatus.OPTIMAL if status == cp_model.OPTIMAL else PackStatus.FEASIBLE
+        ),
+        wirelength_nm=wirelength,
+        solve_time_s=solver.WallTime(),
+        warnings=warnings,
+    )

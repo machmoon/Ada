@@ -1,0 +1,46 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# Secrets
+.env
+.env.*
+!.env.example
+
+# Node
+node_modules/
+.next/
+out/
+*.tsbuildinfo
+
+# SKiDL / KiCad generated artifacts -- all regenerable, none belong in git
+*.erc
+*.net
+*.log
+*_sklib.py
+lib_pickle_dir/
+*.pkl
+
+# KiCad backups
+*-backups/
+*.kicad_pcb-bak
+*.kicad_sch-bak
+fp-info-cache
+
+# Generated symbol index (built from a local KiCad install)
+symbols.json
+
+# Scraped caches
+component_img/
+C[0-9]*.json
+C[0-9]*.jpg
+adjacency_*.json
+
+# OS
+.DS_Store
