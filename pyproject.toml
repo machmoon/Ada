@@ -17,7 +17,7 @@ dependencies = [
 
 [project.optional-dependencies]
 # The engine is model-free; agents/ is the only place a network call lives.
-agents = ["google-genai>=1.0"]
+agents = ["google-genai>=1.0", "pypdf>=4.0"]
 cloud = ["google-genai>=1.0", "google-cloud-firestore>=2.16"]
 dev = ["pytest>=8.0", "ruff>=0.6"]
 
