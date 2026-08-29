@@ -35,12 +35,8 @@ PATTERNS = (
 )
 
 #: Phrases that look like a count but are not one -- a historical figure being
-#: quoted precisely because it is out of date, or a pass/skip breakdown, whose
-#: parts sum to the total rather than each equalling it. Checked against the
-#: whole line.
-IGNORE = re.compile(
-    r"\bwas\b|\bpreviously\b|->|\bdrift|\bskipped\b", re.IGNORECASE
-)
+#: quoted precisely because it is out of date. Checked against the whole line.
+IGNORE = re.compile(r"\bwas\b|\bpreviously\b|->|\bdrift", re.IGNORECASE)
 
 #: A claim on a line naming one of these maps to those test files rather than to
 #: the total. The README's status table quotes a per-module count per row, which

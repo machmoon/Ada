@@ -2,15 +2,23 @@
 
 import http.client
 import json
+import os
+import socket
+import subprocess
+import sys
 import threading
 import urllib.error
 import urllib.request
+from pathlib import Path
 
 import pytest
 from silkscreen.agents.model import ScriptedModel
+from silkscreen.kicad import footprint_ref, load_board
 
 from service.app import Handler, make_server
 from service.cache import MemoryFactStore
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
 
 CIRCUIT = {
     "devices": {"U1": {"pins": {"1": "GND", "2": "VOUT", "3": "VIN"}}},
@@ -499,6 +507,300 @@ def test_cache_headers(server, web_dist):
     assert headers["Cache-Control"] == "public, max-age=31536000, immutable"
 
 
+# ------------------------------------------------------- request-level errors
+
+
+def test_a_non_numeric_time_limit_is_400(server):
+    """A time limit that is not a number is the caller's error, not a crash.
+
+    ``generate`` calls ``float(payload["time_limit_s"])`` unguarded, so the
+    ValueError float() raises is what produces the 400. That works, but the
+    message the caller gets is float()'s own -- it names the offending value
+    and not the field it came from, which is the one thing a caller needs in
+    order to fix the request. Pinned as-is rather than fixed here.
+    """
+    status, body = post(server, {"intent": "a regulator", "time_limit_s": "abc"})
+    assert status == 400
+    assert "abc" in body["error"]
+    assert "time_limit_s" not in body["error"], (
+        "today's 400 does not name the field; change this assertion when it does"
+    )
+
+
+def test_a_null_time_limit_is_a_500(server):
+    """A JSON null time limit is reported as our failure, not the caller's.
+
+    ``payload.get("time_limit_s", DEFAULT_TIME_LIMIT)`` returns the default
+    only when the key is *absent*; an explicit null returns None, and
+    ``float(None)`` raises TypeError rather than ValueError, so it falls past
+    the 400 handler into the generic 500. That is a client error answered with
+    a server error. Characterized, deliberately not fixed on this branch.
+    """
+    status, body = post(server, {"intent": "a regulator", "time_limit_s": None})
+    assert status == 500
+    assert body["error"] == "internal error"
+    assert body["error_id"], "a 500 must carry the id that joins it to the log"
+
+
+def post_without_content_length(srv, path="/generate"):
+    """POST with no Content-Length header at all.
+
+    Written on a raw socket on purpose: http.client inserts
+    ``Content-Length: 0`` for a bodyless POST, so the same test written
+    through urllib or http.client would pass without ever exercising the
+    missing header.
+    """
+    request = (
+        f"POST {path} HTTP/1.1\r\n"
+        f"Host: 127.0.0.1:{srv.server_port}\r\n"
+        "Content-Type: application/json\r\n"
+        "Connection: close\r\n"
+        "\r\n"
+    ).encode()
+    with socket.create_connection(("127.0.0.1", srv.server_port), timeout=10) as sock:
+        sock.sendall(request)
+        chunks = []
+        while True:
+            chunk = sock.recv(65536)
+            if not chunk:
+                break
+            chunks.append(chunk)
+    head, _, body = b"".join(chunks).partition(b"\r\n\r\n")
+    status = int(head.split(b"\r\n", 1)[0].decode().split()[1])
+    return status, json.loads(body)
+
+
+def test_a_post_without_content_length_reads_as_an_empty_body(server):
+    """No Content-Length means no body, which means the intent-required 400.
+
+    The handler defaults a missing header to zero and then substitutes ``{}``
+    for the empty read, so the request reaches the same validation a ``{}``
+    body does instead of hanging on a read or dropping the connection.
+    """
+    status, body = post_without_content_length(server)
+    assert status == 400
+    assert "intent" in body["error"]
+
+
+# ----------------------------------------------------------------- served_by
+
+
+def test_served_by_is_present_and_null_without_a_provider(server):
+    """The field is always there; ScriptedModel just has nothing to report.
+
+    A client reading ``served_by`` should not have to distinguish "key
+    missing" from "no provider recorded", so the getattr default has to reach
+    the response body rather than drop the key.
+    """
+    status, body = post(server, {"intent": "a 3.3V regulator", "time_limit_s": 5})
+    assert status == 200
+    assert "served_by" in body
+    assert body["served_by"] is None
+
+
+class TaggedModel:
+    """A model that names the provider that answered, as FallbackModel does.
+
+    ScriptedModel carries no ``last_provider``, so without this the echo half
+    of ``getattr(model, "last_provider", None)`` is never exercised.
+    """
+
+    last_provider = "gemini-cheap"
+
+    def __init__(self):
+        self._inner = scripted()
+
+    def generate(self, *args, **kwargs):
+        return self._inner.generate(*args, **kwargs)
+
+
+def test_served_by_echoes_the_provider_that_answered(server):
+    Handler.model_factory = staticmethod(TaggedModel)
+    try:
+        status, body = post(server, {"intent": "a 3.3V regulator", "time_limit_s": 5})
+        assert status == 200
+        assert body["served_by"] == "gemini-cheap"
+    finally:
+        Handler.model_factory = staticmethod(scripted)
+
+
+# ----------------------------------------------------------- board round-trip
+
+
+def test_the_returned_board_reparses_as_a_real_kicad_file(server, tmp_path):
+    """The string in the response has to survive being opened as a board.
+
+    Every other assertion about ``kicad_pcb`` checks a prefix, which a
+    truncated or malformed file would also satisfy. Parsing it back and
+    recovering the same reference designators the response advertises is what
+    proves the caller was handed something KiCad can actually open.
+    """
+    status, body = post(server, {"intent": "a 3.3V regulator", "time_limit_s": 5})
+    assert status == 200
+
+    path = tmp_path / "from_response.kicad_pcb"
+    path.write_text(body["kicad_pcb"], encoding="utf-8")
+    reloaded = load_board(path)
+
+    advertised = {p["ref"] for p in body["parts"]}
+    assert advertised, "the response must name at least one part"
+    assert {footprint_ref(f) for f in reloaded.footprints} == advertised
+    assert len(reloaded.footprints) == len(body["parts"])
+
+
+# ------------------------------------------------------------- cache outcomes
+
+
+def _datasheet_for(part):
+    """The scripted datasheet answer, relabelled for one part number."""
+    return json.dumps({**DATASHEET, "part_number": part})
+
+
+def scripted_reading(*parts):
+    """A scripted model that answers each part's datasheet read distinctly.
+
+    The per-part markers go in first: ScriptedModel returns the first marker
+    found in the prompt, and the datasheet prompt ends with
+    "The part is: <part>", so an exact part marker wins over the generic
+    datasheet marker. Without this every read comes back labelled AMS1117-3.3
+    and the reported datasheets collapse into indistinguishable duplicates.
+    """
+    by_marker = {f"The part is: {p}": _datasheet_for(p) for p in parts}
+    by_marker.update(scripted().by_marker)
+    return ScriptedModel(by_marker=by_marker)
+
+
+def test_hit_read_and_unusable_are_all_correct_in_one_response(server):
+    """One request, all three cache outcomes at once.
+
+    The existing cache tests each drive a single outcome, so nothing catches a
+    classification that is right in isolation and wrong when the three sets
+    have to be partitioned out of the same dict -- notably that an unusable
+    entry has to be subtracted from ``hit`` and added to ``read``.
+    """
+    server.store.put("AMS1117-3.3", _cached_facts())
+    server.store.put("LM317", {"pins": "not a list"})
+
+    Handler.model_factory = staticmethod(lambda: scripted_reading("LM317", "NCP1117"))
+    try:
+        status, body = post(
+            server,
+            {
+                "intent": "a regulator",
+                "datasheets": {
+                    "AMS1117-3.3": "https://x/a.pdf",
+                    "LM317": "https://x/b.pdf",
+                    "NCP1117": "https://x/c.pdf",
+                },
+                "time_limit_s": 5,
+            },
+        )
+    finally:
+        Handler.model_factory = staticmethod(scripted)
+
+    assert status == 200
+    assert body["cache"] == {
+        "hit": ["AMS1117-3.3"],
+        "read": ["LM317", "NCP1117"],
+        "unusable": ["LM317"],
+    }
+    assert sorted(d["part"] for d in body["datasheets"]) == [
+        "AMS1117-3.3",
+        "LM317",
+        "NCP1117",
+    ], "the cached part and both read parts all inform the design"
+
+
+def test_datasheets_are_reported_when_review_is_skipped(server):
+    """Turning off the review must not turn off the datasheet reads.
+
+    The reads happen before the proposal and the review runs after the board
+    is placed, so ``review: false`` should cost the findings and nothing else.
+    A future short-circuit that skipped the reads along with the review would
+    silently design the board undocumented, and only this test would notice.
+    """
+    status, body = post(
+        server,
+        {
+            "intent": "a regulator",
+            "datasheets": {"AMS1117-3.3": "https://x/a.pdf"},
+            "time_limit_s": 5,
+            "review": False,
+        },
+    )
+    assert status == 200
+    assert body["findings"] == []
+    assert body["blockers"] == []
+    assert body["cache"]["read"] == ["AMS1117-3.3"]
+    assert body["datasheets"] == [
+        {
+            "part": "AMS1117-3.3",
+            "package": "SOT-223-3",
+            "pins": 3,
+            "requirements": 1,
+            "url": "https://x/a.pdf",
+        }
+    ]
+
+
+# -------------------------------------------------------- SILKSCREEN_WEB_DIST
+
+
+def test_the_web_dist_env_var_is_read_only_at_import(monkeypatch, tmp_path):
+    """Setting the variable inside a running process changes nothing.
+
+    ``WEB_DIST`` is a module-level ``Path(os.getenv(...))`` evaluated once on
+    import, and ``Handler.web_root`` defaults to that same object. Recording
+    the fact here is what keeps the companion test below honest: an
+    in-process monkeypatch is not a weak test of the override, it is a test
+    of nothing.
+    """
+    import service.app as app
+
+    at_import = app.WEB_DIST
+    monkeypatch.setenv("SILKSCREEN_WEB_DIST", str(tmp_path / "elsewhere"))
+    assert at_import == app.WEB_DIST
+    assert at_import == Handler.web_root
+
+
+def test_the_web_dist_env_var_is_honoured_by_a_fresh_import(tmp_path):
+    """A process started with the variable set serves the bundle from there.
+
+    Run as a subprocess rather than an ``importlib.reload``: reloading
+    service.app rebinds Handler and make_server to brand-new class and
+    function objects, while this module's top-level ``from service.app import
+    Handler, make_server`` still names the originals -- so every later test in
+    the file would be configuring one Handler and serving with another. A
+    subprocess reads the import-time value with no effect on this interpreter
+    at all.
+    """
+    dist = tmp_path / "container-bundle"
+    dist.mkdir()
+    env = {
+        **os.environ,
+        "SILKSCREEN_WEB_DIST": str(dist),
+        "PYTHONPATH": str(REPO_ROOT),
+    }
+    proc = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            "import service.app as app;"
+            "print(app.WEB_DIST);"
+            "print(app.Handler.web_root)",
+        ],
+        capture_output=True,
+        text=True,
+        cwd=str(REPO_ROOT),
+        env=env,
+        timeout=180,
+        check=False,
+    )
+    assert proc.returncode == 0, proc.stderr
+    reported = [Path(line) for line in proc.stdout.split()]
+    assert reported == [dist, dist], (
+        "the override has to reach Handler.web_root, not just the constant"
+    )
 GROUND_REVIEW = {
     "findings": [
         {
