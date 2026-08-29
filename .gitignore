@@ -44,3 +44,7 @@ adjacency_*.json
 
 # OS
 .DS_Store
+
+# Generated boards
+placed.kicad_pcb
+generated.kicad_pcb

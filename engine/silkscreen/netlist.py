@@ -99,7 +99,9 @@ class Connection:
     """One electrical net: a named node joined to a set of endpoints.
 
     An endpoint is either ``"<device>.<pin_name>"`` or ``"<passive>.1"`` /
-    ``"<passive>.2"``. Requiring an explicit terminal is the fix for the
+    ``"<passive>.2"``. It is split on the **last** dot, because real part names
+    contain dots ("AMS1117-3.3", "LM317-2.5") while pin names never do.
+    Requiring an explicit terminal is the fix for the
     original's inability to express "cap leg 1 to AVDD, leg 2 to AVSS" -- it
     only ever connected whole parts to nets, never specific pins.
     """
@@ -117,6 +119,16 @@ class CircuitSpec:
     def validate(self) -> None:
         """Check internal consistency. Raises :class:`ValidationError`."""
         errors: list[str] = []
+
+        # A spec with no parts passes every other check vacuously. Without this
+        # a model that returns the wrong JSON shape entirely -- no "devices",
+        # no "nets" -- yields a valid empty circuit and a board with nothing on
+        # it, silently.
+        if not self.devices and not self.passives:
+            errors.append(
+                "circuit contains no devices and no passives; "
+                "the response was probably not a circuit at all"
+            )
 
         device_by_name = {d.name: d for d in self.devices}
         passive_by_name = {p.name: p for p in self.passives}
@@ -153,7 +165,7 @@ class CircuitSpec:
                         f"'<part>.<pin>', not a bare part name"
                     )
                     continue
-                part, _, pin = ep.partition(".")
+                part, _, pin = ep.rpartition(".")
                 if part in device_by_name:
                     dev = device_by_name[part]
                     if pin not in dev.pins:
@@ -177,10 +189,10 @@ class CircuitSpec:
         # the original silently emitted these as floating parts.
         for passive in self.passives:
             legs = {
-                ep.partition(".")[2]
+                ep.rpartition(".")[2]
                 for conn in self.connections
                 for ep in conn.endpoints
-                if ep.partition(".")[0] == passive.name
+                if ep.rpartition(".")[0] == passive.name
             }
             missing = {"1", "2"} - legs
             if missing:

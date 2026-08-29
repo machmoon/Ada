@@ -8,7 +8,7 @@ same S-expression format KiCad does, so it runs headless on any OS, in CI, with 
 KiCad process alive anywhere.
 
 ```
-54 passed — no network, no API key, no KiCad install
+143 passed — no network, no API key, no KiCad install
 ```
 
 ---
@@ -19,8 +19,11 @@ KiCad process alive anywhere.
 |---|---|
 | `kicad.py` — `.kicad_pcb` read/write | **Working** · 13 tests |
 | `packing.py` — CP-SAT placer | **Working** · 26 tests |
-| `netlist.py` — validated circuit IR | **Working** · 15 tests |
-| Datasheet agents, overlay UI, guided cursor | Not built |
+| `netlist.py` — validated circuit IR | **Working** · 18 tests |
+| `footprints.py` — parametric land patterns | **Working** · 9 tests |
+| `board.py` — emit a board from a circuit | **Working** · 7 tests |
+| `agents/` — datasheet, propose, review, pipeline | **Working** · 22 tests |
+| Overlay UI, guided cursor | Not built (mockups only) |
 
 ---
 
@@ -93,6 +96,51 @@ by unit tests, not by the number above.
 
 ---
 
+## Prompt to PCB
+
+```bash
+echo 'GOOGLE_API_KEY=...' >> .env
+python -m silkscreen "a 3.3V motor driver board around an STM32F030" \
+    --datasheet "AMS1117-3.3=https://.../ams1117.pdf" \
+    -o board.kicad_pcb
+```
+
+```
+intent ──► datasheets ──► propose ──► validate/repair ──► place ──► .kicad_pcb
+                                          │                            │
+                                          └────────► review ───────────┘
+```
+
+Two gates sit between the model and the board.
+
+**Structural.** The proposal goes through the circuit IR before anything is built.
+Every validation error is collected and fed back as one repair prompt; the loop is
+bounded and `result.repair_rounds` reports how many corrections it took.
+
+**Semantic.** A reviewer re-reads the datasheets and is prompted to *refute* the
+design — an agent asked "is this correct?" says yes. Findings are graded
+blocker / marginal / note and cite the datasheet page. Findings naming parts that
+aren't on the board are dropped rather than surfaced.
+
+Everything below `agents/` is model-free and network-free, so the whole pipeline —
+including its failure paths — is tested against a scripted model with no API key.
+
+### Generating footprints
+
+Emitting a board means generating real land patterns: pads at real coordinates, a
+courtyard, silkscreen. `footprints.py` builds them parametrically — chip passives
+(0402–1210), SOT-23, SOT-223, SOIC, LQFP — so a board can be written with no KiCad
+install and no footprint library on disk. Courtyards are fitted to enclose every pad
+*and* the body, which is what makes the placer's clearance guarantee mean anything.
+
+Coverage is narrow on purpose and it **raises rather than guessing**. A wrong footprint
+is the most common cause of a dead first-spin board; inventing a land pattern for an
+unrecognised package would be worse than refusing. Capacitor packages widen with value
+(a 22 µF part does not fit an 0603), and output is byte-identical across runs, so a
+regenerated board diffs cleanly in git.
+
+---
+
 ## KiCad integration
 
 Most AI-and-KiCad tools are plugins: they live inside KiCad's Python environment and
@@ -106,7 +154,7 @@ treats the board file as the interface.
 | Requires KiCad running | Yes | **No** |
 | Headless / CI | Hard | **Native** |
 | Platform lock | KiCad's plugin loader | **None — pure Python** |
-| Testable without KiCad | No | **Yes, all 54 tests** |
+| Testable without KiCad | No | **Yes, all 143 tests** |
 
 ### What it reads
 
@@ -163,7 +211,7 @@ plus total HPWL.
 | **Real clearance** | Parts inflate by `clearance_nm/2` per side before no-overlap. Flush-packed boards can't be assembled. |
 | **90° rotation** | A boolean per part swaps interval sizes; pin offsets rotate with two implications, not a centre approximation. |
 | **Edge constraints** | Connectors and antennas pin to an edge via a disjunction over four half-reified literals. |
-| **Symmetry breaking** | 24 identical caps admit 24! relabelings. Forcing a lexicographic order collapses each orbit to one representative — on a 27-part board, optimality in 0.1 s instead of 0.3 s. |
+| **Symmetry breaking** | 24 identical caps admit 24! relabelings. Forcing a lexicographic order collapses each orbit to one representative — on a 27-part board, optimality in 0.72 s instead of 16.7 s. |
 | **HPWL, one box per net** | A pairwise clique makes a 50-pad ground net contribute 1,225 terms that swamp every signal. A star overestimates length and makes layout depend on footprint order in the file. |
 | **Power rails down-weighted, not dropped** | A decap's only connections are VCC and GND — drop power nets and it has no objective term and drifts. Measured: excluding power put a cap 9.65 mm from its IC pin; weighting at 0.25 brings it to 5.15 mm. |
 | **Degrades, doesn't fail** | If CP-SAT finds nothing in budget, a deterministic shelf packer returns a valid layout flagged `FALLBACK`, warning about every constraint it couldn't honour. |
@@ -206,8 +254,17 @@ engine/
     units.py      nm/mm/mil conversion, grid quantisation
     packing.py    CP-SAT placer
     netlist.py    validated circuit IR
-    kicad.py      .kicad_pcb read/write via kiutils
-  tests/          54 tests — no network, no API keys, no KiCad
+    footprints.py parametric IPC-7351 land patterns
+    board.py      emit a .kicad_pcb from a circuit
+    kicad.py      read/modify an existing .kicad_pcb via kiutils
+    cli.py        python -m silkscreen "..."
+    agents/       the only place a model call happens
+      model.py      provider seam + scripted stand-in for tests
+      datasheet.py  PDF -> structured facts, with page citations
+      propose.py    intent -> circuit, with a bounded repair loop
+      review.py     adversarial design review
+      pipeline.py   prompt -> PCB
+  tests/          143 tests — no network, no API keys, no KiCad
     fixtures/     ref.kicad_pcb -- 11-footprint board fixture
 scripts/
   demo.py         end-to-end: read -> place -> write -> verify
@@ -231,7 +288,7 @@ scripts/
 ## Development
 
 ```bash
-./.venv/bin/python -m pytest -q          # 54 tests
+./.venv/bin/python -m pytest -q          # 143 tests
 ./.venv/bin/python -m ruff check engine  # lint
 ./.venv/bin/python scripts/demo.py       # end-to-end run
 ```

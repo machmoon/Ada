@@ -1,0 +1,283 @@
+"""Agent stages, driven by a scripted model.
+
+No network, no API key. The point of the seam in :mod:`silkscreen.agents.model`
+is that the whole prompt-to-PCB pipeline can be exercised deterministically,
+including the failure paths that only ever fire against a badly-behaved model.
+"""
+
+from __future__ import annotations
+
+import json
+
+import pytest
+from silkscreen.agents import (
+    ModelError,
+    ScriptedModel,
+    generate_pcb,
+    propose_circuit,
+    read_datasheet,
+    review_circuit,
+)
+from silkscreen.agents.propose import ProposalError
+from silkscreen.agents.review import Severity
+from silkscreen.netlist import parse_circuit_spec
+
+# ---------------------------------------------------------------- fixtures
+
+GOOD_CIRCUIT = {
+    "devices": {
+        "AMS1117-3.3": {"pins": {"GND": "1", "VOUT": "2", "VIN": "3"}},
+        "DRV8837": {"pins": {"IN1": "1", "IN2": "2", "VM": "3", "GND": "4",
+                             "OUT1": "5", "OUT2": "6", "VCC": "7", "nSLEEP": "8"}},
+    },
+    "passives": {
+        "c_in": {"type": "capacitor", "value": "22uF"},
+        "c_out": {"type": "capacitor", "value": "22uF"},
+        "c_dec": {"type": "capacitor", "value": "100nF"},
+        "r_sleep": {"type": "resistor", "value": "10k"},
+    },
+    "nets": {
+        "VIN": ["AMS1117-3.3.VIN", "c_in.1", "DRV8837.VM"],
+        "GND": ["AMS1117-3.3.GND", "DRV8837.GND", "c_in.2", "c_out.2", "c_dec.2"],
+        "+3V3": ["AMS1117-3.3.VOUT", "DRV8837.VCC", "c_out.1", "c_dec.1",
+                 "r_sleep.1"],
+        "SLEEP": ["DRV8837.nSLEEP", "r_sleep.2"],
+        "MOT": ["DRV8837.OUT1", "DRV8837.IN1"],
+    },
+}
+
+DATASHEET_JSON = {
+    "part_number": "AMS1117-3.3",
+    "package": "SOT-223-3",
+    "pin_count": 3,
+    "pins": [
+        {"number": "1", "name": "GND", "kind": "ground", "page": 1},
+        {"number": "2", "name": "VOUT", "kind": "output", "page": 1},
+        {"number": "3", "name": "VIN", "kind": "power", "page": 1},
+    ],
+    "requirements": [
+        {"requirement": "Output capacitor must be >= 22uF tantalum", "page": 9}
+    ],
+    "auxiliaries": [
+        {"name": "c_out", "type": "capacitor", "value": "22uF",
+         "connects": "VOUT to GND", "why": "loop stability", "page": 9}
+    ],
+    "notes": "",
+}
+
+
+# ---------------------------------------------------------------- datasheet
+
+
+def test_read_datasheet_extracts_pins_and_citations():
+    model = ScriptedModel(responses=[json.dumps(DATASHEET_JSON)])
+    facts = read_datasheet(model, "AMS1117-3.3", pdf_url="https://x/ams1117.pdf")
+    assert facts.pin_count == 3
+    assert facts.pin_map() == {"GND": "1", "VOUT": "2", "VIN": "3"}
+    assert facts.requirements[0]["page"] == 9
+
+
+def test_read_datasheet_sends_the_pdf_to_the_model():
+    model = ScriptedModel(responses=[json.dumps(DATASHEET_JSON)])
+    read_datasheet(model, "AMS1117-3.3", pdf_url="https://x/ams1117.pdf")
+    assert model.calls[0]["documents"][0].url == "https://x/ams1117.pdf"
+
+
+def test_read_datasheet_tolerates_a_code_fence():
+    fenced = "```json\n" + json.dumps(DATASHEET_JSON) + "\n```"
+    model = ScriptedModel(responses=[fenced])
+    facts = read_datasheet(model, "AMS1117-3.3", pdf_url="https://x/a.pdf")
+    assert facts.pin_count == 3
+
+
+def test_read_datasheet_refuses_a_part_with_no_pinout():
+    """Placing a part whose pinout is unknown is worse than failing."""
+    empty = dict(DATASHEET_JSON, pins=[])
+    model = ScriptedModel(responses=[json.dumps(empty)])
+    with pytest.raises(ModelError, match="No pins extracted"):
+        read_datasheet(model, "AMS1117-3.3", pdf_url="https://x/a.pdf")
+
+
+def test_pin_count_disagreement_is_flagged_not_hidden():
+    mismatched = dict(DATASHEET_JSON, pin_count=8)
+    model = ScriptedModel(responses=[json.dumps(mismatched)])
+    facts = read_datasheet(model, "AMS1117-3.3", pdf_url="https://x/a.pdf")
+    assert "package choice may be wrong" in facts.notes
+
+
+def test_read_datasheet_needs_a_document():
+    with pytest.raises(ValueError, match="pdf_url or pdf_bytes"):
+        read_datasheet(ScriptedModel(), "X")
+
+
+# ---------------------------------------------------------------- propose
+
+
+def test_propose_accepts_a_valid_circuit_first_try():
+    model = ScriptedModel(responses=[json.dumps(GOOD_CIRCUIT)])
+    spec, attempts = propose_circuit(model, "a motor driver")
+    assert spec.part_count() == 6
+    assert len(attempts) == 1 and attempts[0].accepted
+
+
+def test_propose_repairs_an_invalid_circuit():
+    """The repair loop is the whole point: the model gets its errors back."""
+    broken = json.loads(json.dumps(GOOD_CIRCUIT))
+    broken["nets"]["GND"] = ["AMS1117-3.3.GND", "DRV8837.GND"]  # caps now floating
+    model = ScriptedModel(responses=[json.dumps(broken), json.dumps(GOOD_CIRCUIT)])
+
+    spec, attempts = propose_circuit(model, "a motor driver")
+    assert spec.part_count() == 6
+    assert len(attempts) == 2
+    assert not attempts[0].accepted and attempts[1].accepted
+    assert any("floating" in e for e in attempts[0].errors)
+
+
+def test_repair_prompt_contains_every_error():
+    broken = json.loads(json.dumps(GOOD_CIRCUIT))
+    broken["nets"]["VIN"] = ["AMS1117-3.3.NOPE", "c_in.1", "DRV8837.VM"]
+    model = ScriptedModel(responses=[json.dumps(broken), json.dumps(GOOD_CIRCUIT)])
+    propose_circuit(model, "a motor driver")
+    repair_prompt = model.calls[1]["prompt"]
+    assert "rejected" in repair_prompt
+    assert "NOPE" in repair_prompt
+
+
+def test_propose_gives_up_loudly_after_the_repair_budget():
+    broken = json.loads(json.dumps(GOOD_CIRCUIT))
+    broken["nets"]["GND"] = ["AMS1117-3.3.GND", "DRV8837.GND"]
+    model = ScriptedModel(responses=[json.dumps(broken)] * 3)
+    with pytest.raises(ProposalError, match="No valid circuit after"):
+        propose_circuit(model, "a motor driver", max_repairs=2)
+
+
+def test_propose_passes_datasheet_facts_into_the_prompt():
+    model = ScriptedModel(responses=[json.dumps(DATASHEET_JSON),
+                                     json.dumps(GOOD_CIRCUIT)])
+    facts = [read_datasheet(model, "AMS1117-3.3", pdf_url="https://x/a.pdf")]
+    propose_circuit(model, "a regulator", facts=facts)
+    prompt = model.calls[1]["prompt"]
+    assert "22uF tantalum" in prompt and "p.9" in prompt
+
+
+# ---------------------------------------------------------------- review
+
+
+def test_review_returns_findings_sorted_by_severity():
+    response = json.dumps({"findings": [
+        {"severity": "note", "title": "Silkscreen could be clearer", "detail": "",
+         "parts": []},
+        {"severity": "blocker", "title": "nSLEEP left floating",
+         "detail": "The driver will not enable.", "parts": ["r_sleep"],
+         "citation": "DRV8837 p.8", "suggested_fix": "Pull to VCC"},
+        {"severity": "marginal", "title": "Decoupling is far from the pin",
+         "detail": "", "parts": ["c_dec"]},
+    ]})
+    model = ScriptedModel(responses=[response])
+    spec = parse_circuit_spec(GOOD_CIRCUIT)
+    findings = review_circuit(model, spec)
+    assert [f.severity for f in findings] == [
+        Severity.BLOCKER, Severity.MARGINAL, Severity.NOTE
+    ]
+    assert findings[0].citation == "DRV8837 p.8"
+
+
+def test_review_drops_findings_that_reference_nonexistent_parts():
+    """A finding pointing at a part that isn't on the board helps nobody."""
+    response = json.dumps({"findings": [
+        {"severity": "blocker", "title": "U99 is miswired", "detail": "",
+         "parts": ["U99", "c_dec"]},
+    ]})
+    model = ScriptedModel(responses=[response])
+    findings = review_circuit(model, parse_circuit_spec(GOOD_CIRCUIT))
+    assert findings[0].parts == ("c_dec",)
+
+
+def test_review_handles_a_clean_result():
+    model = ScriptedModel(responses=[json.dumps({"findings": []})])
+    assert review_circuit(model, parse_circuit_spec(GOOD_CIRCUIT)) == []
+
+
+def test_review_prompt_asks_the_model_to_refute():
+    """An agent asked 'is this correct?' says yes."""
+    model = ScriptedModel(responses=[json.dumps({"findings": []})])
+    review_circuit(model, parse_circuit_spec(GOOD_CIRCUIT))
+    prompt = model.calls[0]["prompt"].lower()
+    assert "wrong" in prompt and "do not compliment" in prompt
+
+
+def test_empty_circuit_is_rejected():
+    """A model that returns the wrong shape must not yield an empty board."""
+    from silkscreen.netlist import ValidationError, parse_circuit_spec
+
+    with pytest.raises(ValidationError, match="no devices and no passives"):
+        parse_circuit_spec({"not": "a circuit"})
+
+
+def test_propose_rejects_a_response_that_is_not_a_circuit():
+    model = ScriptedModel(responses=[json.dumps({"part_number": "AMS1117"})] * 3)
+    with pytest.raises(ProposalError):
+        propose_circuit(model, "x", max_repairs=1)
+
+
+def test_review_survives_junk_output():
+    model = ScriptedModel(responses=['{"findings": "not a list"}'])
+    assert review_circuit(model, parse_circuit_spec(GOOD_CIRCUIT)) == []
+
+
+# ---------------------------------------------------------------- pipeline
+
+
+def test_full_pipeline_prompt_to_board(tmp_path):
+    """intent -> datasheet -> propose -> place -> .kicad_pcb -> review."""
+    review_json = json.dumps({"findings": [
+        {"severity": "blocker", "title": "Output cap is ceramic, not tantalum",
+         "detail": "The AMS1117 loop needs ESR the ceramic does not provide.",
+         "parts": ["c_out"], "citation": "AMS1117 p.9",
+         "suggested_fix": "Use a 22uF tantalum"},
+    ]})
+    # Markers must be unique to one stage: "datasheet" alone also appears in
+    # the proposal prompt, which silently routed the wrong response.
+    model = ScriptedModel(by_marker={
+        "reading an electronic component datasheet": json.dumps(DATASHEET_JSON),
+        "designing a printed circuit board": json.dumps(GOOD_CIRCUIT),
+        "reviewing a circuit someone else designed": review_json,
+    })
+
+    out = tmp_path / "board.kicad_pcb"
+    result = generate_pcb(
+        model,
+        "a 3.3V motor driver board",
+        datasheets={"AMS1117-3.3": "https://x/ams1117.pdf"},
+        output=out,
+        time_limit_s=15.0,
+    )
+
+    assert result.board_path == out and out.exists()
+    assert len(result.board.parts) == 6
+    assert len(result.facts) == 1
+    assert len(result.blockers) == 1
+    assert result.repair_rounds == 0
+    assert "parts" in result.summary()
+
+    from kiutils.board import Board
+    assert len(Board.from_file(str(out)).footprints) == 6
+
+
+def test_pipeline_reports_repair_rounds(tmp_path):
+    broken = json.loads(json.dumps(GOOD_CIRCUIT))
+    broken["nets"]["GND"] = ["AMS1117-3.3.GND", "DRV8837.GND"]
+    model = ScriptedModel(responses=[json.dumps(broken), json.dumps(GOOD_CIRCUIT),
+                                     json.dumps({"findings": []})])
+    result = generate_pcb(model, "a motor driver", output=tmp_path / "b.kicad_pcb",
+                          time_limit_s=10.0)
+    assert result.repair_rounds == 1
+    assert "1 repair round" in result.summary()
+
+
+def test_pipeline_can_skip_review(tmp_path):
+    model = ScriptedModel(responses=[json.dumps(GOOD_CIRCUIT)])
+    result = generate_pcb(model, "x", output=tmp_path / "b.kicad_pcb",
+                          review=False, time_limit_s=10.0)
+    assert result.findings == []
+    assert len(model.calls) == 1

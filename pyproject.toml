@@ -16,7 +16,12 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+# The engine is model-free; agents/ is the only place a network call lives.
+agents = ["google-genai>=1.0"]
 dev = ["pytest>=8.0", "ruff>=0.6"]
+
+[project.scripts]
+silkscreen-mcp = "silkscreen.mcp.server:main"
 
 [build-system]
 requires = ["setuptools>=68"]
