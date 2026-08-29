@@ -16,6 +16,10 @@ python scripts/check_docs.py                         # fails if README/DEVPOST q
 
 Pytest config lives in `pyproject.toml` (`testpaths = engine/tests, service/tests`; `pythonpath = engine, .`). CI (`.github/workflows/ci.yml`) runs install + ruff + pytest + check_docs on Linux/macOS/Windows, Python 3.11. Do not quote test counts in prose anywhere — the number has drifted repeatedly (40, 54, 143, 160) and `check_docs.py` only guards README and DEVPOST.
 
+## Team workflow
+
+Four people push to `main` concurrently — the local checkout goes stale fast. Run `git fetch` and check `git status` / `git log origin/main` before starting work and again before any commit or push, and rebase rather than letting the histories diverge. During long working sessions, poll the remote every few minutes (e.g. `/loop 5m`) and surface new teammate commits to the user as they land.
+
 ## Architecture
 
 The installed `silkscreen` package lives under `engine/` (setuptools packages only `engine/`), with the Cloud Run surface in `service/`. The core pipeline is: parse a `.kicad_pcb` file, solve placement with CP-SAT, write the placements and board outline back into the file. The board file is the API — there is no KiCad process, plugin, or IPC anywhere. The design is layered: the deterministic engine makes no network calls; `agents/` is the only place a model call lives; `service/` is the only place GCP lives. Each layer keeps an offline stand-in (`ScriptedModel`, `MemoryFactStore`) so the whole suite runs with no keys.
