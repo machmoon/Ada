@@ -40,6 +40,7 @@ __all__ = [
     "Part",
     "Wire",
     "Net",
+    "Keepout",
     "Placement",
     "PackResult",
     "PackStatus",
@@ -73,6 +74,12 @@ class Part:
     #: Allow a 90-degree rotation. Off by default: rotating a part invalidates
     #: any silkscreen orientation the caller may care about.
     allow_rotation: bool = False
+    #: Pin this part's bottom-left corner, in nanometres. A placement is only
+    #: useful if you can keep the parts you already like: without this, every
+    #: re-solve reshuffles the whole board and the tool cannot be used
+    #: iteratively. Snapped to the solver grid, so give grid-aligned values
+    #: when the exact coordinate matters.
+    fixed_at_nm: tuple[int, int] | None = None
 
     def __post_init__(self) -> None:
         if self.width_nm <= 0 or self.height_nm <= 0:
@@ -125,6 +132,29 @@ class Net:
     #: Relative importance. Power rails are routed as planes rather than traces,
     #: so their length matters less -- but not zero, because proximity still does.
     weight: float = 1.0
+
+
+@dataclass(frozen=True)
+class Keepout:
+    """A rectangular region no part may occupy.
+
+    Mounting holes, a connector's mating envelope, an antenna's ground
+    clearance, a mechanical boss. Modelled as an immovable participant in the
+    same no-overlap constraint as the parts, which is exactly what it is.
+    """
+
+    x_nm: int
+    y_nm: int
+    width_nm: int
+    height_nm: int
+    name: str = ""
+
+    def __post_init__(self) -> None:
+        if self.width_nm <= 0 or self.height_nm <= 0:
+            raise ValueError(
+                f"Keepout {self.name!r} has non-positive extent "
+                f"({self.width_nm} x {self.height_nm} nm)"
+            )
 
 
 @dataclass(frozen=True)
@@ -205,6 +235,7 @@ def pack(
     wires: Sequence[Wire] = (),
     *,
     nets: Sequence[Net] = (),
+    keepouts: Sequence[Keepout] = (),
     grid_nm: int = DEFAULT_GRID_NM,
     clearance_nm: int = DEFAULT_CLEARANCE_NM,
     max_board_nm: tuple[int, int] | None = None,
@@ -224,6 +255,8 @@ def pack(
             normalised into a two-terminal :class:`Net`.
         nets: Multi-terminal nets costed as half-perimeter wirelength. Prefer
             these over ``wires`` -- a real net is a tree, not a set of pairs.
+        keepouts: Rectangular regions no part may occupy -- mounting holes, a
+            connector's mating envelope, mechanical bosses.
         grid_nm: Solver resolution. Parts are inflated to a whole number of
             cells, so a coarser grid means faster solving and looser packing.
         clearance_nm: Minimum edge-to-edge gap between two placed courtyards.
@@ -308,6 +341,11 @@ def pack(
     for net in all_nets:
         for idx, _ in net.terminals:
             wired[idx] = True
+    # A pinned part is distinguishable by its position, so ordering it against
+    # an identical free part would exclude legal layouts.
+    for i, part in enumerate(parts):
+        if part.fixed_at_nm is not None:
+            wired[i] = True
 
     # Inflate every part by the clearance so AddNoOverlap2D enforces a real gap.
     # Each part carries ceil(clearance/2) on every side, so two neighbours end up
@@ -322,6 +360,31 @@ def pack(
     # infeasible.)
     x_max = max(1, sum(box_w))
     y_max = max(1, sum(box_h))
+    # A keepout or a pinned part occupies a FIXED location, so the free parts
+    # must still fit around it. The bound therefore has to be the free span
+    # *plus* the furthest fixed edge -- taking a max would leave the domain one
+    # cell short whenever a pinned part sits mid-board, and the model would be
+    # reported as infeasible for no reason the caller could act on.
+    fixed_right = 0
+    fixed_top = 0
+    for keep in keepouts:
+        fixed_right = max(
+            fixed_right, cells_ceil(keep.x_nm + keep.width_nm + 2 * pad, grid_nm)
+        )
+        fixed_top = max(
+            fixed_top, cells_ceil(keep.y_nm + keep.height_nm + 2 * pad, grid_nm)
+        )
+    for i, part in enumerate(parts):
+        if part.fixed_at_nm is None:
+            continue
+        fixed_right = max(
+            fixed_right, cells_ceil(part.fixed_at_nm[0], grid_nm) + box_w[i]
+        )
+        fixed_top = max(
+            fixed_top, cells_ceil(part.fixed_at_nm[1], grid_nm) + box_h[i]
+        )
+    x_max += fixed_right
+    y_max += fixed_top
     if max_board_nm is not None:
         # Floor, not ceil: a hard cap must not be overshot by up to one cell.
         x_max = min(x_max, max_board_nm[0] // grid_nm)
@@ -374,7 +437,48 @@ def pack(
                 model.NewFixedSizeIntervalVar(y[i], box_h[i], f"yi[{i}]")
             )
 
+    # Keepouts join the same disjunctness constraint as the parts. They are
+    # inflated by the clearance too, so a part cannot be packed flush against a
+    # mounting hole.
+    for k, keep in enumerate(keepouts):
+        kx = keep.x_nm // grid_nm
+        ky = keep.y_nm // grid_nm
+        kw = cells_ceil(keep.width_nm + 2 * pad, grid_nm)
+        kh = cells_ceil(keep.height_nm + 2 * pad, grid_nm)
+        x_intervals.append(
+            model.NewFixedSizeIntervalVar(kx, kw, f"keepout_x[{k}]")
+        )
+        y_intervals.append(
+            model.NewFixedSizeIntervalVar(ky, kh, f"keepout_y[{k}]")
+        )
+
     model.AddNoOverlap2D(x_intervals, y_intervals)
+
+    # Parts the caller has pinned. fixed_at_nm names where the PART goes, not
+    # its clearance-inflated box, so the pad is removed before constraining --
+    # otherwise pinning at (0, 0) would silently report the part at
+    # (clearance/2, clearance/2).
+    for i, part in enumerate(parts):
+        if part.fixed_at_nm is None:
+            continue
+        fx_nm, fy_nm = part.fixed_at_nm
+        if fx_nm < pad or fy_nm < pad:
+            raise ValueError(
+                f"Part {part.ref!r} is fixed at {part.fixed_at_nm} nm, but a "
+                f"part carries {pad} nm of clearance on each side, so the "
+                f"minimum pinnable coordinate is ({pad}, {pad}). Reduce "
+                f"clearance_nm or move the part."
+            )
+        fx = round((fx_nm - pad) / grid_nm)
+        fy = round((fy_nm - pad) / grid_nm)
+        if not (0 <= fx <= x_max and 0 <= fy <= y_max):
+            raise ValueError(
+                f"Part {part.ref!r} is fixed at {part.fixed_at_nm} nm, which is "
+                f"outside the solvable area. Raise max_board_nm, or check the "
+                f"coordinate."
+            )
+        model.Add(x[i] == fx)
+        model.Add(y[i] == fy)
 
     # Symmetry breaking over interchangeable parts.
     #
@@ -411,8 +515,13 @@ def pack(
     # Board extent.
     w_used = model.NewIntVar(0, x_max, "w_used")
     h_used = model.NewIntVar(0, y_max, "h_used")
-    model.AddMaxEquality(w_used, [x[i] + eff_w[i] for i in range(n)])
-    model.AddMaxEquality(h_used, [y[i] + eff_h[i] for i in range(n)])
+    w_terms = [x[i] + eff_w[i] for i in range(n)]
+    h_terms = [y[i] + eff_h[i] for i in range(n)]
+    for keep in keepouts:
+        w_terms.append(cells_ceil(keep.x_nm + keep.width_nm, grid_nm))
+        h_terms.append(cells_ceil(keep.y_nm + keep.height_nm, grid_nm))
+    model.AddMaxEquality(w_used, w_terms)
+    model.AddMaxEquality(h_used, h_terms)
 
     # Edge constraints. Every part is inside the board by construction, so
     # "on an edge" means flush with one of the four sides.
@@ -544,6 +653,13 @@ def pack(
             )
         if any(p.allow_rotation for p in parts):
             warnings.append("Fallback does not rotate parts.")
+        if any(p.fixed_at_nm for p in parts):
+            pinned = [p.ref for p in parts if p.fixed_at_nm]
+            warnings.append(
+                f"Fallback ignores fixed_at_nm; {pinned} were NOT pinned."
+            )
+        if keepouts:
+            warnings.append("Fallback ignores keepouts; regions may be occupied.")
         placements, bw, bh = _shelf_pack(parts, clearance_nm)
         return PackResult(
             placements=placements,

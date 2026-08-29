@@ -392,3 +392,135 @@ def test_fallback_warns_when_it_drops_hard_constraints():
     r = pack(parts, time_limit_s=0.001, grid_nm=1000)
     assert r.status is PackStatus.FALLBACK
     assert any("must_be_on_edge" in w for w in r.warnings)
+
+
+# ------------------------------------------------- pinned parts and keepouts
+
+
+def _overlaps(a, b):
+    dx = min(a[2], b[2]) - max(a[0], b[0])
+    dy = min(a[3], b[3]) - max(a[1], b[1])
+    return dx > 0 and dy > 0
+
+
+def test_a_pinned_part_lands_where_it_was_pinned():
+    """Without this the tool cannot be used iteratively: every re-solve
+    reshuffles the board and you lose the placement you liked."""
+    grid = 50_000
+    parts = [
+        Part(*LQFP48, ref="U1"),
+        Part(mm(5), mm(5), ref="J1", fixed_at_nm=(mm(2), mm(3))),
+        Part(*R0603, ref="R1"),
+    ]
+    result = pack(parts, grid_nm=grid, time_limit_s=10.0)
+    j1 = next(p for p in result.placements if p.ref == "J1")
+    # Snapped to the grid, so allow one cell of slack.
+    assert abs(j1.x_nm - mm(2)) <= grid
+    assert abs(j1.y_nm - mm(3)) <= grid
+
+
+def test_pinning_is_stable_across_a_resolve():
+    """Re-solving with a part pinned to its previous spot keeps it there."""
+    parts = [Part(*LQFP48, ref="U1"), Part(*R0603, ref="R1"),
+             Part(*R0603, ref="R2"), Part(mm(4), mm(4), ref="J1")]
+    first = pack(parts, time_limit_s=10.0)
+    j1 = next(p for p in first.placements if p.ref == "J1")
+
+    repinned = [
+        Part(mm(4), mm(4), ref="J1", fixed_at_nm=(j1.x_nm, j1.y_nm))
+        if p.ref == "J1" else p
+        for p in parts
+    ]
+    second = pack(repinned, time_limit_s=10.0)
+    j1b = next(p for p in second.placements if p.ref == "J1")
+    assert abs(j1b.x_nm - j1.x_nm) <= 50_000
+    assert abs(j1b.y_nm - j1.y_nm) <= 50_000
+
+
+def test_pinned_part_still_respects_clearance():
+    parts = [
+        Part(*R0603, ref="R1", fixed_at_nm=(mm(1), mm(1))),
+        Part(*R0603, ref="R2"),
+        Part(*R0603, ref="R3"),
+    ]
+    clearance = mm(0.25)
+    result = pack(parts, clearance_nm=clearance, time_limit_s=10.0)
+    boxes = _boxes(parts, result)
+    for a, b in itertools.combinations(boxes, 2):
+        assert _gap(a, b) >= clearance
+
+
+def test_pinning_below_the_clearance_ring_raises_with_a_usable_message():
+    parts = [Part(*R0603, ref="R1", fixed_at_nm=(0, 0))]
+    with pytest.raises(ValueError, match="minimum pinnable coordinate"):
+        pack(parts, clearance_nm=mm(0.25), time_limit_s=5.0)
+
+
+def test_pinning_outside_the_board_raises():
+    parts = [Part(*R0603, ref="R1", fixed_at_nm=(mm(500), mm(500)))]
+    with pytest.raises(ValueError, match="outside the solvable area"):
+        pack(parts, max_board_nm=(mm(20), mm(20)), time_limit_s=5.0)
+
+
+def test_no_part_occupies_a_keepout():
+    """Mounting holes and connector envelopes are regions, not parts."""
+    from silkscreen import Keepout
+
+    keep = Keepout(mm(5), mm(5), mm(4), mm(4), name="MH1")
+    parts = [Part(*R0603, ref=f"R{i}") for i in range(8)]
+    result = pack(parts, keepouts=[keep], clearance_nm=0, time_limit_s=15.0)
+
+    region = (keep.x_nm, keep.y_nm,
+              keep.x_nm + keep.width_nm, keep.y_nm + keep.height_nm)
+    for box in _boxes(parts, result):
+        assert not _overlaps(box, region), f"a part sits in keepout {keep.name}"
+
+
+def test_keepout_is_inside_the_reported_board():
+    from silkscreen import Keepout
+
+    keep = Keepout(mm(20), mm(0), mm(3), mm(3), name="MH1")
+    result = pack([Part(*R0603, ref="R1")], keepouts=[keep], time_limit_s=10.0)
+    assert result.board_width_nm >= keep.x_nm + keep.width_nm
+
+
+def test_keepouts_and_pins_compose():
+    from silkscreen import Keepout
+
+    parts = [
+        Part(*LQFP48, ref="U1"),
+        Part(mm(5), mm(5), ref="J1", fixed_at_nm=(mm(1), mm(1))),
+        Part(*R0603, ref="R1"),
+        Part(*R0603, ref="R2"),
+    ]
+    keep = Keepout(mm(14), mm(14), mm(3.2), mm(3.2), name="MH1")
+    result = pack(parts, keepouts=[keep], clearance_nm=0, time_limit_s=15.0)
+
+    region = (keep.x_nm, keep.y_nm,
+              keep.x_nm + keep.width_nm, keep.y_nm + keep.height_nm)
+    boxes = _boxes(parts, result)
+    for box in boxes:
+        assert not _overlaps(box, region)
+    for a, b in itertools.combinations(boxes, 2):
+        assert not _overlaps(a, b)
+
+
+def test_degenerate_keepout_is_rejected():
+    from silkscreen import Keepout
+
+    with pytest.raises(ValueError, match="non-positive extent"):
+        Keepout(0, 0, 0, mm(1), name="bad")
+
+
+def test_fallback_warns_about_pins_and_keepouts_it_cannot_honour():
+    from silkscreen import Keepout
+
+    parts = [Part(*R0603, ref=f"R{i}") for i in range(40)]
+    parts[0] = Part(*R0603, ref="J1", fixed_at_nm=(mm(1), mm(1)))
+    result = pack(
+        parts, keepouts=[Keepout(mm(5), mm(5), mm(2), mm(2))],
+        time_limit_s=0.001, grid_nm=1000,
+    )
+    assert result.status is PackStatus.FALLBACK
+    assert any("fixed_at_nm" in w for w in result.warnings)
+    assert any("keepout" in w for w in result.warnings)

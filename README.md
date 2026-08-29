@@ -8,7 +8,7 @@ same S-expression format KiCad does, so it runs headless on any OS, in CI, with 
 KiCad process alive anywhere.
 
 ```
-143 passed — no network, no API key, no KiCad install
+170 passed — no network, no API key, no KiCad install
 ```
 
 ---
@@ -18,11 +18,14 @@ KiCad process alive anywhere.
 | Component | State |
 |---|---|
 | `kicad.py` — `.kicad_pcb` read/write | **Working** · 13 tests |
-| `packing.py` — CP-SAT placer | **Working** · 26 tests |
-| `netlist.py` — validated circuit IR | **Working** · 18 tests |
-| `footprints.py` — parametric land patterns | **Working** · 9 tests |
-| `board.py` — emit a board from a circuit | **Working** · 7 tests |
+| `packing.py` — CP-SAT placer | **Working** · 36 tests |
+| `netlist.py` — validated circuit IR | **Working** · 15 tests |
+| `footprints.py` + `board.py` — land patterns, board emission | **Working** · 16 tests |
 | `agents/` — datasheet, propose, review, pipeline | **Working** · 22 tests |
+| `agents/retrieval.py` — page-cited datasheet retrieval | **Working** · 15 tests |
+| `agents/resilience.py` — provider failover | **Working** · 14 tests |
+| `mcp/` — MCP server over stdio | **Working** · 23 tests |
+| `service/` — Cloud Run + Firestore cache | **Working** · 16 tests |
 | Overlay UI, guided cursor | Not built (mockups only) |
 
 ---
@@ -154,7 +157,7 @@ treats the board file as the interface.
 | Requires KiCad running | Yes | **No** |
 | Headless / CI | Hard | **Native** |
 | Platform lock | KiCad's plugin loader | **None — pure Python** |
-| Testable without KiCad | No | **Yes, all 143 tests** |
+| Testable without KiCad | No | **Yes, all 170 tests** |
 
 ### What it reads
 
@@ -312,7 +315,7 @@ engine/
       propose.py    intent -> circuit, with a bounded repair loop
       review.py     adversarial design review
       pipeline.py   prompt -> PCB
-  tests/          143 tests — no network, no API keys, no KiCad
+  tests/          170 tests — no network, no API keys, no KiCad
     fixtures/     ref.kicad_pcb -- 11-footprint board fixture
 scripts/
   demo.py         end-to-end: read -> place -> write -> verify
@@ -370,10 +373,10 @@ On Windows, use `.venv\Scripts\python.exe` in place of `./.venv/bin/python`.
 
 ### Expected output
 
-**1. Test suite** — 143 tests, no skips, no warnings:
+**1. Test suite** — 170 tests, no skips, no warnings:
 
 ```
-143 passed in 114.36s
+170 passed in 123.92s
 ```
 
 The suite is dominated by the 20-second solver budget in a handful of placement

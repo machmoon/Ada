@@ -38,20 +38,24 @@ PATTERNS = (
 #: quoted precisely because it is out of date. Checked against the whole line.
 IGNORE = re.compile(r"\bwas\b|\bpreviously\b|->|\bdrift", re.IGNORECASE)
 
-#: A claim on a line naming one of these maps to that test file rather than to
+#: A claim on a line naming one of these maps to those test files rather than to
 #: the total. The README's status table quotes a per-module count per row, which
 #: is a different true number from the suite total; checking it against the
-#: total would be a false positive on every row.
-MODULES = {
-    "packing.py": "test_packing.py",
-    "netlist.py": "test_netlist.py",
-    "kicad.py": "test_kicad.py",
-    "board.py": "test_board.py",
-    "footprints.py": "test_footprints.py",
-    "retrieval.py": "test_retrieval.py",
-    "resilience.py": "test_resilience.py",
-    "agents/": "test_agents.py",
-    "mcp/": "test_mcp.py",
+#: total would be a false positive on every row. A module may map to several
+#: files -- service/ is covered by two -- in which case the counts are summed.
+#: Order matters: the first key found in the line wins, so a row naming two
+#: modules is attributed to the one whose tests actually cover it.
+MODULES: dict[str, tuple[str, ...]] = {
+    "packing.py": ("test_packing.py",),
+    "netlist.py": ("test_netlist.py",),
+    "kicad.py": ("test_kicad.py",),
+    "board.py": ("test_board.py",),
+    "footprints.py": ("test_footprints.py",),
+    "retrieval.py": ("test_retrieval.py",),
+    "resilience.py": ("test_resilience.py",),
+    "agents/": ("test_agents.py",),
+    "mcp/": ("test_mcp.py",),
+    "service/": ("test_app.py", "test_cache.py"),
 }
 
 
@@ -95,11 +99,12 @@ def expected_for(
     Reporting those as zero would be a false alarm, and a check that cries wolf
     is a check people learn to skip.
     """
-    for module, test_file in MODULES.items():
+    for module, test_files in MODULES.items():
         if module in line:
-            if test_file not in per_file:
+            known = [f for f in test_files if f in per_file]
+            if not known:
                 return None
-            return per_file[test_file], test_file
+            return sum(per_file[f] for f in known), " + ".join(known)
     return total, "the suite"
 
 

@@ -18,7 +18,16 @@ from .netlist import (
     ValidationError,
     parse_circuit_spec,
 )
-from .packing import Net, PackResult, PackStatus, Part, Placement, Wire, pack
+from .packing import (
+    Keepout,
+    Net,
+    PackResult,
+    PackStatus,
+    Part,
+    Placement,
+    Wire,
+    pack,
+)
 from .units import (
     DEFAULT_CLEARANCE_NM,
     DEFAULT_GRID_NM,
@@ -33,6 +42,7 @@ __all__ = [
     "Part",
     "Wire",
     "Net",
+    "Keepout",
     "Placement",
     "PackResult",
     "PackStatus",
