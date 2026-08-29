@@ -23,9 +23,9 @@ deterministic shelf fallback so the caller always gets a usable placement.
 from __future__ import annotations
 
 import math
+from collections.abc import Sequence
 from dataclasses import dataclass, field
-from enum import Enum
-from typing import Sequence
+from enum import StrEnum
 
 from ortools.sat.python import cp_model
 
@@ -47,7 +47,7 @@ __all__ = [
 ]
 
 
-class PackStatus(str, Enum):
+class PackStatus(StrEnum):
     """How the returned placement was obtained."""
 
     OPTIMAL = "optimal"
@@ -404,7 +404,8 @@ def pack(
 
         stride = y_max + 1
         for members in groups.values():
-            for a, b in zip(members, members[1:]):
+            # Consecutive pairs: members[1:] is deliberately one shorter.
+            for a, b in zip(members, members[1:], strict=False):
                 model.Add(x[a] * stride + y[a] <= x[b] * stride + y[b])
 
     # Board extent.
@@ -441,8 +442,9 @@ def pack(
         # Both branches are constants, so two implications express it exactly.
         h_cells = box_h[idx]
         w_cells = box_w[idx]
-        rx = model.NewIntVar(-max(w_cells, h_cells), max(w_cells, h_cells), f"rx[{idx}]")
-        ry = model.NewIntVar(-max(w_cells, h_cells), max(w_cells, h_cells), f"ry[{idx}]")
+        span = max(w_cells, h_cells)
+        rx = model.NewIntVar(-span, span, f"rx[{idx}]")
+        ry = model.NewIntVar(-span, span, f"ry[{idx}]")
         model.Add(rx == ox).OnlyEnforceIf(r.Not())
         model.Add(ry == oy).OnlyEnforceIf(r.Not())
         model.Add(rx == h_cells - oy).OnlyEnforceIf(r)

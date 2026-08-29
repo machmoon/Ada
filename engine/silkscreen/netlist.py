@@ -15,8 +15,7 @@ from __future__ import annotations
 import json
 import re
 from dataclasses import dataclass, field
-from enum import Enum
-from typing import Iterable
+from enum import StrEnum
 
 __all__ = [
     "PassiveType",
@@ -55,7 +54,7 @@ class ValidationError(ValueError):
         )
 
 
-class PassiveType(str, Enum):
+class PassiveType(StrEnum):
     RESISTOR = "resistor"
     CAPACITOR = "capacitor"
     INDUCTOR = "inductor"

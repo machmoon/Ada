@@ -58,17 +58,20 @@ Silkscreen takes a plain-language description of what you want to build and prod
 schematic, a placed board, and — the part we care about — **a review of its own work,
 with citations.**
 
-**1. Understand the parts. [TO BUILD]**
+Each stage below is tagged **[built]** or **[not yet built]** against the code in this
+repository today.
+
+**1. Understand the parts. [not yet built]**
 Point Silkscreen at a component and it reads the actual datasheet. Gemini's native PDF
 vision matters here in a way that text extraction does not: pinout tables, package
 drawings, and reference schematics are *pictures*, and the numbers we need live inside
 them. Every extracted fact carries the page it came from.
 
-**2. Propose a circuit. [TO BUILD]**
+**2. Propose a circuit. [not yet built]**
 The model emits a `CircuitSpec` — devices, passives, and nets — into a validated
 intermediate representation.
 
-**3. Refuse to build a broken circuit. [BUILT]**
+**3. Refuse to build a broken circuit. [built]**
 This is the load-bearing piece. Nothing reaches KiCad until it validates. The IR
 rejects a net referencing a pin the device doesn't have, a part that doesn't exist, a
 capacitor wired on only one leg, a bare part name where a specific terminal is required.
@@ -80,24 +83,27 @@ capacitor to a specific pin is the most common operation in this entire domain �
 IR that can only join whole parts to nets, as ours previously did, cannot express it at
 all. Making that unrepresentable-by-construction is most of the value.
 
-**4. Place the board. [BUILT]**
+**4. Place the board. [built]**
 A CP-SAT model places components to minimise board size and total wirelength, with real
 courtyard clearance, optional 90° rotation, edge constraints for connectors and
-antennas, and symmetry breaking over interchangeable passives. On an 11-footprint STM32
-board it returns a 14.2 × 20.25 mm placement with 107 mm of total wirelength.
+antennas, and symmetry breaking over interchangeable passives. On the 11-footprint STM32 +
+regulator + motor-driver board in `backend/ref.txt` it returns a 19.60 × 15.05 mm
+placement with 52.4 mm of total half-perimeter wirelength, reported as `FEASIBLE`
+rather than `OPTIMAL` because that is what the solver proved in 20 s. The run is
+reproducible at `workers=1`.
 
-**5. Write a real file. [BUILT]**
+**5. Write a real file. [built]**
 Silkscreen reads and writes `.kicad_pcb` directly. No KiCad installation, no `pcbnew`
 DLLs, no platform lock, and — emphatically — no controlling the user's mouse. It runs
 identically on macOS, Linux, and Windows, which is the difference between a demo and a
 tool.
 
-**6. Review it, and say why. [TO BUILD]**
+**6. Review it, and say why. [not yet built]**
 An adversarial reviewer re-reads the datasheets and argues against the design: this pin
 is an input, you drove it; this cap is on the wrong side of the regulator; this part is
 end-of-life. Findings cite the datasheet page. Nothing is applied without approval.
 
-**7. Show, don't tell. [TO BUILD]**
+**7. Show, don't tell. [not yet built]**
 Professional EDA tools are dense — KiCad has dozens of panels, and knowing *where to
 click* is a real barrier that no chatbot removes. Silkscreen drives an animated cursor
 across the interface to the exact control it means, so "add a net class" becomes
@@ -108,7 +114,7 @@ the difference between automating a beginner out of the loop and bringing them i
 
 ## How we built it
 
-**[TO BUILD]** The agent layer is Google's Agent Development Kit. The topology is
+**[not yet built]** The agent layer is Google's Agent Development Kit. The topology is
 deliberate rather than a flat pile of prompts:
 
 - a **SequentialAgent** for the main pipeline — read → propose → validate → place → review
@@ -123,14 +129,14 @@ Model tiering by task: `gemini-3.7-flash` for datasheet vision and reasoning, dr
 step that writes a file. Deployment is Cloud Run; extracted datasheet facts persist to
 Firestore so the second run on a part is free.
 
-**[BUILT]** The engine underneath is deliberately boring and has no network in it at all:
+**[built]** The engine underneath is deliberately boring and has no network in it at all:
 
 - **OR-Tools CP-SAT** for placement
 - **kiutils** for `.kicad_pcb` I/O — pure Python, no KiCad install
 - Pure-integer nanometre arithmetic end to end, because unit confusion between
   millimetres, mils, and KiCad's internal nanometres is a silent, board-destroying class
   of bug
-- 40 tests that run with no network, no API key, and no KiCad installed
+- 54 tests that run with no network, no API key, and no KiCad installed
 
 Splitting it this way is the point. The parts that must be *correct* are testable
 offline. The parts that must be *smart* are the ones talking to a model.
@@ -188,7 +194,7 @@ valuable engineering artifact we produced was an honest list of what was actuall
 What we're proud of in the new one:
 
 - **The engine has no network calls.** Every correctness-critical path is tested offline.
-- **40 tests, and the interesting ones are regressions** — each pins down a specific bug
+- **54 tests, and the interesting ones are regressions** — each pins down a specific bug
   that shipped in the previous version and can never ship again.
 - **A validation layer whose job is to say no.** The IR makes a floating capacitor and a
   hallucinated pin unrepresentable rather than merely unlikely.

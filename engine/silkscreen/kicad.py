@@ -450,8 +450,8 @@ def set_board_outline(
         replace: Remove any existing ``Edge.Cuts`` graphics first. Leaving a
             stale outline behind is worse than having none.
     """
-    from kiutils.items.gritems import GrLine
     from kiutils.items.common import Position
+    from kiutils.items.gritems import GrLine
 
     if replace:
         board.graphicItems = [

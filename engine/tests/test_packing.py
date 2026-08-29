@@ -9,11 +9,9 @@ from __future__ import annotations
 import itertools
 
 import pytest
-
 from silkscreen import Part, Wire, pack
 from silkscreen.packing import PackStatus
 from silkscreen.units import mm
-
 
 # ---------------------------------------------------------------- helpers
 
@@ -21,7 +19,7 @@ from silkscreen.units import mm
 def _boxes(parts, result):
     """(x0, y0, x1, y1) of each placed part in nanometres."""
     out = []
-    for part, placed in zip(parts, result.placements):
+    for part, placed in zip(parts, result.placements, strict=True):
         w, h = part.width_nm, part.height_nm
         if placed.rotated:
             w, h = h, w
@@ -369,7 +367,9 @@ def test_max_board_is_a_ceiling_not_a_suggestion():
     """Regression: cells_ceil overshot a hard cap by up to one grid cell."""
     parts = [Part(*R0603, ref=f"R{i}") for i in range(3)]
     cap = (mm(9.0), mm(9.0))
-    r = pack(parts, max_board_nm=cap, grid_nm=700_000, clearance_nm=0, time_limit_s=10.0)
+    r = pack(
+        parts, max_board_nm=cap, grid_nm=700_000, clearance_nm=0, time_limit_s=10.0
+    )
     assert r.board_width_nm <= cap[0]
     assert r.board_height_nm <= cap[1]
 

@@ -10,7 +10,6 @@ from __future__ import annotations
 import json
 
 import pytest
-
 from silkscreen import (
     CircuitSpec,
     Connection,

@@ -12,12 +12,11 @@ import itertools
 from pathlib import Path
 
 import pytest
-
 from silkscreen import pack
 from silkscreen.kicad import (
     apply_placements,
-    extract_parts,
     extract_nets,
+    extract_parts,
     extract_wires,
     is_power_net,
     load_board,
@@ -122,13 +121,15 @@ def test_end_to_end_replace_produces_a_valid_board(board, infos, tmp_path):
     # self-consistently wrong: it passes while the written board overlaps.
     new_infos = extract_parts(reloaded)
     boxes = []
-    for info, fp in zip(new_infos, reloaded.footprints):
+    for info, fp in zip(new_infos, reloaded.footprints, strict=True):
         x0 = fp.position.X + info.min_x_nm / 1e6
         y0 = fp.position.Y + info.min_y_nm / 1e6
         x1 = fp.position.X + info.max_x_nm / 1e6
         y1 = fp.position.Y + info.max_y_nm / 1e6
         boxes.append((info.ref, x0, y0, x1, y1))
-    for (ra, ax0, ay0, ax1, ay1), (rb, bx0, by0, bx1, by1) in itertools.combinations(boxes, 2):
+    for (ra, ax0, ay0, ax1, ay1), (rb, bx0, by0, bx1, by1) in itertools.combinations(
+        boxes, 2
+    ):
         dx = min(ax1, bx1) - max(ax0, bx0)
         dy = min(ay1, by1) - max(ay0, by0)
         assert not (dx > 0.01 and dy > 0.01), (
@@ -169,7 +170,7 @@ def test_mixed_valid_and_missing_refs_land_correctly(board, infos):
     from silkscreen.kicad import footprint_ref
     fp = next(f for f in board.footprints if footprint_ref(f) == target.ref)
     expected_x = (5_000_000 - target.min_x_nm) / 1e6
-    assert fp.position.X == pytest.approx(expected_x, abs=1e-6)
+    assert pytest.approx(expected_x, abs=1e-6) == fp.position.X
 
 
 def test_missing_ref_is_skipped_not_misaligned(board, infos):
@@ -210,7 +211,7 @@ def test_board_outline_is_written_and_encloses_every_part(board, infos, tmp_path
 
     # Every courtyard must sit inside the outline we drew.
     new_infos = extract_parts(reloaded)
-    for info, fp in zip(new_infos, reloaded.footprints):
+    for info, fp in zip(new_infos, reloaded.footprints, strict=True):
         assert fp.position.X + info.min_x_nm / 1e6 >= ex0 - 0.01, info.ref
         assert fp.position.X + info.max_x_nm / 1e6 <= ex1 + 0.01, info.ref
         assert fp.position.Y + info.min_y_nm / 1e6 >= ey0 - 0.01, info.ref

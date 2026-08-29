@@ -1,55 +1,67 @@
 # Silkscreen
 
-**Agentic PCB design that shows its work.**
+**Reads and writes KiCad boards directly. No KiCad install, no plugin, no mouse automation.**
 
-Silkscreen is the layer of a circuit board that carries the human-readable marks —
-reference designators, polarity dots, the annotations that tell a person what the
-board is doing. That is what this project is for. Not "AI designs your board while
-you watch," but "AI designs your board and *explains every decision*, on the board
-itself and on your screen."
+Silkscreen places components on a PCB with a CP-SAT solver and writes the result
+straight into a `.kicad_pcb` file. The board file *is* the API — Silkscreen parses the
+same S-expression format KiCad does, so it runs headless on any OS, in CI, with no
+KiCad process alive anywhere.
+
+```
+54 passed — no network, no API key, no KiCad install
+```
 
 ---
 
 ## Status
 
-Early. The layout engine is real, tested, and runs. The agent layer and the UI are
-being built. This README distinguishes the two throughout — nothing here claims a
-capability that isn't in the repo.
-
 | Component | State |
 |---|---|
-| `engine/silkscreen/packing.py` — CP-SAT placer | **Working**, 26 tests |
-| `engine/silkscreen/netlist.py` — validated circuit IR | **Working**, 15 tests |
-| `engine/silkscreen/kicad.py` — `.kicad_pcb` read/write | **Working**, 13 tests |
-| Datasheet understanding agents | Not built |
-| Overlay assistant | Not built |
-| Guided cursor ("show me where") | Not built |
-| Web UI | Not built |
-
-```
-54 passed
-```
+| `kicad.py` — `.kicad_pcb` read/write | **Working** · 13 tests |
+| `packing.py` — CP-SAT placer | **Working** · 26 tests |
+| `netlist.py` — validated circuit IR | **Working** · 15 tests |
+| Datasheet agents, overlay UI, guided cursor | Not built |
 
 ---
 
-## What works today
+## Install
 
-Give it a KiCad board with footprints and nets, and it will place the components:
+The engine needs **no KiCad**:
+
+```bash
+python3 -m venv .venv && ./.venv/bin/pip install -e ".[dev]"
+```
+
+Install KiCad only if you want to *look* at the boards Silkscreen writes:
+
+| Platform | Command |
+|---|---|
+| macOS | `brew install --cask kicad` |
+| Windows | `winget install KiCad.KiCad` |
+| Debian/Ubuntu | `sudo add-apt-repository ppa:kicad/kicad-8.0-releases && sudo apt install kicad` |
+| Fedora / any Linux | `flatpak install flathub org.kicad.KiCad` |
+
+Or download from [kicad.org/download](https://www.kicad.org/download/). Then open the
+output with **File → Open** in the PCB Editor, or `pcbnew placed.kicad_pcb`.
+
+---
+
+## Quickstart
 
 ```python
-from silkscreen import pack
 from silkscreen.kicad import (
     load_board, extract_parts, extract_nets, to_parts,
     apply_placements, set_board_outline, save_board,
 )
+from silkscreen.packing import pack
 
-board = load_board("my_board.kicad_pcb")
-infos = extract_parts(board)
+board  = load_board("my_board.kicad_pcb")
+infos  = extract_parts(board)              # courtyard extents + pad offsets, in nm
 
 result = pack(
-    to_parts(infos, edge_refs={"J1"}),   # connector pinned to a board edge
-    nets=extract_nets(infos),            # power rails down-weighted, not dropped
-    clearance_nm=250_000,                # 0.25 mm between courtyards
+    to_parts(infos, edge_refs={"J1"}),     # connector pinned to a board edge
+    nets=extract_nets(infos),              # power rails down-weighted, not dropped
+    clearance_nm=250_000,                  # 0.25 mm between courtyards
     time_limit_s=20.0,
 )
 
@@ -58,117 +70,131 @@ set_board_outline(board, result.board_width_nm, result.board_height_nm)
 save_board(board, "placed.kicad_pcb")
 ```
 
-Measured on an 11-footprint STM32 + regulator + motor-driver board:
+Reproduce it with `python scripts/demo.py`, on the 11-footprint STM32 + regulator +
+motor-driver fixture in `backend/ref.txt`:
 
 ```
 11 footprints, 6 nets
 status     : feasible
 board size : 19.60 x 15.05 mm  (295.0 mm²)
 HPWL       : 52.4 mm
-placed 11/11 -> placed.kicad_pcb  (43,925 bytes, reparses clean)
+placed 11/11 -> placed.kicad_pcb  (~43.9 kB, reparses clean)
 ```
 
-Identical across three consecutive runs. Reproducibility requires `workers=1`,
-which is the default — CP-SAT's multi-worker portfolio interleaves results
-non-deterministically regardless of the seed.
+Identical across consecutive runs. Reproducibility requires `workers=1` (the default) —
+CP-SAT's multi-worker portfolio interleaves results non-deterministically regardless of seed.
+(That run omits `edge_refs`: the fixture has no connector, and naming a ref that isn't on the
+board is an error, not a no-op.)
 
-One caveat about that number, since it is the only measured result here: the
-fixture's nets are named `0_device_pin_N` by the pipeline that generated it, so
-**none of them match the power-rail heuristic** and the power-net weighting
-described below does not fire on this particular board. It is exercised by unit
-tests, not by the figure above.
-
-**No KiCad installation is required.** Board files are parsed and written directly
-through `kiutils`, which is pure Python. It runs the same on macOS, Linux, and
-Windows.
+One caveat, since this is the only measured figure here: the fixture's nets are named
+`0_device_pin_N` by the pipeline that generated it, so none match the power-rail heuristic
+and the power-net weighting described below **does not fire on this board**. It is exercised
+by unit tests, not by the number above.
 
 ---
 
-## The layout engine
+## KiCad integration
 
-The placer is a CP-SAT model. Decision variables are the bottom-left corner of each
-part on an integer grid; `AddNoOverlap2D` enforces disjointness over fixed-size
-intervals; `AddMaxEquality` derives the board bounding box; `AddAbsEquality`
-linearises Manhattan wirelength. The objective minimises a weighted sum of board
-half-perimeter and total wirelength.
+Most AI-and-KiCad tools are plugins: they live inside KiCad's Python environment and
+drive the IPC API, so they need KiCad running, a supported KiCad version, and a
+platform KiCad's plugin loader is happy on. Silkscreen takes the other route — it
+treats the board file as the interface.
 
-What it does that a naive version of this doesn't:
+| | Plugin / IPC approach | Silkscreen |
+|---|---|---|
+| Requires KiCad installed | Yes | **No** |
+| Requires KiCad running | Yes | **No** |
+| Headless / CI | Hard | **Native** |
+| Platform lock | KiCad's plugin loader | **None — pure Python** |
+| Testable without KiCad | No | **Yes, all 54 tests** |
 
-- **Real clearance.** Every part is inflated by `clearance_nm / 2` on each side before
-  the no-overlap constraint, so neighbouring courtyards end up a specified distance
-  apart. Packing parts flush at 0 mm produces boards nobody can assemble.
-- **Correct units.** Everything is nanometres — KiCad's internal unit — as integers,
-  end to end. `pcbnew`'s `GetBoundingBox()` values go in without conversion. The solver
-  quantises to a configurable grid (default 0.05 mm) rather than solving at 1 nm.
-- **Optional 90° rotation.** Modelled exactly: a boolean per part switches the interval
-  sizes, and pin offsets are rotated with two implications rather than approximated by
-  the part centre.
-- **Edge constraints.** USB connectors, antennas, and mounting holes can be pinned to a
-  board edge via a disjunction over four half-reified literals.
-- **Symmetry breaking.** A board with 24 identical capacitors admits 24! relabelings of
-  the same physical layout. Interchangeable, unwired parts are forced into a fixed
-  lexicographic order, which collapses each orbit to one representative. On a
-  27-part board this proved optimality in 0.1 s instead of 0.3 s.
-- **Half-perimeter wirelength, one bounding box per net.** HPWL is the standard
-  placement proxy, and it replaces two worse models. A *clique* of pairwise
-  distances makes a 50-pad ground net contribute 1,225 terms that swamp every
-  signal net. A *star* to one arbitrary terminal overestimates length, turns the
-  hub into a gravity well carrying n−1 terms against each spoke's one, and — since
-  the hub is whichever pad was read first — makes the layout depend on footprint
-  ordering inside the `.kicad_pcb` text.
-- **Power rails are down-weighted, not dropped.** Because HPWL costs one box per
-  net regardless of pad count, rails can stay in the objective at reduced weight.
-  This matters more than it sounds: a decoupling capacitor's *only* connections to
-  the IC it bypasses are VCC and GND, so excluding power nets leaves it with no
-  objective term at all and it drifts wherever the packer finds room. Measured on
-  a decap test board, excluding power put the cap 9.65 mm from its IC pin;
-  weighting it at 0.25 brings it to 5.15 mm — sitting against the IC edge.
-- **It degrades instead of failing.** If CP-SAT finds nothing inside the time limit,
-  a deterministic shelf packer returns a valid — if unlovely — layout, flagged as
-  `PackStatus.FALLBACK`. Raising an exception and losing the work is not an option a
-  layout tool gets to take. The fallback packs by size alone, so it also warns
-  explicitly about every hard constraint it could not honour rather than returning a
-  quietly invalid board.
-- **It writes a board outline.** `set_board_outline` emits `Edge.Cuts`. Without it the
-  file has no boundary at all — and `Edge.Cuts` is both what KiCad measures edge
-  clearance against and the only representation of the edge that `must_be_on_edge`
-  was solved against.
+### What it reads
 
-### What it does not do
+`load_board()` → `extract_parts()` returns a `FootprintInfo` per footprint:
 
-2D packing with a wirelength objective is NP-hard, and on real boards the solver
-returns `FEASIBLE`, not `OPTIMAL`, inside a 20 s budget. Coarsening the grid from
-0.025 mm to 0.5 mm barely changes the result, so the bottleneck is combinatorial,
-not resolution. Treat the output as a strong starting placement, not a proof.
+| Field | Source |
+|---|---|
+| `width_nm` / `height_nm` | `F.CrtYd` courtyard, falling back to the pad bounding box |
+| `pad_offsets` | Per-pad offsets from the part's bottom-left, **flipped into a Y-up frame** |
+| `pad_nets` | Net name per pad, used to build the wirelength objective |
+| `library_id` | Footprint library nickname |
 
-Beyond that, the placer has no concept of: **two-sided placement** (everything is
-treated as one layer), **locked or pre-placed parts** (you cannot fix a connector at
-a known coordinate and re-solve the rest), **keepouts and mounting holes**,
-**connector orientation** (`must_be_on_edge` puts a part on an edge but says nothing
-about which way it faces), **thermal relief**, or **differential pairs**. Of these,
-the first two are what stop it being usable iteratively on a real design.
+`extract_nets()` turns shared nets into HPWL nets; `extract_wires()` emits pad-pairs.
+
+### What it writes
+
+- **Footprint positions** — `apply_placements()` moves every footprint, converting the
+  solver's Y-up frame back to KiCad's Y-down, anchoring on the courtyard, not the origin.
+- **`Edge.Cuts` outline** — `set_board_outline()` draws the board rectangle. Without it
+  the file has no boundary at all, and `Edge.Cuts` is both what KiCad measures edge
+  clearance against and the only representation of the edge that `must_be_on_edge` was
+  solved against.
+- Pads, silkscreen, `F.Fab`, courtyards, nets, and zones pass through untouched.
+
+### Units and compatibility
+
+Everything is **integer nanometres**, KiCad's own internal unit, end to end. Unit
+confusion between mm, mils, and nm is a silent, board-destroying class of bug, so there
+are no floats in the pipeline; the solver quantises to a configurable grid (default
+0.05 mm) rather than solving at 1 nm.
+
+| | |
+|---|---|
+| Board format | `kicad_pcb` version `20240108` (KiCad 7–8) |
+| Parser | `kiutils` 1.4.8 — pure Python |
+| Solver | OR-Tools CP-SAT 9.15 |
+| Python | 3.11+ |
+| OS | macOS, Linux, Windows — identical behaviour |
+
+Round-trip is verified by test: a written board reparses, preserves every footprint,
+and has no two overlapping courtyards.
+
+---
+
+## The placer
+
+CP-SAT. Variables are each part's bottom-left corner on an integer grid;
+`AddNoOverlap2D` enforces disjointness, `AddMaxEquality` derives the bounding box,
+`AddAbsEquality` linearises wirelength. The objective minimises board half-perimeter
+plus total HPWL.
+
+| Feature | Why it's there |
+|---|---|
+| **Real clearance** | Parts inflate by `clearance_nm/2` per side before no-overlap. Flush-packed boards can't be assembled. |
+| **90° rotation** | A boolean per part swaps interval sizes; pin offsets rotate with two implications, not a centre approximation. |
+| **Edge constraints** | Connectors and antennas pin to an edge via a disjunction over four half-reified literals. |
+| **Symmetry breaking** | 24 identical caps admit 24! relabelings. Forcing a lexicographic order collapses each orbit to one representative — on a 27-part board, optimality in 0.1 s instead of 0.3 s. |
+| **HPWL, one box per net** | A pairwise clique makes a 50-pad ground net contribute 1,225 terms that swamp every signal. A star overestimates length and makes layout depend on footprint order in the file. |
+| **Power rails down-weighted, not dropped** | A decap's only connections are VCC and GND — drop power nets and it has no objective term and drifts. Measured: excluding power put a cap 9.65 mm from its IC pin; weighting at 0.25 brings it to 5.15 mm. |
+| **Degrades, doesn't fail** | If CP-SAT finds nothing in budget, a deterministic shelf packer returns a valid layout flagged `FALLBACK`, warning about every constraint it couldn't honour. |
+
+### Limits
+
+2D packing with a wirelength objective is NP-hard. On real boards the solver returns
+`FEASIBLE`, not `OPTIMAL`, inside 20 s — and Silkscreen reports it as `FEASIBLE`.
+Coarsening the grid from 0.025 mm to 0.5 mm barely moves the result, so the bottleneck
+is combinatorial, not resolution. **Treat the output as a strong starting placement,
+not a proof.**
+
+No support for: two-sided placement, locked/pre-placed parts, keepouts, connector
+orientation, thermal relief, or differential pairs. The first two are what stop it
+being usable iteratively on a real design.
 
 ---
 
 ## The circuit IR
 
-`silkscreen.netlist` is the contract between a language model and anything that
-touches KiCad. A model proposes a `CircuitSpec`; nothing is instantiated until it
-validates. Failures are collected — all of them, not the first — so the whole batch
-can go back to the model as a single repair prompt.
+`silkscreen.netlist` is the contract between a model and anything that touches KiCad.
+A model proposes a `CircuitSpec`; nothing is instantiated until it validates, and *all*
+failures are collected so the batch goes back as one repair prompt.
 
-It rejects, among other things:
+Rejects: a pin the device doesn't have · a part that doesn't exist · a bare part name
+where a terminal is required (`C1` not `C1.1`) · a passive wired on one leg · a net with
+fewer than two endpoints · unsupported passive types.
 
-- endpoints naming a pin the device doesn't have
-- endpoints naming a part that doesn't exist
-- a bare part name where a terminal is required (`C1` instead of `C1.1`)
-- a passive wired on only one leg, which would sit floating on the board
-- a net with fewer than two endpoints
-- passive types outside the supported set
-
-That fifth check matters more than it looks. Connecting *a specific leg* of a
-decoupling capacitor to a specific pin is the single most common operation in this
-entire domain, and an IR that can only join whole parts to nets cannot express it.
+That fourth check matters most. Connecting *one specific leg* of a decoupling capacitor
+to a specific pin is the most common operation in this domain, and an IR that can only
+join whole parts to nets cannot express it at all.
 
 ---
 
@@ -181,22 +207,37 @@ engine/
     packing.py    CP-SAT placer
     netlist.py    validated circuit IR
     kicad.py      .kicad_pcb read/write via kiutils
-  tests/          40 tests, no network, no API keys, no KiCad install
+  tests/          54 tests — no network, no API keys, no KiCad
+scripts/
+  demo.py         end-to-end: read -> place -> write -> verify
+backend/
+  ref.txt         11-footprint board fixture
 ```
 
-The engine has no network calls and no model calls by design, so the parts that need
-to be correct can be tested without either.
+---
+
+## Troubleshooting
+
+| Symptom | Cause |
+|---|---|
+| `edge_refs names refs not on this board` | A ref in `edge_refs`/`rotatable_refs` matches no footprint. The error lists valid refs — a typo would otherwise become a silently missing constraint. |
+| `status` is `FALLBACK` | CP-SAT found nothing in budget. Raise `time_limit_s`, coarsen `grid_nm`, or relax `max_board_nm`. Check `result.warnings`. |
+| `status` is `FEASIBLE`, not `OPTIMAL` | Expected on real boards. The solution is valid but unproven. |
+| Results differ between runs | You set `workers > 1`. Use `workers=1` for determinism. |
+| KiCad won't open the output | Confirm the board is format `20240108` (KiCad 7–8). Older KiCad won't read it. |
+| Parts overlap in KiCad's DRC | DRC measures pad/copper clearance; `clearance_nm` is *courtyard* clearance. Raise it. |
 
 ---
 
 ## Development
 
 ```bash
-python3 -m venv .venv && ./.venv/bin/pip install -e ".[dev]"
-./.venv/bin/python -m pytest -q
+./.venv/bin/python -m pytest -q          # 54 tests
+./.venv/bin/python -m ruff check engine  # lint
+./.venv/bin/python scripts/demo.py       # end-to-end run
 ```
 
----
+CI runs all three on Linux, macOS, and Windows.
 
 ## License
 
