@@ -9,7 +9,7 @@ NEEDED FEATURES
 5. Model tiering by task
 6. Tool confirmation gates on file-writing steps
 7. Cloud Run deployment (partially done)
-8. Firestore persistence of datasheet facts (partially done)
+8. Firestore persistence of datasheet facts (done, commit 4249c5b)
 
 DETAILS
 -------
@@ -37,6 +37,6 @@ DETAILS
    a Dockerfile exist (commit a5e781b), so the HTTP surface is in place.
 
 8. Firestore: persist extracted datasheet facts so the second run on a part
-   is free. Status: service/cache.py exists, but generate() currently writes
-   only a {"part_number": part} placeholder and cached facts are never fed
-   back into the pipeline, so the cache is not yet functional.
+   is free. Status: done in commit 4249c5b — generate() now writes the real
+   extracted facts and cache hits are fed back into the pipeline as
+   preloaded_facts, covered by service tests.

@@ -43,6 +43,10 @@ Tests live in `engine/tests/` and `service/tests/`; the shared fixture is `engin
 
 Top-level `mcp/`, `pcb/`, `packing/`, `footprint/`, `frontend/`, `lcsc.py`, and `test_skidl.py` are hackathon-era code from before the engine rewrite (a FastAPI datasheet-to-SKiDL server, KiCad-9-DLL scripts, a Next.js frontend). Nothing in `engine/`, `service/`, `scripts/`, or the tests imports them; they are not linted, not packaged, and not part of the documented layout. Name collisions are a real trap: top-level `mcp/` is not `engine/silkscreen/mcp/`, top-level `packing/` is not `engine/silkscreen/packing.py`, and top-level `footprint/` is not `engine/silkscreen/footprints.py`. Do not add new code to the retired directories.
 
+## Vendored reference code
+
+`vendor/mudriknow/` is MudrikNow (MIT, copied unmodified at upstream `ad58192`), vendored as a read-only reference for the unbuilt guided-cursor feature — its auto-guide mode is the on-screen pointer DEVPOST describes. Nothing in `engine/`, `service/`, or `scripts/` imports it, and ruff and pytest are configured to skip it. It is disclosed in DEVPOST under "Third-party code". Read it for reference; do not modify it, import from it, or count it in any project metrics.
+
 ## Hackathon requirements
 
 The submission must satisfy three Google-stack constraints; design any new AI or agent work against them:
@@ -58,7 +62,7 @@ All three are currently met — Gemini 3.7/3.5 models via the Gemini Developer A
 Found in a verification pass over the docs and recent commits; left open on purpose. Do not fix these as drive-bys — when one is addressed, do it deliberately, with tests, and remove it from this list.
 
 1. `engine/silkscreen/agents/model.py:111` passes `media_resolution="high"`, which matches no member of the SDK's `MediaResolution` enum (values are `MEDIA_RESOLUTION_HIGH` etc.), so high-resolution datasheet reading is likely silently not applied.
-2. The Firestore fact cache is a placeholder: `service/app.py` writes only `{"part_number": part}` and a cache hit drops that part's datasheet without feeding cached facts back into `generate_pcb` (TODO.txt item 8).
+2. ~~The Firestore fact cache is a placeholder~~ — resolved in `4249c5b`: the write-back stores real facts and cache hits feed `preloaded_facts` into the pipeline, with service tests.
 3. `.env.example` documents `GOOGLE_CLOUD_LOCATION`, which nothing reads (no Vertex AI path exists); `USE_FIRESTORE` is read by `service/app.py` but documented nowhere.
 4. No test, even a key-gated one, exercises the live `GeminiModel`.
 5. `build_store()` constructs a fresh Firestore client per request in production.
