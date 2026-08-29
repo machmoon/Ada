@@ -15,6 +15,7 @@ python scripts/check_docs.py                         # fails if README/DEVPOST q
 PORT=8081 python -m service.app                      # serve API + built web UI (8080 is taken by another app on James's machine)
 cd web && npm install && npm run dev                 # frontend dev server on :5173, proxies /generate to 127.0.0.1:8081
 cd web && npm run build                              # build web/dist, which service/app.py serves at /
+cd web && npm test                                   # Vitest over web/src/lib (CI runs it before the build)
 ```
 
 Only the CLI reads `.env` (`cli.py:_load_dotenv`); `service/app.py` does not — export `GOOGLE_API_KEY` into the environment when launching the service (e.g. `set -a && . ./.env && set +a` in Git Bash).
