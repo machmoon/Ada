@@ -1,0 +1,99 @@
+<script>
+  import Icon from './Icon.svelte'
+  import { countOf, joinDot } from '../lib/format.js'
+
+  let { result = null, reviewed = true } = $props()
+
+  // Every count is read off the response. The mockup's numbers were invented
+  // for the artboard and must never appear here.
+  const rows = $derived(
+    result
+      ? [
+          { label: 'Parts placed', value: result.parts.length },
+          {
+            label: reviewed ? 'Nets checked' : 'Nets in the board',
+            value: result.nets.length,
+          },
+          {
+            label: 'Datasheet pins read',
+            value: result.datasheets.reduce((n, d) => n + countOf(d.pins), 0),
+          },
+          {
+            label: 'Requirements extracted',
+            value: result.datasheets.reduce((n, d) => n + countOf(d.requirements), 0),
+          },
+        ]
+      : [],
+  )
+
+  const sheets = $derived(
+    (result ? result.datasheets : []).map((d) =>
+      joinDot([d.part, d.package, countOf(d.pins) ? `${countOf(d.pins)} pins` : '']),
+    ),
+  )
+</script>
+
+<aside class="rail">
+  <!-- A skipped review checked nothing, so the heading and the net row have to
+       say what actually ran instead. -->
+  <div class="lbl heading">{reviewed ? 'What was checked' : 'What ran'}</div>
+
+  {#if rows.length}
+    <div class="rows">
+      {#each rows as row (row.label)}
+        <div class="row">
+          <Icon name="check" size={13} />
+          <span class="row-label">{row.label}</span>
+          <span class="mono row-value">{row.value}</span>
+        </div>
+      {/each}
+    </div>
+  {:else}
+    <p class="empty">Nothing yet. Describe a board and run a review.</p>
+  {/if}
+
+  <div class="lbl heading ruled">Not checked</div>
+  <p class="prose">
+    Signal integrity, EMC, thermal margins, and manufacturability at your fab. A clean review
+    here is not a substitute for a human sign-off before you order boards.
+  </p>
+
+  {#if sheets.length}
+    <div class="section">
+      <div class="lbl heading tight">Datasheets read</div>
+      <div class="sheets">
+        {#each sheets as sheet, i (i)}
+          <div class="mono sheet">{sheet}</div>
+        {/each}
+      </div>
+    </div>
+  {/if}
+</aside>
+
+<style>
+  .rail {
+    width: var(--rail-w);
+    border-left: 1px solid var(--rule-soft);
+    background: var(--rail);
+    flex-shrink: 0;
+    padding: 26px 20px;
+    overflow-y: auto;
+  }
+
+  .heading { margin-bottom: 14px; }
+  .heading.ruled { margin-bottom: 12px; padding-top: 18px; border-top: 1px solid var(--rule-soft); }
+  .heading.tight { margin-bottom: 9px; }
+
+  .rows { display: flex; flex-direction: column; gap: 11px; margin-bottom: 26px; }
+  .row { display: flex; align-items: center; gap: 9px; }
+  .row-label { font-size: var(--fs-ui); flex-grow: 1; }
+  .row-value { font-size: var(--fs-mono-sm); color: var(--ink-soft); }
+
+  .empty { font-size: var(--fs-ui); color: var(--ink-faint); margin-bottom: 26px; line-height: 1.65; }
+
+  .prose { font-size: var(--fs-ui); color: var(--ink-soft); line-height: 1.65; }
+
+  .section { margin-top: 26px; padding-top: 18px; border-top: 1px solid var(--rule-soft); }
+  .sheets { display: flex; flex-direction: column; gap: 7px; }
+  .sheet { font-size: 11px; color: var(--ink-mid); }
+</style>

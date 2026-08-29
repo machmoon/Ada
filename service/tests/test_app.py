@@ -1,5 +1,6 @@
 """The Cloud Run surface, driven over a real socket with a scripted model."""
 
+import http.client
 import json
 import threading
 import urllib.error
@@ -23,7 +24,40 @@ CIRCUIT = {
         "VOUT": ["U1.2", "C2.1"],
     },
 }
-REVIEW = {"findings": []}
+#: One finding of each severity. Every ref named here exists in CIRCUIT --
+#: review_circuit drops part references the spec does not contain, so a made-up
+#: ref would arrive as a silently empty parts list.
+REVIEW = {
+    "findings": [
+        {
+            "severity": "blocker",
+            "title": "VOUT has no bulk capacitor",
+            "detail": "The regulator needs bulk capacitance on its output to stay "
+            "stable. Without it the loop oscillates.",
+            "parts": ["U1", "C2"],
+            "citation": "AMS1117-3.3 datasheet p.9",
+            "suggested_fix": "Add a 22uF tantalum from VOUT to GND.",
+        },
+        {
+            "severity": "marginal",
+            "title": "Input capacitor is smaller than recommended",
+            "detail": "10uF works, but the datasheet recommends more where the "
+            "supply leads are long.",
+            "parts": ["C1"],
+            "citation": "",
+            "suggested_fix": "Raise C1 to 22uF.",
+        },
+        {
+            "severity": "note",
+            "title": "No thermal relief on the tab",
+            "detail": "The package dissipates through its tab; copper area sets "
+            "the usable current.",
+            "parts": ["U1"],
+            "citation": "",
+            "suggested_fix": "",
+        },
+    ]
+}
 
 #: What the model returns when it is asked to read a datasheet. Without this
 #: the scripted model has no answer for a read, so any test that actually
@@ -68,8 +102,61 @@ def server():
     Handler.store = None
 
 
+@pytest.fixture
+def web_dist(tmp_path):
+    """A minimal built bundle, installed on the handler for one test.
+
+    The two sentinels outside the bundle are what makes the traversal cases
+    mean anything: with nothing above the root to reach, every one of them
+    would 404 on a missing file and pass whether the resolver defends the
+    root or not.
+    """
+    (tmp_path / "OUTSIDE.txt").write_bytes(b"LEAKED")
+    (tmp_path.parent / "OUTSIDE2.txt").write_bytes(b"LEAKED")
+    dist = tmp_path / "dist"
+    (dist / "assets").mkdir(parents=True)
+    (dist / "index.html").write_text(
+        "<!doctype html><title>silkscreen</title>", encoding="utf-8"
+    )
+    (dist / "assets" / "app-abc123.js").write_text(
+        "export const ok = true;\n", encoding="utf-8"
+    )
+    (dist / "assets" / "app-abc123.css").write_text(
+        ":root{--paper:#F5F4EF}\n", encoding="utf-8"
+    )
+    # A build output whose name collides with the health probe.
+    (dist / "healthz").write_text("not the health check", encoding="utf-8")
+    previous = Handler.web_root
+    Handler.web_root = dist
+    yield dist
+    Handler.web_root = previous
+
+
 def url(srv, path):
     return f"http://127.0.0.1:{srv.server_port}{path}"
+
+
+def get(srv, path):
+    try:
+        with urllib.request.urlopen(url(srv, path)) as resp:
+            return resp.status, resp.headers, resp.read()
+    except urllib.error.HTTPError as exc:
+        return exc.code, exc.headers, exc.read()
+
+
+def raw_get(srv, target):
+    """GET with the request-target sent exactly as written.
+
+    urllib collapses ".." in the client, so a traversal test written with it
+    never reaches the server and would pass vacuously.
+    """
+    conn = http.client.HTTPConnection("127.0.0.1", srv.server_port)
+    try:
+        conn.request("GET", target)
+        resp = conn.getresponse()
+        return resp.status, resp.read()
+    finally:
+        conn.close()
 
 
 def post(srv, payload, path="/generate"):
@@ -237,6 +324,179 @@ def test_upstream_failure_is_502_not_500(server):
         assert "503" in body["error"]
     finally:
         Handler.model_factory = staticmethod(scripted)
+
+
+def test_findings_are_returned_in_full(server):
+    status, body = post(server, {"intent": "a 3.3V regulator", "time_limit_s": 5})
+    assert status == 200
+    assert [f["severity"] for f in body["findings"]] == [
+        "blocker",
+        "marginal",
+        "note",
+    ], "severities serialize as the enum value, not its repr"
+    first = body["findings"][0]
+    assert set(first) == {
+        "severity",
+        "title",
+        "detail",
+        "parts",
+        "citation",
+        "suggested_fix",
+    }
+    assert first["parts"] == ["U1", "C2"]
+    assert first["citation"] == "AMS1117-3.3 datasheet p.9"
+    assert first["suggested_fix"].startswith("Add a 22uF")
+
+
+def test_blockers_stay_flattened_strings(server):
+    """The old field keeps its old shape: it has readers."""
+    status, body = post(server, {"intent": "a 3.3V regulator", "time_limit_s": 5})
+    assert status == 200
+    assert all(isinstance(b, str) for b in body["blockers"])
+    assert len(body["blockers"]) == sum(
+        1 for f in body["findings"] if f["severity"] == "blocker"
+    )
+
+
+def test_duration_is_reported(server):
+    status, body = post(server, {"intent": "a 3.3V regulator", "time_limit_s": 5})
+    assert status == 200
+    assert isinstance(body["duration_s"], (int, float))
+    assert body["duration_s"] >= 0
+
+
+def test_warnings_and_nets_are_reported(server):
+    status, body = post(server, {"intent": "a 3.3V regulator", "time_limit_s": 5})
+    assert status == 200
+    assert isinstance(body["warnings"], list)
+    assert set(body["nets"]) == {"VIN", "GND", "VOUT"}
+
+
+def test_datasheets_read_are_reported(server):
+    status, body = post(
+        server,
+        {
+            "intent": "a regulator",
+            "datasheets": {"AMS1117-3.3": "https://x/a.pdf"},
+            "time_limit_s": 5,
+        },
+    )
+    assert status == 200
+    assert body["datasheets"] == [
+        {
+            "part": "AMS1117-3.3",
+            "package": "SOT-223-3",
+            "pins": 3,
+            "requirements": 1,
+            "url": "https://x/a.pdf",
+        }
+    ]
+
+
+def test_datasheets_are_reported_on_a_cache_hit(server):
+    """A hit skips the read; the facts still have to be reported."""
+    server.store.put("AMS1117-3.3", _cached_facts())
+    status, body = post(
+        server,
+        {
+            "intent": "a regulator",
+            "datasheets": {"AMS1117-3.3": "https://x/a.pdf"},
+            "time_limit_s": 5,
+        },
+    )
+    assert status == 200
+    assert body["cache"]["hit"] == ["AMS1117-3.3"]
+    assert [d["part"] for d in body["datasheets"]] == ["AMS1117-3.3"]
+    assert body["datasheets"][0]["pins"] == 3
+
+
+def test_review_can_be_skipped(server):
+    status, body = post(
+        server, {"intent": "a regulator", "time_limit_s": 5, "review": False}
+    )
+    assert status == 200
+    assert body["findings"] == []
+    assert body["blockers"] == []
+
+
+def test_index_is_served_at_the_root(server, web_dist):
+    status, headers, body = get(server, "/")
+    assert status == 200
+    assert headers["Content-Type"] == "text/html; charset=utf-8"
+    assert b"silkscreen" in body
+
+
+def test_assets_get_real_content_types(server, web_dist):
+    """Windows mimetypes maps .js to text/plain; browsers then refuse it."""
+    status, headers, _ = get(server, "/assets/app-abc123.js")
+    assert status == 200
+    assert headers["Content-Type"] == "text/javascript; charset=utf-8"
+
+    status, headers, _ = get(server, "/assets/app-abc123.css")
+    assert status == 200
+    assert headers["Content-Type"] == "text/css; charset=utf-8"
+
+
+def test_healthz_beats_a_bundle_file_of_the_same_name(server, web_dist):
+    status, headers, body = get(server, "/healthz")
+    assert status == 200
+    assert headers["Content-Type"] == "application/json"
+    assert json.loads(body)["ok"] is True
+
+
+def test_generate_is_unaffected_by_the_bundle(server, web_dist):
+    status, body = post(server, {"intent": "a 3.3V regulator", "time_limit_s": 5})
+    assert status == 200
+    assert body["kicad_pcb"].startswith("(kicad_pcb")
+
+
+def test_traversal_targets_are_reachable_on_disk(web_dist):
+    """The positive control for the traversal cases below. If this fails they
+    are testing a missing file, not a defended root."""
+    assert (web_dist / ".." / "OUTSIDE.txt").resolve().read_bytes() == b"LEAKED"
+    assert (web_dist / ".." / ".." / "OUTSIDE2.txt").resolve().read_bytes() == b"LEAKED"
+
+
+@pytest.mark.parametrize(
+    "target",
+    [
+        "/../OUTSIDE.txt",
+        "/..%2fOUTSIDE.txt",
+        "/%2e%2e/%2e%2e/OUTSIDE2.txt",
+        "/..%5cOUTSIDE.txt",
+        "/assets/../../OUTSIDE.txt",
+    ],
+)
+def test_path_traversal_is_refused(server, web_dist, target):
+    status, body = raw_get(server, target)
+    assert status == 404
+    assert b"LEAKED" not in body
+
+
+def test_unknown_route_is_404_with_a_bundle(server, web_dist):
+    status, _, body = get(server, "/nope")
+    assert status == 404
+    assert json.loads(body)["error"]
+
+
+def test_json_root_survives_when_there_is_no_bundle(server):
+    previous = Handler.web_root
+    Handler.web_root = None
+    try:
+        status, headers, body = get(server, "/")
+        assert status == 200
+        assert headers["Content-Type"] == "application/json"
+        assert json.loads(body)["service"] == "silkscreen"
+    finally:
+        Handler.web_root = previous
+
+
+def test_cache_headers(server, web_dist):
+    _, headers, _ = get(server, "/")
+    assert headers["Cache-Control"] == "no-cache", "index names hashed assets"
+
+    _, headers, _ = get(server, "/assets/app-abc123.js")
+    assert headers["Cache-Control"] == "public, max-age=31536000, immutable"
 
 
 GROUND_REVIEW = {
@@ -448,7 +708,18 @@ def test_too_many_ground_datasheets_is_400(ground_server):
 def test_no_findings_skips_grounding_fetch(monkeypatch, ground_server):
     import service.app as app
 
-    monkeypatch.setattr(Handler, "model_factory", staticmethod(scripted))
+    def clean_review():
+        return ScriptedModel(
+            by_marker={
+                "designing a printed circuit board": json.dumps(CIRCUIT),
+                "reviewing a circuit someone else designed": json.dumps(
+                    {"findings": []}
+                ),
+                "reading an electronic component datasheet": json.dumps(DATASHEET),
+            }
+        )
+
+    monkeypatch.setattr(Handler, "model_factory", staticmethod(clean_review))
 
     calls = []
 

@@ -7,5 +7,8 @@ __pycache__/
 design/
 frontend/
 scripts/
+# web/ itself is the build stage's input; only its generated trees are excluded.
+web/node_modules/
+web/dist/
 *.kicad_pcb
 .env

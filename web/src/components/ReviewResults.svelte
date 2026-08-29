@@ -1,0 +1,142 @@
+<script>
+  import FindingCard from './FindingCard.svelte'
+  import { formatBoard, formatCount, joinDot } from '../lib/format.js'
+
+  let { result, request = null, onnew } = $props()
+
+  const skipped = $derived(request ? request.review === false : false)
+  const findings = $derived(result.findings)
+
+  const summary = $derived(
+    joinDot([
+      formatBoard(result.board_mm),
+      formatCount(result.parts.length, 'part'),
+      result.status,
+      result.repair_rounds ? formatCount(result.repair_rounds, 'repair round') : '',
+    ]),
+  )
+</script>
+
+<section class="results">
+  <div class="mono summary">{summary}</div>
+
+  <!-- Gated on the list, not on the status: the placer attaches a warning to
+       every FEASIBLE solve, which is the ordinary outcome on a real board. -->
+  {#if result.warnings.length}
+    <ul class="warnings" class:fallback={result.status === 'fallback'}>
+      {#each result.warnings as warning, i (i)}
+        <li>{warning}</li>
+      {/each}
+    </ul>
+  {/if}
+
+  <div class="head">
+    <h1 class="title">Design review</h1>
+    <span class="mono count">
+      {skipped ? 'not run' : formatCount(findings.length, 'finding')}
+    </span>
+  </div>
+
+  <p class="lead">
+    {#if skipped}
+      Nothing was checked against the datasheets on this run. The board below was placed from
+      the netlist alone.
+    {:else}
+      Every connection was checked against the pin definitions in the manufacturer's datasheet,
+      not just against the netlist. Each finding cites the page it came from.
+    {/if}
+  </p>
+
+  <!-- double rule, drafting convention -->
+  <div class="rule"></div>
+  <div class="rule last"></div>
+
+  {#if skipped}
+    <div class="state">
+      <div class="state-title">Review was skipped</div>
+      <p class="state-body">
+        This run was submitted with the review turned off, so the board was placed but nothing
+        checked it against the datasheets. Run it again with the review on to get findings.
+      </p>
+    </div>
+  {:else if findings.length === 0}
+    <div class="state">
+      <div class="state-title">Nothing to flag</div>
+      <p class="state-body">
+        The reviewer found no blockers, marginal choices, or notes worth raising against the
+        datasheets it read. That covers pin function and passive values in context — not signal
+        integrity, EMC, thermal margins, or manufacturability at your fab. A clean review here
+        is not a substitute for a human sign-off before you order boards.
+      </p>
+    </div>
+  {:else}
+    <div class="cards">
+      {#each findings as finding, i (i)}
+        <FindingCard {finding} />
+      {/each}
+    </div>
+  {/if}
+
+  <button type="button" class="again" onclick={onnew}>Start another board</button>
+</section>
+
+<style>
+  .summary {
+    font-size: var(--fs-mono-sm);
+    color: var(--ink-soft);
+    margin-bottom: 16px;
+  }
+
+  .warnings {
+    margin: 0 0 18px;
+    padding: 10px 14px 10px 30px;
+    background: var(--sev-marginal-bg);
+    border-left: var(--sev-bar-w) solid var(--sev-marginal-rule);
+    font-size: var(--fs-ui);
+    color: var(--sev-marginal-fg);
+    line-height: 1.6;
+  }
+
+  .warnings.fallback {
+    background: var(--sev-blocker-bg);
+    border-left-color: var(--sev-blocker-rule);
+    color: var(--sev-blocker-fg);
+  }
+
+  .head { display: flex; align-items: baseline; gap: 14px; margin-bottom: 4px; }
+  .title { font-size: var(--fs-h1); font-weight: 600; letter-spacing: -.02em; }
+  .count { font-size: 12px; color: var(--ink-soft); }
+
+  .lead {
+    font-size: var(--fs-body);
+    color: var(--ink-mid);
+    margin-bottom: 22px;
+    max-width: var(--measure-lead);
+    line-height: 1.55;
+  }
+
+  .rule { border-top: 1px solid var(--rule); margin-bottom: 1px; }
+  .rule.last { margin-bottom: 20px; }
+
+  .cards { display: flex; flex-direction: column; gap: 16px; }
+
+  .state {
+    background: var(--surface);
+    border: 1px solid var(--rule-soft);
+    border-left: var(--sev-bar-w) solid var(--green);
+    padding: 15px 18px;
+    max-width: var(--measure-detail);
+  }
+  .state-title { font-size: var(--fs-card-title); font-weight: 600; margin-bottom: 6px; }
+  .state-body { font-size: var(--fs-detail); color: var(--ink-mid); line-height: 1.6; }
+
+  .again {
+    margin-top: 24px;
+    font-size: 12px;
+    padding: 6px 13px;
+    background: transparent;
+    color: var(--ink-mid);
+    border: 1px solid var(--rule);
+    border-radius: var(--radius);
+  }
+</style>

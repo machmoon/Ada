@@ -23,7 +23,9 @@ ground, `#C83434` F.Cu, `#4D7FC4` B.Cu, `#F2EDA1` silkscreen, `#FF26E2`
 courtyard, `#00F8FF` ratsnest — mirroring KiCad's own light-schematic /
 dark-board split.
 
-These are static mockups. Nothing here is wired to the engine.
+These are static mockups. Nothing here is wired to the engine, with one
+exception: `Review.dc.html` is built for real in `web/`, as a Svelte page over
+`POST /generate` that the service serves at `/`.
 
 ## Rebuilding the canvas
 

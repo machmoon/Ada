@@ -1,0 +1,62 @@
+/* Drafting Table — every value below is lifted from design/Review.dc.html.
+   Change a token here rather than hard-coding a colour in a component. */
+:root {
+  /* paper stack */
+  --paper: #F5F4EF;        /* KiCad schematic paper, the app background */
+  --surface: #FCFBF8;      /* cards, title bar */
+  --rail: #FAF9F5;         /* right rail */
+  --well: #EDEBE3;         /* status bar, note chips, selected rows */
+
+  /* ink tiers */
+  --ink: #14130F;
+  --ink-mid: #484848;
+  --ink-soft: #7C796E;
+  --ink-faint: #A9A69A;
+
+  /* hairlines: --rule bounds the chrome, --rule-soft divides within it */
+  --rule: #B5B5B5;
+  --rule-soft: #D6D3C8;
+
+  /* KiCad symbol colours */
+  --oxblood: #840000;
+  --teal: #006464;
+  --green: #009600;
+  --navy: #000084;
+
+  /* severity. The mockup's fourth "sourcing" tier is deliberately dropped —
+     the engine has no supplier data, so it could only ever be invented. */
+  --sev-blocker-fg: #E6090D;
+  --sev-blocker-bg: #FBEAEA;
+  --sev-blocker-rule: #E6090D;
+  --sev-marginal-fg: #8A6300;
+  --sev-marginal-bg: #F7EFD8;
+  --sev-marginal-rule: #D19200;
+  --sev-note-fg: #484848;
+  --sev-note-bg: #EDEBE3;
+  --sev-note-rule: #484848;
+
+  /* geometry */
+  --titlebar-h: 44px;
+  --statusbar-h: 28px;
+  --rail-w: 312px;
+  --radius: 2px;           /* buttons only; every other corner is square */
+  --sev-bar-w: 3px;
+  --mic-slot: 44px;
+
+  /* type */
+  --font-sans: "Chivo", "Helvetica Neue", Arial, sans-serif;
+  --font-mono: "Chivo Mono", ui-monospace, monospace;
+  --fs-h1: 25px;
+  --fs-card-title: 14.5px;
+  --fs-body: 13.5px;
+  --fs-detail: 13px;
+  --fs-ui: 12.5px;
+  --fs-mono: 11.5px;
+  --fs-mono-sm: 10.5px;
+  --fs-lbl: 10px;
+  --fs-chip: 9.5px;
+
+  /* measures */
+  --measure-lead: 66ch;
+  --measure-detail: 76ch;
+}
