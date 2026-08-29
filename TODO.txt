@@ -1,42 +1,58 @@
 TODO — agent layer (from DEVPOST.md "[not yet built]" section)
 
-NEEDED FEATURES
----------------
-1. ADK SequentialAgent for the main pipeline
-2. ADK ParallelAgent fanning out datasheet readers
-3. ADK LoopAgent for bounded validation repair
-4. Adversarial reviewer agent
-5. Model tiering by task
-6. Tool confirmation gates on file-writing steps
-7. Cloud Run deployment (partially done)
-8. Firestore persistence of datasheet facts (done, commit 4249c5b)
+Decision (2026-08-29): the team considers the agent-layer features met by the
+existing Gen AI SDK implementation in engine/silkscreen/agents/. The ADK
+adoption idea is ARCHIVED — the behaviour its wrappers would have wrapped
+already runs (analysis in docs/agent-framework.md). ADK sub-items below are
+kept for the record, marked [ARCHIVED]; do not pick them up.
 
-DETAILS
--------
-1. SequentialAgent: build the main pipeline on Google's Agent Development Kit
-   with the stages read, propose, validate, place, review. The topology is
-   deliberate rather than a flat pile of prompts.
+RAG / retrieval is Leo's lane and is tracked separately — retrieval.py
+(GeminiEmbedder, page-level citations) is the starting point; do not pick up
+retrieval work from this file.
 
-2. ParallelAgent: fan out one datasheet reader per component. Parts are
-   independent, so their datasheets can be read concurrently.
+NOTE: DEVPOST still describes the ADK topology as the plan. With the idea
+archived, that section needs rewriting around the SDK implementation.
 
-3. LoopAgent: wrap validation repair in a bounded loop that terminates when
-   the circuit IR validates.
+FEATURES
+--------
+ #   Feature / sub-feature                             Status        Note
+ --  ------------------------------------------------  ------------  --------------------------------------------
+ 1   Pipeline sequence                                 [DONE-SDK]    was: ADK SequentialAgent
+ ----- Five-stage read/propose/validate/place/review   [DONE]        pipeline.py
+ ----- Model protocol seam; stages never see the SDK   [DONE]        model.py; ScriptedModel keeps tests offline
+ ----- ADK SequentialAgent re-expression               [ARCHIVED]
+ 2   Parallel datasheet reads                          [NOT BUILT]
+ ----- Thread-pool fan-out, one generate per part      [NOT BUILT]   around the existing Model protocol
+ ----- Client thread-safety decided and tested         [NOT BUILT]   shared genai client vs one per worker
+ ----- Failure isolation + concurrency cap             [NOT BUILT]   one bad part must not sink the batch
+ 3   Validation repair loop                            [DONE-SDK]    was: ADK LoopAgent
+ ----- Batched error collection, all failures at once  [DONE]        parse_circuit_spec, netlist.py
+ ----- Bounded loop, ends when the IR validates        [DONE]        propose.py
+ ----- ADK LoopAgent wrapper                           [ARCHIVED]
+ 4   Adversarial reviewer                              [DONE-SDK]
+ ----- Refute-not-confirm prompt                       [DONE]        review.py
+ ----- Findings filtered against the actual spec       [DONE]        hallucinated findings dropped
+ ----- Specialised reviewer split, merged verdict      [IDEA]        power / signal integrity / manufacturability
+ 5   Model tiering                                     [DONE-SDK]
+ ----- FallbackModel chain w/ response validation      [DONE]        resilience.py
+ ----- 3.7-flash primary, 3.5-flash-lite second        [DONE]        service/app.py
+ ----- Per-task routing beyond failover                [IDEA]        vision/reasoning vs mechanical passes
+ 6   Confirmation gates on file writes                 [NOT BUILT]
+ ----- Inventory write points, define the gate         [NOT BUILT]   save_board, CLI output, service response
+ ----- CLI confirmation prompt before board write      [NOT BUILT]   with a --yes bypass
+ ----- Service dry-run mode                            [NOT BUILT]   placement report without writing a board
+ 7   Cloud Run deployment                              [PARTIAL]
+ ----- HTTP surface + Dockerfile, tested offline       [DONE]
+ ----- The deploy itself, live URL in README           [NOT BUILT]   gcloud run deploy
+ ----- Post-deploy smoke check                         [NOT BUILT]   healthz + one real /generate against live URL
+ 8   Firestore fact cache                              [DONE]
+ ----- FactStore protocol + MemoryFactStore            [DONE]        service/cache.py; tests need no GCP project
+ ----- Real write-back + preloaded_facts feed-in       [DONE]        commit 4249c5b
+ ----- Ops polish: client reuse, document env var      [OPEN]        USE_FIRESTORE undocumented today
 
-4. Adversarial reviewer: a dedicated agent prompted to refute the design
-   rather than confirm it, because an agent asked "is this correct?" will
-   say yes.
-
-5. Model tiering: gemini-3.7-flash for datasheet vision and reasoning,
-   dropping to gemini-3.5-flash-lite for high-volume mechanical passes.
-
-6. Confirmation gates: any step that writes a file requires tool
-   confirmation before it runs.
-
-7. Cloud Run: deployment target for the service. Status: service/app.py and
-   a Dockerfile exist (commit a5e781b), so the HTTP surface is in place.
-
-8. Firestore: persist extracted datasheet facts so the second run on a part
-   is free. Status: done in commit 4249c5b — generate() now writes the real
-   extracted facts and cache hits are fed back into the pipeline as
-   preloaded_facts, covered by service tests.
+OPEN WORK, SUMMARISED
+---------------------
+Everything actionable reduces to: feature 2 in full (parallel reads, an SDK
+thread-pool task), feature 6 in full (confirmation gates), the deploy and
+smoke check under 7, and the ops polish under 8. The [IDEA] rows under 4
+and 5 are ideas, not commitments.

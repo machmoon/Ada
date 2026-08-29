@@ -20,6 +20,8 @@ Pytest config lives in `pyproject.toml` (`testpaths = engine/tests, service/test
 
 Four people push to `main` concurrently — the local checkout goes stale fast. Run `git fetch` and check `git status` / `git log origin/main` before starting work and again before any commit or push, and rebase rather than letting the histories diverge. During long working sessions, poll the remote every few minutes (e.g. `/loop 5m`) and surface new teammate commits to the user as they land.
 
+Lane ownership: RAG/retrieval work belongs to Leo (`agents/retrieval.py` is the starting point) — do not pick it up without coordinating. The open feature work is tracked in `TODO.txt` (feature table with sub-features and statuses).
+
 ## Architecture
 
 The installed `silkscreen` package lives under `engine/` (setuptools packages only `engine/`), with the Cloud Run surface in `service/`. The core pipeline is: parse a `.kicad_pcb` file, solve placement with CP-SAT, write the placements and board outline back into the file. The board file is the API — there is no KiCad process, plugin, or IPC anywhere. The design is layered: the deterministic engine makes no network calls; `agents/` is the only place a model call lives; `service/` is the only place GCP lives. Each layer keeps an offline stand-in (`ScriptedModel`, `MemoryFactStore`) so the whole suite runs with no keys.
@@ -57,19 +59,21 @@ The submission must satisfy three Google-stack constraints; design any new AI or
 
 All three are currently met — Gemini 3.7/3.5 models via the Gemini Developer API, the Google GenAI SDK as the framework, Cloud Run plus Firestore as the infrastructure. Per-requirement analysis with citations lives in `docs/gemini.md`, `docs/agent-framework.md`, and `docs/cloud-infrastructure.md`. The engine itself stays key-free and offline-testable; `GOOGLE_API_KEY` in `.env.example` serves the agents layer only.
 
+ADK decision (2026-08-29): the team considered adopting Google ADK and **archived the idea** — the SDK implementation already covers the agent behaviour, and the GenAI SDK alone satisfies the framework requirement (analysis in `docs/agent-framework.md`, decision recorded in `TODO.txt`). Do not propose ADK adoption or build ADK wrappers. Consequence still outstanding: DEVPOST's agent-layer section still describes the ADK topology as the plan and needs rewriting around what the SDK implementation actually does.
+
 ## Known issues (recorded 2026-08-29 — deliberately not fixed)
 
 Found in a verification pass over the docs and recent commits; left open on purpose. Do not fix these as drive-bys — when one is addressed, do it deliberately, with tests, and remove it from this list.
 
 1. `engine/silkscreen/agents/model.py:111` passes `media_resolution="high"`, which matches no member of the SDK's `MediaResolution` enum (values are `MEDIA_RESOLUTION_HIGH` etc.), so high-resolution datasheet reading is likely silently not applied.
 2. ~~The Firestore fact cache is a placeholder~~ — resolved in `4249c5b`: the write-back stores real facts and cache hits feed `preloaded_facts` into the pipeline, with service tests.
-3. `.env.example` documents `GOOGLE_CLOUD_LOCATION`, which nothing reads (no Vertex AI path exists); `USE_FIRESTORE` is read by `service/app.py` but documented nowhere.
+3. `.env.example` documents `GOOGLE_CLOUD_LOCATION`, which nothing reads (no Vertex AI path exists); `USE_FIRESTORE` is read by `service/app.py` but documented nowhere (documentation half now tracked as the ops-polish row under TODO.txt feature 8).
 4. No test, even a key-gated one, exercises the live `GeminiModel`.
-5. `build_store()` constructs a fresh Firestore client per request in production.
+5. `build_store()` constructs a fresh Firestore client per request in production (also tracked as the ops-polish row under TODO.txt feature 8).
 6. The `google-genai>=1.0` pin is unbounded upward; PyPI is at 2.x and a breaking 3.0 has been announced.
 7. `engine/silkscreen/mcp/server.py`'s docstring says "four useful operations"; `TOOLS` defines five.
-8. Nothing in the repo performs a deploy (CI only lints and tests) and no deployed URL is recorded, so a live Cloud Run instance cannot be verified from the repo.
+8. Nothing in the repo performs a deploy (CI only lints and tests) and no deployed URL is recorded, so a live Cloud Run instance cannot be verified from the repo (tracked as the deploy and smoke-check rows under TODO.txt feature 7).
 
 ## Documentation discipline
 
-The README's measured figures (board size, HPWL) are reproduced exactly by `scripts/demo.py`; if a change shifts them, rerun the demo and update the README rather than leaving stale numbers. Test counts in README/DEVPOST are enforced by `scripts/check_docs.py` in CI. Unbuilt features are tagged `[not yet built]` in DEVPOST.md — keep unbuilt work visibly unbuilt.
+The README's measured figures (board size, HPWL) are reproduced exactly by `scripts/demo.py`; if a change shifts them, rerun the demo and update the README rather than leaving stale numbers. Test counts in README/DEVPOST are enforced by `scripts/check_docs.py` in CI, and `check_docs.py --fix` rewrites the stale numbers in place. Unbuilt features are tagged `[not yet built]` in DEVPOST.md — keep unbuilt work visibly unbuilt.
