@@ -13,7 +13,7 @@ python -m silkscreen "a 3.3V motor driver around an STM32F103" -o board.kicad_pc
 ```
 
 ```
-216 passed — no network, no API key, no KiCad install
+309 passed — no network, no API key, no KiCad install
 ```
 
 ---
@@ -52,7 +52,7 @@ that consumes the file. Install it if you are a person who wants to see a board.
 | `agents/retrieval.py` — page-cited datasheet retrieval | **Working** · 15 tests |
 | `agents/resilience.py` — provider failover | **Working** · 14 tests |
 | `mcp/` — MCP server over stdio | **Working** · 23 tests |
-| `service/` — Cloud Run + Firestore cache | **Working** · 48 tests |
+| `service/` — Cloud Run + Firestore cache | **Working** · 59 tests |
 | `web/` — Svelte review UI, served by the service | **Working** · design review page |
 | Board well, overlay UI, guided cursor | Not built (mockups only) |
 
@@ -157,7 +157,7 @@ treats the board file as the interface.
 | Requires KiCad running | Yes | **No** |
 | Headless / CI | Hard | **Native** |
 | Platform lock | KiCad's plugin loader | **None — pure Python** |
-| Testable without KiCad | No | **Yes, all 216 tests** |
+| Testable without KiCad | No | **Yes, all 309 tests** |
 
 ### What it reads
 
@@ -389,7 +389,7 @@ engine/
       propose.py    intent -> circuit, with a bounded repair loop
       review.py     adversarial design review
       pipeline.py   prompt -> PCB
-  tests/          216 tests — no network, no API keys, no KiCad
+  tests/          309 tests — no network, no API keys, no KiCad
     fixtures/     ref.kicad_pcb -- 11-footprint board fixture
 scripts/
   demo.py         end-to-end: read -> place -> write -> verify
@@ -461,10 +461,10 @@ On Windows, use `.venv\Scripts\python.exe` in place of `./.venv/bin/python`.
 
 ### Expected output
 
-**1. Test suite** — 216 tests, no warnings (two key-gated live-model tests skip unless `GOOGLE_API_KEY` is set):
+**1. Test suite** — 309 tests, no warnings (four key-gated live-model tests skip unless `GOOGLE_API_KEY` is set):
 
 ```
-216 passed in 190.85s
+309 passed in 190.85s
 ```
 
 The suite is dominated by the 20-second solver budget in a handful of placement

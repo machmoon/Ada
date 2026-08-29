@@ -16,6 +16,7 @@ Deploy::
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import sys
@@ -23,20 +24,32 @@ import time
 import traceback
 import urllib.parse
 import uuid
+from collections.abc import Callable
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "engine"))
 
 from silkscreen.agents import ModelError, generate_pcb  # noqa: E402
 from silkscreen.agents.datasheet import PartFacts  # noqa: E402
+from silkscreen.agents.grounding import (  # noqa: E402
+    BatchingEmbedder,
+    GroundingError,
+    build_index,
+    ground_findings,
+    load_pages,
+    pages_for_part,
+    store_pages,
+)
 from silkscreen.agents.model import GeminiModel  # noqa: E402
 from silkscreen.agents.resilience import (  # noqa: E402
     AllProvidersFailed,
     FallbackModel,
     Provider,
 )
+from silkscreen.agents.retrieval import GeminiEmbedder  # noqa: E402
 from silkscreen.board import emit_kicad_pcb  # noqa: E402
 from silkscreen.units import to_mm  # noqa: E402
 
@@ -44,15 +57,25 @@ from .cache import FactStore, MemoryFactStore  # noqa: E402
 
 __all__ = [
     "Handler",
+    "build_embedder",
     "build_model",
+    "build_pages_store",
     "build_store",
     "caused_by_model_failure",
     "generate",
     "make_server",
+    "page_cache_key",
 ]
 
 MAX_BODY_BYTES = 1 << 20
 DEFAULT_TIME_LIMIT = 20.0
+PAGES_COLLECTION = "datasheet_pages"
+MAX_GROUND_PARTS = 25
+
+
+def page_cache_key(part: str, url: str) -> str:
+    return f"{part}\x00{hashlib.sha256(url.encode('utf-8')).hexdigest()[:16]}"
+
 
 #: Where the built web bundle lives. The override exists because the container
 #: copies the bundle to a path the repo layout does not imply.
@@ -129,6 +152,18 @@ def build_store() -> FactStore:
     return MemoryFactStore()
 
 
+def build_pages_store() -> FactStore:
+    if os.getenv("GOOGLE_CLOUD_PROJECT") and os.getenv("USE_FIRESTORE", "1") != "0":
+        from .cache import FirestoreFactStore
+
+        return FirestoreFactStore(PAGES_COLLECTION)
+    return MemoryFactStore()
+
+
+def build_embedder() -> BatchingEmbedder:
+    return BatchingEmbedder(GeminiEmbedder())
+
+
 def build_model():
     """Primary Gemini model with a cheaper tier behind it.
 
@@ -150,6 +185,8 @@ def generate(
     *,
     model,
     store: FactStore,
+    pages_store: FactStore | None = None,
+    embedder_factory: Callable[[], Any] | None = None,
 ) -> dict[str, Any]:
     """Run the pipeline for one request body."""
     started = time.monotonic()
@@ -161,6 +198,19 @@ def generate(
     datasheets = payload.get("datasheets") or {}
     if not isinstance(datasheets, dict):
         raise ValueError("'datasheets' must be an object of {part: url}")
+    if any(not isinstance(u, str) or not u for u in datasheets.values()):
+        raise ValueError("each datasheet value must be a non-empty URL string")
+    if payload.get("ground") is True:
+        if not datasheets:
+            raise ValueError("'ground' requires 'datasheets'")
+        if len(datasheets) > MAX_GROUND_PARTS:
+            raise ValueError(
+                f"'ground' supports at most {MAX_GROUND_PARTS} datasheets per request"
+            )
+        for url in datasheets.values():
+            shape = urlsplit(url)
+            if shape.scheme.lower() not in ("http", "https") or not shape.hostname:
+                raise ValueError("datasheet URL is not an http(s) URL")
 
     # Anything already in Firestore is not read again -- but the facts we
     # stored are handed to the pipeline in the read's place. Skipping the read
@@ -197,7 +247,7 @@ def generate(
             store.put(part, fact.to_dict())
 
     board = result.board
-    return {
+    response: dict[str, Any] = {
         "intent": intent,
         "board_mm": [round(to_mm(board.width_nm), 3), round(to_mm(board.height_nm), 3)],
         "status": str(board.solver_status),
@@ -234,6 +284,63 @@ def generate(
         "served_by": getattr(model, "last_provider", None),
     }
 
+    if payload.get("ground") is True:
+        if not result.findings:
+            response["grounding"] = {
+                "findings": [],
+                "pages": {"cached": [], "read": []},
+            }
+            return response
+
+        pages_store = pages_store if pages_store is not None else build_pages_store()
+        embedder = (embedder_factory or build_embedder)()
+
+        indexes: dict[str, Any] = {}
+        pages_cached: list[str] = []
+        pages_read: list[str] = []
+        for part, url in datasheets.items():
+            pages = load_pages(pages_store, page_cache_key(part, url))
+            if pages is None:
+                try:
+                    pages = pages_for_part(url=url)
+                except ValueError as exc:
+                    sys.stderr.write(f"grounding rejected datasheet url: {exc}\n")
+                    raise ValueError("datasheet URL is not allowed") from exc
+                store_pages(pages_store, page_cache_key(part, url), pages)
+                pages_read.append(part)
+            else:
+                pages_cached.append(part)
+            index = build_index(pages, embedder)
+            if len(index):
+                indexes[part] = index
+
+        grounded = ground_findings(indexes, result.findings)
+        response["grounding"] = {
+            "findings": [
+                {
+                    "severity": g.finding.severity.value,
+                    "title": g.finding.title,
+                    "detail": g.finding.detail,
+                    "parts": list(g.finding.parts),
+                    "citation": g.finding.citation,
+                    "suggested_fix": g.finding.suggested_fix,
+                    "status": g.status.value,
+                    "evidence": [
+                        {
+                            "part": e.part,
+                            "page": e.page,
+                            "score": round(e.score, 4),
+                            "quote": e.quote,
+                        }
+                        for e in g.evidence
+                    ],
+                }
+                for g in grounded
+            ],
+            "pages": {"cached": sorted(pages_cached), "read": sorted(pages_read)},
+        }
+    return response
+
 
 class Handler(BaseHTTPRequestHandler):
     """Three routes: a health check Cloud Run can probe, the generator, and
@@ -241,6 +348,9 @@ class Handler(BaseHTTPRequestHandler):
 
     model_factory = staticmethod(build_model)
     store: FactStore | None = None
+    pages_store: FactStore | None = None
+    embedder_factory = staticmethod(build_embedder)
+
     #: Root of the built bundle; None serves no static files at all.
     web_root: Path | None = WEB_DIST
 
@@ -360,10 +470,16 @@ class Handler(BaseHTTPRequestHandler):
 
         try:
             store = self.store if self.store is not None else build_store()
-            result = generate(payload, model=self.model_factory(), store=store)
+            result = generate(
+                payload,
+                model=self.model_factory(),
+                store=store,
+                pages_store=self.pages_store,
+                embedder_factory=self.embedder_factory,
+            )
         except ValueError as exc:
             self._send(400, {"error": str(exc)})
-        except (AllProvidersFailed, ModelError) as exc:
+        except (AllProvidersFailed, GroundingError, ModelError) as exc:
             # Upstream is down, not the caller's fault: 502, not 500.
             self._send(502, {"error": str(exc)})
         except Exception as exc:
