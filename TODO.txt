@@ -1,0 +1,42 @@
+TODO — agent layer (from DEVPOST.md "[not yet built]" section)
+
+NEEDED FEATURES
+---------------
+1. ADK SequentialAgent for the main pipeline
+2. ADK ParallelAgent fanning out datasheet readers
+3. ADK LoopAgent for bounded validation repair
+4. Adversarial reviewer agent
+5. Model tiering by task
+6. Tool confirmation gates on file-writing steps
+7. Cloud Run deployment (partially done)
+8. Firestore persistence of datasheet facts (partially done)
+
+DETAILS
+-------
+1. SequentialAgent: build the main pipeline on Google's Agent Development Kit
+   with the stages read, propose, validate, place, review. The topology is
+   deliberate rather than a flat pile of prompts.
+
+2. ParallelAgent: fan out one datasheet reader per component. Parts are
+   independent, so their datasheets can be read concurrently.
+
+3. LoopAgent: wrap validation repair in a bounded loop that terminates when
+   the circuit IR validates.
+
+4. Adversarial reviewer: a dedicated agent prompted to refute the design
+   rather than confirm it, because an agent asked "is this correct?" will
+   say yes.
+
+5. Model tiering: gemini-3.7-flash for datasheet vision and reasoning,
+   dropping to gemini-3.5-flash-lite for high-volume mechanical passes.
+
+6. Confirmation gates: any step that writes a file requires tool
+   confirmation before it runs.
+
+7. Cloud Run: deployment target for the service. Status: service/app.py and
+   a Dockerfile exist (commit a5e781b), so the HTTP surface is in place.
+
+8. Firestore: persist extracted datasheet facts so the second run on a part
+   is free. Status: service/cache.py exists, but generate() currently writes
+   only a {"part_number": part} placeholder and cached facts are never fed
+   back into the pipeline, so the cache is not yet functional.
