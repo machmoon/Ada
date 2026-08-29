@@ -225,6 +225,18 @@ meant to build. The lesson we took is that the README should be written from the
 
 ---
 
+## Third-party code
+
+`vendor/mudriknow/` is not our code. It is [MudrikNow](https://github.com/abdallahmagdy15/mudriknow)
+at revision `ad58192`, MIT licensed, included unmodified with its licence file
+intact as a working reference for the guided-cursor overlay we have not built
+yet. Nothing in `engine/`, `service/`, or `scripts/` imports from it, it is
+excluded from lint and tests, and it contributes nothing to the 183 tests or to
+any figure quoted in this document. Everything else in the repository was
+written during the submission period.
+
+---
+
 ## What's next
 
 **Footprint generation from datasheets.** Wrong footprints are the most common cause of a

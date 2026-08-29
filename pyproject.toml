@@ -33,10 +33,13 @@ where = ["engine"]
 
 [tool.pytest.ini_options]
 testpaths = ["engine/tests", "service/tests"]
+norecursedirs = ["vendor", ".venv", "frontend"]
 pythonpath = ["engine", "."]
 
 [tool.ruff]
 line-length = 88
+# Vendored third-party code is not ours to reformat.
+exclude = ["vendor"]
 target-version = "py311"
 
 [tool.ruff.lint]

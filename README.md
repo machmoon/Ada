@@ -374,6 +374,9 @@ engine/
     fixtures/     ref.kicad_pcb -- 11-footprint board fixture
 scripts/
   demo.py         end-to-end: read -> place -> write -> verify
+  check_docs.py   fails CI if a quoted test count goes stale
+vendor/
+  mudriknow/      third-party (MIT), reference only -- not imported, not tested
 ```
 
 ---
