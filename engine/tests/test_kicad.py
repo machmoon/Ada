@@ -1,6 +1,6 @@
 """KiCad interop tests, run against a real board file.
 
-The fixture is ``backend/ref.txt`` -- the hand-placed board the original
+The fixture is ``tests/fixtures/ref.kicad_pcb`` -- the hand-placed board the original
 pipeline pasted into KiCad through the clipboard. Using it here is deliberate:
 it proves the same board can be placed by writing a file instead of by driving
 a GUI.
@@ -24,7 +24,7 @@ from silkscreen.kicad import (
     to_parts,
 )
 
-FIXTURE = Path(__file__).resolve().parents[2] / "backend" / "ref.txt"
+FIXTURE = Path(__file__).resolve().parent / "fixtures" / "ref.kicad_pcb"
 
 pytestmark = pytest.mark.skipif(
     not FIXTURE.exists(), reason="board fixture not present"

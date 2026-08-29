@@ -1,7 +1,0 @@
-fastapi
-uvicorn[standard]
-PyPDF2
-openai
-pydantic
-skidl
-requests

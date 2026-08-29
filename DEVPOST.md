@@ -87,7 +87,7 @@ all. Making that unrepresentable-by-construction is most of the value.
 A CP-SAT model places components to minimise board size and total wirelength, with real
 courtyard clearance, optional 90° rotation, edge constraints for connectors and
 antennas, and symmetry breaking over interchangeable passives. On the 11-footprint STM32 +
-regulator + motor-driver board in `backend/ref.txt` it returns a 19.60 × 15.05 mm
+regulator + motor-driver board in `engine/tests/fixtures/` it returns a 19.60 × 15.05 mm
 placement with 52.4 mm of total half-perimeter wirelength, reported as `FEASIBLE`
 rather than `OPTIMAL` because that is what the solver proved in 20 s. The run is
 reproducible at `workers=1`.

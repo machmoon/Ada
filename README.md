@@ -71,7 +71,7 @@ save_board(board, "placed.kicad_pcb")
 ```
 
 Reproduce it with `python scripts/demo.py`, on the 11-footprint STM32 + regulator +
-motor-driver fixture in `backend/ref.txt`:
+motor-driver fixture in `engine/tests/fixtures/`:
 
 ```
 11 footprints, 6 nets
@@ -208,10 +208,9 @@ engine/
     netlist.py    validated circuit IR
     kicad.py      .kicad_pcb read/write via kiutils
   tests/          54 tests — no network, no API keys, no KiCad
+    fixtures/     ref.kicad_pcb -- 11-footprint board fixture
 scripts/
   demo.py         end-to-end: read -> place -> write -> verify
-backend/
-  ref.txt         11-footprint board fixture
 ```
 
 ---
@@ -241,4 +240,6 @@ CI runs all three on Linux, macOS, and Windows.
 
 ## License
 
-TBD.
+MIT — see [LICENSE](LICENSE).
+
+Dependencies: `kiutils` (MIT), OR-Tools (Apache-2.0).

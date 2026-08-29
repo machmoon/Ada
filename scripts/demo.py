@@ -32,8 +32,9 @@ def rule(title: str) -> None:
 
 
 def main() -> int:
+    default_board = ROOT / "engine" / "tests" / "fixtures" / "ref.kicad_pcb"
     ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("board", nargs="?", default=str(ROOT / "backend" / "ref.txt"))
+    ap.add_argument("board", nargs="?", default=str(default_board))
     ap.add_argument("-o", "--out", default="placed.kicad_pcb")
     ap.add_argument("--clearance-mm", type=float, default=0.25)
     ap.add_argument("--time-limit", type=float, default=20.0)
