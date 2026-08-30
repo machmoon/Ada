@@ -175,40 +175,137 @@ def load_board(path: str | Path) -> Board:
     return Board.from_file(str(path))
 
 
-def _courtyard_points(item) -> list[tuple[float, float]]:
-    """Every point that bounds one courtyard graphic, in footprint-local mm.
+#: A circle whose derived radius exceeds this (in mm) is not a courtyard arc,
+#: it is three nearly collinear points the circumcentre could not resolve. Ten
+#: metres is far larger than any board, so treat such an arc as the segment it
+#: visually is rather than reserving a keep-out the size of the implied circle.
+_MAX_ARC_RADIUS_MM = 1e4
 
-    Shape matters here, because reading the wrong attributes does not fail --
-    it silently reports a part that is smaller than it is, and the solver packs
-    something else on top of it:
+
+def _region_corners(
+    x0: float, y0: float, x1: float, y1: float, angle_deg: float
+) -> list[tuple[float, float]]:
+    """All four corners of an axis-aligned region, in the board frame.
+
+    Two opposite corners bound a region only while it stays axis aligned. Turn
+    just those two by 45 degrees and the box they span collapses -- for a
+    square, to zero height -- so any shape whose stored pair describes a
+    *region* has to be expanded to four corners before it is rotated.
+    """
+    return [_rotate_mm(x, y, angle_deg) for x in (x0, x1) for y in (y0, y1)]
+
+
+def _circumcentre(
+    ax: float, ay: float, bx: float, by: float, cx: float, cy: float
+) -> tuple[float, float] | None:
+    """Centre of the circle through three points, or ``None`` if collinear."""
+    d = 2 * (ax * (by - cy) + bx * (cy - ay) + cx * (ay - by))
+    if abs(d) < 1e-12:
+        return None
+    a2 = ax * ax + ay * ay
+    b2 = bx * bx + by * by
+    c2 = cx * cx + cy * cy
+    return (
+        (a2 * (by - cy) + b2 * (cy - ay) + c2 * (ay - by)) / d,
+        (a2 * (cx - bx) + b2 * (ax - cx) + c2 * (bx - ax)) / d,
+    )
+
+
+def _arc_points(start, mid, end, angle_deg: float) -> list[tuple[float, float]]:
+    """Board-frame points that bound one ``fp_arc``, in mm.
+
+    Three samples are not a bound. Wherever the sweep crosses a cardinal
+    direction the arc reaches further than any of ``start``/``mid``/``end``: a
+    270 degree arc of radius 1 measured from its samples alone comes out 0.29 mm
+    short on two sides, and even the 180 degree arc in the tests reaches 0.125 mm
+    past its own endpoints. So recover the circle the three points lie on and add
+    whichever of its four extreme points the arc actually sweeps through.
+
+    This runs *after* rotation, in the board frame, because which point of a
+    curve is the topmost one depends on the frame you ask in.
+    """
+    pts = [_rotate_mm(pt.X, pt.Y, angle_deg) for pt in (start, mid, end)]
+    (sx, sy), (mx, my), (ex, ey) = pts
+    centre = _circumcentre(sx, sy, mx, my, ex, ey)
+    if centre is None:
+        return pts  # Collinear: the "arc" is a straight segment.
+    cx, cy = centre
+    radius = math.hypot(sx - cx, sy - cy)
+    if radius > _MAX_ARC_RADIUS_MM:
+        return pts
+
+    # Which way round does start -> mid -> end go? Whichever direction puts
+    # ``mid`` between the endpoints; the swept range is then that interval.
+    def ccw(frm: float, to: float) -> float:
+        return (to - frm) % math.tau
+
+    a_s = math.atan2(sy - cy, sx - cx)
+    a_m = math.atan2(my - cy, mx - cx)
+    a_e = math.atan2(ey - cy, ex - cx)
+    if ccw(a_s, a_m) <= ccw(a_s, a_e):
+        low, span = a_s, ccw(a_s, a_e)
+    else:
+        low, span = a_e, ccw(a_e, a_s)
+
+    for quarter in range(4):
+        theta = quarter * math.pi / 2
+        if ccw(low, theta) <= span:
+            pts.append((cx + radius * math.cos(theta), cy + radius * math.sin(theta)))
+    return pts
+
+
+def _courtyard_points(item, angle_deg: float = 0.0) -> list[tuple[float, float]]:
+    """Every point that bounds one courtyard graphic, in board-frame mm.
+
+    The footprint's angle is applied here rather than by the caller because a
+    curve's extreme points depend on the frame they are measured in: the
+    rightmost point of a rotated circle is not the image of the rightmost point
+    of the unrotated one. Bounding the sampled points first and rotating that box
+    afterwards under-reserves space, and the solver packs a neighbour into the
+    difference.
+
+    Shape matters for the same reason -- reading the wrong attributes does not
+    fail, it reports a part smaller than it is:
 
     * ``fp_poly`` keeps its vertices in ``coordinates``. Reading only
       ``start``/``end`` finds nothing, so a footprint whose courtyard is drawn
       as a polygon looks like it has no courtyard at all and falls back to the
       bare pad box -- no clearance whatsoever.
     * ``fp_circle``'s ``end`` is a point *on the circumference*, not a corner.
-      Treating the pair as a bbox gives a half-width, zero-height box.
-    * ``fp_arc``'s bulge is in ``mid``; its endpoints alone miss it entirely.
+      Treating the pair as a bbox gives a half-width, zero-height box. Rotating
+      the centre and taking the radius box is exact at any angle, because a
+      circle is its own image under rotation.
+    * ``fp_arc``'s bulge is in ``mid``; its endpoints alone miss it entirely,
+      and past a quarter turn of sweep ``mid`` is not enough either.
+    * ``fp_rect``'s ``start``/``end`` are opposite corners of a *region*, while
+      an ``fp_line``'s are the drawn segment itself. Only the first needs its
+      other two corners before it can be turned.
     """
     coords = getattr(item, "coordinates", None)
     if coords:
-        return [(pt.X, pt.Y) for pt in coords]
+        # ``fp_poly`` vertices. An ``fp_curve``'s Bezier stays inside the hull
+        # of its control points, which are stored the same way.
+        return [_rotate_mm(pt.X, pt.Y, angle_deg) for pt in coords]
 
-    center = getattr(item, "center", None)
+    start = getattr(item, "start", None)
+    mid = getattr(item, "mid", None)
     end = getattr(item, "end", None)
-    if center is not None and getattr(item, "start", None) is None:
-        # A circle: bound it by its radius, not by the point on its edge.
-        radius = math.hypot(end.X - center.X, end.Y - center.Y) if end else 0.0
-        return [
-            (center.X - radius, center.Y - radius),
-            (center.X + radius, center.Y + radius),
-        ]
+    center = getattr(item, "center", None)
 
-    # ``mid`` is the arc bulge; lines and rects simply do not have it.
-    attrs = ("start", "mid", "end", "position")
+    if center is not None and start is None:
+        radius = math.hypot(end.X - center.X, end.Y - center.Y) if end else 0.0
+        cx, cy = _rotate_mm(center.X, center.Y, angle_deg)
+        return _region_corners(cx - radius, cy - radius, cx + radius, cy + radius, 0.0)
+
+    if mid is not None and start is not None and end is not None:
+        return _arc_points(start, mid, end, angle_deg)
+
+    if type(item).__name__ == "FpRect" and start is not None and end is not None:
+        return _region_corners(start.X, start.Y, end.X, end.Y, angle_deg)
+
     return [
-        (pt.X, pt.Y)
-        for pt in (getattr(item, attr, None) for attr in attrs)
+        _rotate_mm(pt.X, pt.Y, angle_deg)
+        for pt in (start, mid, end, getattr(item, "position", None))
         if pt is not None
     ]
 
@@ -220,15 +317,14 @@ def _courtyard_extent(
 
     Returns ``(min_x, min_y, max_x, max_y)`` relative to the anchor, already
     turned by the footprint's existing placement angle, or ``None`` if the
-    footprint has no courtyard layer. (A circle rotated by a non-multiple of 90
-    degrees is bounded slightly loosely -- conservative, never tight.)
+    footprint has no courtyard layer.
     """
     pts: list[tuple[float, float]] = []
     for item in fp.graphicItems:
         layer = getattr(item, "layer", "") or ""
         if "CrtYd" not in layer:
             continue
-        pts += [_rotate_mm(x, y, angle_deg) for x, y in _courtyard_points(item)]
+        pts += _courtyard_points(item, angle_deg)
     if not pts:
         return None
     xs = [p[0] for p in pts]

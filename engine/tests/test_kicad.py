@@ -368,7 +368,12 @@ def test_polygon_courtyard_is_not_mistaken_for_no_courtyard():
 
 
 def test_arc_courtyard_includes_its_bulge():
-    """An arc's extreme is ``mid``; its endpoints alone miss it."""
+    """An arc's extreme is ``mid``; its endpoints alone miss it.
+
+    ``mid`` is not the whole story either. This arc sweeps past horizontal on
+    both sides, so it reaches 0.125 mm further out than either endpoint: three
+    samples name none of the four places an arc can actually be widest.
+    """
     from kiutils.items.common import Position
     from kiutils.items.fpitems import FpArc
     from silkscreen.kicad import _courtyard_extent
@@ -377,7 +382,166 @@ def test_arc_courtyard_includes_its_bulge():
         start=Position(X=-3.0, Y=0.0), mid=Position(X=0.0, Y=-4.0),
         end=Position(X=3.0, Y=0.0), layer="F.CrtYd",
     )
-    assert _courtyard_extent(_Graphics([arc])) == (-3.0, -4.0, 3.0, 0.0)
+    assert _courtyard_extent(_Graphics([arc])) == pytest.approx(
+        (-3.125, -4.0, 3.125, 0.0)
+    )
+
+
+def test_circle_courtyard_is_exact_at_any_angle():
+    """Two opposite corners of a box stop bounding it the moment it turns.
+
+    A circle is its own image under rotation, but the corner pair standing in
+    for it is not: rotated 45 degrees, the box those two points span has *zero*
+    height, so the solver reserves a line where a round part sits.
+    """
+    from kiutils.items.common import Position
+    from kiutils.items.fpitems import FpCircle
+    from silkscreen.kicad import _courtyard_extent
+
+    circle = FpCircle(
+        center=Position(X=0.0, Y=0.0), end=Position(X=3.0, Y=0.0), layer="F.CrtYd"
+    )
+    for angle in (0.0, 30.0, 45.0, 90.0, 137.5):
+        assert _courtyard_extent(_Graphics([circle]), angle) == pytest.approx(
+            (-3.0, -3.0, 3.0, 3.0)
+        ), angle
+
+
+def test_rect_courtyard_keeps_its_other_two_corners_when_rotated():
+    """``fp_rect`` stores opposite corners of a *region*, unlike ``fp_line``,
+    whose pair is the drawn segment itself. Turning only the stored pair made a
+    4 x 2 mm courtyard 1.41 mm tall at 45 degrees instead of 4.24 mm."""
+    from kiutils.items.common import Position
+    from kiutils.items.fpitems import FpRect
+    from silkscreen.kicad import _courtyard_extent
+
+    rect = FpRect(
+        start=Position(X=-2.0, Y=-1.0), end=Position(X=2.0, Y=1.0), layer="F.CrtYd"
+    )
+    reach = 3.0 / math.sqrt(2)  # the (2, 1) corner swings out to (|x| + |y|)/sqrt2
+    assert _courtyard_extent(_Graphics([rect]), 45.0) == pytest.approx(
+        (-reach, -reach, reach, reach)
+    )
+    assert _courtyard_extent(_Graphics([rect]), 0.0) == pytest.approx(
+        (-2.0, -1.0, 2.0, 1.0)
+    )
+
+
+def test_arc_courtyard_reaches_past_all_three_sampled_points():
+    """A 270 degree arc passes through every cardinal extreme of its circle.
+    Bounded by ``start``/``mid``/``end`` it comes out 0.29 mm short on two
+    sides of a 1 mm radius -- room enough to pack a 0402 into the keep-out."""
+    from kiutils.items.common import Position
+    from kiutils.items.fpitems import FpArc
+    from silkscreen.kicad import _courtyard_extent
+
+    corner = math.sqrt(0.5)
+    arc = FpArc(
+        start=Position(X=0.0, Y=1.0), mid=Position(X=-corner, Y=-corner),
+        end=Position(X=1.0, Y=0.0), layer="F.CrtYd",
+    )
+    assert _courtyard_extent(_Graphics([arc])) == pytest.approx((-1.0, -1.0, 1.0, 1.0))
+
+
+def test_rotated_arc_is_bounded_in_the_board_frame():
+    """Which point of a curve is the rightmost one depends on the frame you ask
+    in, so the extremes are found after the angle is applied, not turned
+    afterwards. Swung 45 degrees, this arc stops short of its circle's right
+    edge and its own endpoint becomes the bound."""
+    from kiutils.items.common import Position
+    from kiutils.items.fpitems import FpArc
+    from silkscreen.kicad import _courtyard_extent
+
+    corner = math.sqrt(0.5)
+    arc = FpArc(
+        start=Position(X=0.0, Y=1.0), mid=Position(X=-corner, Y=-corner),
+        end=Position(X=1.0, Y=0.0), layer="F.CrtYd",
+    )
+    assert _courtyard_extent(_Graphics([arc]), 45.0) == pytest.approx(
+        (-1.0, -1.0, corner, 1.0)
+    )
+
+
+def test_quarter_arc_is_not_padded_out_to_its_whole_circle():
+    """Conservative is not the same as correct: the bound stays tight where it
+    can. A corner-rounding arc reserves its own quadrant, not the full circle
+    it belongs to, which would inflate every rounded courtyard by its radius."""
+    from kiutils.items.common import Position
+    from kiutils.items.fpitems import FpArc
+    from silkscreen.kicad import _courtyard_extent
+
+    corner = math.sqrt(0.5)
+    arc = FpArc(
+        start=Position(X=1.0, Y=0.0), mid=Position(X=corner, Y=corner),
+        end=Position(X=0.0, Y=1.0), layer="F.CrtYd",
+    )
+    assert _courtyard_extent(_Graphics([arc])) == pytest.approx((0.0, 0.0, 1.0, 1.0))
+
+
+def test_collinear_arc_degrades_to_its_endpoints():
+    """Three points on a line have no circumcentre. The arc is a segment, and
+    must not be handed the enormous circle a near-zero determinant implies."""
+    from kiutils.items.common import Position
+    from kiutils.items.fpitems import FpArc
+    from silkscreen.kicad import _courtyard_extent
+
+    arc = FpArc(
+        start=Position(X=-1.0, Y=0.0), mid=Position(X=0.0, Y=0.0),
+        end=Position(X=1.0, Y=0.0), layer="F.CrtYd",
+    )
+    assert _courtyard_extent(_Graphics([arc])) == pytest.approx((-1.0, 0.0, 1.0, 0.0))
+
+
+def test_curved_courtyards_are_never_under_reserved():
+    """The property behind the arc cases above, over arbitrary sweeps and angles.
+
+    The truth here is a densely sampled arc rotated by hand, deliberately
+    without calling anything in ``kicad.py`` -- a check written in terms of the
+    code under test shares its blind spot. Both directions matter: an extent
+    that is even slightly small is a gap the solver will pack a neighbour into,
+    and one that is much too large silently inflates every board.
+    """
+    import random
+
+    from kiutils.items.common import Position
+    from kiutils.items.fpitems import FpArc
+    from silkscreen.kicad import _courtyard_extent
+
+    rng = random.Random(20260830)
+    for _ in range(60):
+        cx, cy = rng.uniform(-20.0, 20.0), rng.uniform(-20.0, 20.0)
+        radius = rng.uniform(0.1, 15.0)
+        base = rng.uniform(0.0, math.tau)
+        sweep = rng.choice([1, -1]) * rng.uniform(0.05, math.tau * 0.99)
+        angle = rng.choice([0.0, 17.5, 30.0, 45.0, 90.0, 180.0, -60.0])
+
+        def on_arc(t, cx=cx, cy=cy, radius=radius, base=base):
+            return cx + radius * math.cos(base + t), cy + radius * math.sin(base + t)
+
+        arc = FpArc(
+            start=Position(*on_arc(0.0)),
+            mid=Position(*on_arc(sweep / 2)),
+            end=Position(*on_arc(sweep)),
+            layer="F.CrtYd",
+        )
+        got = _courtyard_extent(_Graphics([arc]), angle)
+
+        # KiCad's angle turns a footprint counter-clockwise on a Y-down screen,
+        # so the board-frame image is a mathematical rotation by -angle.
+        rad = math.radians(-angle)
+        cos_a, sin_a = math.cos(rad), math.sin(rad)
+        xs, ys = [], []
+        for step in range(721):
+            x, y = on_arc(sweep * step / 720)
+            xs.append(x * cos_a - y * sin_a)
+            ys.append(x * sin_a + y * cos_a)
+        truth = (min(xs), min(ys), max(xs), max(ys))
+
+        assert got == pytest.approx(truth, abs=1e-3), (radius, sweep, angle)
+        assert got[0] <= truth[0] + 1e-9, ("left", radius, sweep, angle)
+        assert got[1] <= truth[1] + 1e-9, ("bottom", radius, sweep, angle)
+        assert got[2] >= truth[2] - 1e-9, ("right", radius, sweep, angle)
+        assert got[3] >= truth[3] - 1e-9, ("top", radius, sweep, angle)
 
 
 # --- Reference designators as identity ---------------------------------------
