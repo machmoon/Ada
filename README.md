@@ -29,7 +29,7 @@ Every stage is a real KiCad file you can open and inspect on its own, so you can
 where a design went wrong instead of only seeing the last artifact.
 
 ```
-374 passed — no network, no API key, no KiCad install
+412 passed — no network, no API key, no KiCad install
 ```
 
 ---
@@ -82,12 +82,12 @@ that consumes the file. Install it if you are a person who wants to see a board.
 |---|---|
 | `kicad.py` — `.kicad_pcb` read/write | **Working** · 28 tests |
 | `packing.py` — CP-SAT placer | **Working** · 43 tests |
-| `netlist.py` — validated circuit IR | **Working** · 15 tests |
-| `schematic.py` — `.kicad_sch` + `.kicad_pro` emission | **Working** |
-| `routing.py` — two-layer grid autorouter | **Working, partial by design** — see below |
+| `netlist.py` — validated circuit IR | **Working** · 18 tests |
+| `schematic.py` — `.kicad_sch` + `.kicad_pro` emission | **Working** · 20 tests · KiCad ERC clean |
+| `routing.py` — two-layer grid autorouter | **Working, partial by design** · 20 tests — see below |
 | `footprints.py` + `board.py` — land patterns, board emission | **Working** · 20 tests |
-| `agents/` — datasheet, propose, review, pipeline | **Working** · 31 tests |
-| `agents/adk/` — ADK dynamic-workflow driver for the pipeline | **Working** · 17 tests |
+| `agents/` — datasheet, propose, review, pipeline | **Working** · 34 tests |
+| `agents/adk/` — ADK dynamic-workflow driver for the pipeline | **Working** · 18 tests |
 | `agents/retrieval.py` — page-cited datasheet retrieval | **Working** · 15 tests |
 | `agents/resilience.py` — provider failover | **Working** · 14 tests |
 | `mcp/` — MCP server over stdio | **Working** · 23 tests |
@@ -252,7 +252,7 @@ treats the board file as the interface.
 | Requires KiCad running | Yes | **No** |
 | Headless / CI | Hard | **Native** |
 | Platform lock | KiCad's plugin loader | **None — pure Python** |
-| Testable without KiCad | No | **Yes, all 374 tests** |
+| Testable without KiCad | No | **Yes, all 412 tests** |
 
 ### What it reads
 
@@ -493,16 +493,20 @@ engine/
     netlist.py    validated circuit IR
     footprints.py parametric IPC-7351 land patterns
     board.py      emit a .kicad_pcb from a circuit
+    schematic.py  emit a .kicad_sch and the .kicad_pro that ties them
+    routing.py    two-layer A* copper router
     kicad.py      read/modify an existing .kicad_pcb via kiutils
+    ids.py        stable UUIDs, so two runs diff cleanly
     cli.py        python -m silkscreen "..."
     agents/       the only place a model call happens
       model.py      provider seam + scripted stand-in for tests
       datasheet.py  PDF -> structured facts, with page citations
       propose.py    intent -> circuit, with a bounded repair loop
       review.py     adversarial design review
+      stages.py     the six stage bodies, shared by both drivers
       pipeline.py   prompt -> PCB
       adk/          ADK dynamic workflow over the same stage bodies
-  tests/          374 tests — no network, no API keys, no KiCad
+  tests/          412 tests — no network, no API keys, no KiCad
     fixtures/     ref.kicad_pcb -- 11-footprint board fixture
 scripts/
   demo.py         end-to-end: read -> place -> write -> verify
@@ -582,10 +586,10 @@ docker build .                                      # the `docker` job
 
 ### Expected output
 
-**1. Test suite** — 374 tests, no warnings (four key-gated live-model tests skip unless `GOOGLE_API_KEY` is set):
+**1. Test suite** — 412 tests, no warnings (four key-gated live-model tests skip unless `GOOGLE_API_KEY` is set):
 
 ```
-374 passed in 190.85s
+412 passed in 190.85s
 ```
 
 The suite is dominated by the 20-second solver budget in a handful of placement
