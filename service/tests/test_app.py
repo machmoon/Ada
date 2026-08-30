@@ -595,21 +595,16 @@ def test_a_non_asset_file_is_not_cached_for_a_year(server, web_dist):
 # ------------------------------------------------------- request-level errors
 
 
-def test_a_non_numeric_time_limit_is_400(server):
+def test_a_non_numeric_time_limit_is_400_naming_the_field(server):
     """A time limit that is not a number is the caller's error, not a crash.
 
-    ``generate`` calls ``float(payload["time_limit_s"])`` unguarded, so the
-    ValueError float() raises is what produces the 400. That works, but the
-    message the caller gets is float()'s own -- it names the offending value
-    and not the field it came from, which is the one thing a caller needs in
-    order to fix the request. Pinned as-is rather than fixed here.
+    ``generate`` coerces the field itself and raises ValueError naming
+    ``time_limit_s``, which is the one thing a caller needs in order to fix
+    the request.
     """
     status, body = post(server, {"intent": "a regulator", "time_limit_s": "abc"})
     assert status == 400
-    assert "abc" in body["error"]
-    assert "time_limit_s" not in body["error"], (
-        "today's 400 does not name the field; change this assertion when it does"
-    )
+    assert "time_limit_s" in body["error"]
 
 
 def test_a_null_time_limit_is_400(server):
@@ -624,7 +619,28 @@ def test_a_null_time_limit_is_400(server):
     """
     status, body = post(server, {"intent": "a regulator", "time_limit_s": None})
     assert status == 400
+    assert "time_limit_s" in body["error"]
     assert "error_id" not in body, "a caller's bad value is not an incident"
+
+
+def test_an_internal_typeerror_is_still_a_500(monkeypatch, server):
+    """The 400 net stays narrow: only field-level failures are the caller's.
+
+    A TypeError from inside the pipeline (model output putting an object
+    where a number belongs, say) is our bug, and must keep its error_id and
+    logged traceback instead of leaking a raw internal message as a 400.
+    """
+    import service.app as app
+
+    def boom(*a, **kw):
+        raise TypeError("unsupported operand hidden deep in the pipeline")
+
+    monkeypatch.setattr(app, "generate_pcb", boom)
+    status, body = post(server, {"intent": "a regulator", "time_limit_s": 5})
+    assert status == 500
+    assert body["error"] == "internal error"
+    assert "error_id" in body
+    assert "unsupported operand" not in json.dumps(body)
 
 
 def post_without_content_length(srv, path="/generate"):

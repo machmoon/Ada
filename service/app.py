@@ -348,12 +348,21 @@ def generate(
             unusable.append(part)
             to_read[part] = datasheets[part]
 
+    # Coerce here, not in the route handler: float() raises TypeError on a
+    # JSON null and ValueError on a string, and both are this caller's error.
+    # Naming the field keeps the route's except clause narrow, so a genuine
+    # internal TypeError still surfaces as a 500 with an error id.
+    try:
+        time_limit_s = float(payload.get("time_limit_s", DEFAULT_TIME_LIMIT))
+    except (TypeError, ValueError):
+        raise ValueError("'time_limit_s' must be a number") from None
+
     result = generate_pcb(
         model,
         intent,
         datasheets=to_read,
         preloaded_facts=preloaded,
-        time_limit_s=float(payload.get("time_limit_s", DEFAULT_TIME_LIMIT)),
+        time_limit_s=time_limit_s,
         review=bool(payload.get("review", True)),
     )
 
@@ -616,12 +625,11 @@ class Handler(BaseHTTPRequestHandler):
                 pages_store=self.pages_store,
                 embedder_factory=self.embedder_factory,
             )
-        except (TypeError, ValueError) as exc:
-            # TypeError belongs here because a JSON null reaches float() as
-            # None: the value is the caller's, so the status should be too.
-            # It is a wider net than ValueError, and a genuine internal
-            # TypeError is answered as a 400 -- the trade the alternative
-            # makes, reporting a malformed field as a 500, is worse.
+        except ValueError as exc:
+            # Deliberately narrow: generate() converts field-level failures
+            # (including float(None)'s TypeError) into ValueError, so a
+            # TypeError arriving here is an internal bug and falls through to
+            # the 500 handler with its error id and logged traceback.
             self._send(400, {"error": str(exc)})
         except (AllProvidersFailed, GroundingError, ModelError) as exc:
             # Upstream is down, not the caller's fault: 502, not 500.
