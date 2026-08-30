@@ -65,8 +65,9 @@ FEATURES
  ----- Ops polish: client reuse, document env var      [OPEN]        USE_FIRESTORE undocumented today
  9   Web review UI                                     [PARTIAL]
  ----- Review page, served by the service at /         [DONE]        frontend/ Svelte SPA; same origin, so no CORS
+ ----- Schematic topology contract + SVG viewer        [DONE]        generic symbols; net-labelled validated pins
  ----- Board well (Option B), placements in the API    [DONE]        service resolves the geometry; SVG flips Y once
- ----- Findings cross-highlight, review <-> board      [DONE]        a selected finding lights up its parts
+ ----- Findings cross-highlight across all views       [DONE]        review, schematic and board share selection
  ----- Grounding toggle on the intent form             [DONE]        sends "ground" only when a datasheet is given
  ----- Download the emitted .kicad_pcb                 [DONE]        from the board well and the review results
  ----- In-app debug console + log export               [DONE]        console/window capture; text + NDJSON

@@ -52,8 +52,8 @@ that consumes the file. Install it if you are a person who wants to see a board.
 | `agents/retrieval.py` — page-cited datasheet retrieval | **Working** · 15 tests |
 | `agents/resilience.py` — provider failover | **Working** · 14 tests |
 | `mcp/` — MCP server over stdio | **Working** · 23 tests |
-| `service/` — Cloud Run + Firestore cache | **Working** · 81 tests |
-| `frontend/` — Svelte review UI, served by the service | **Working** · review and board tabs, with an in-app debug console for log export |
+| `service/` — Cloud Run + Firestore cache | **Working** · 82 tests |
+| `frontend/` — Svelte review UI, served by the service | **Working** · review, schematic and board tabs, with an in-app debug console for log export |
 | Overlay UI, guided cursor | Not built (mockups only) |
 
 ---
@@ -262,8 +262,9 @@ gcloud run deploy silkscreen --source . --region us-central1 \
 ```
 
 `POST /generate` with `{"intent": "...", "datasheets": {"PART": "url"}}` returns
-the board plus the emitted `.kicad_pcb`. Extracted datasheet facts persist to
-Firestore, so the second request for a part skips the most expensive stage.
+the board, the emitted `.kicad_pcb`, and a versioned `schematic` topology block
+with stable part ids, board refs, pins and structured net endpoints. Extracted
+datasheet facts persist to Firestore, so the second request for a part skips the most expensive stage.
 `GET /healthz` is the readiness probe. The container also serves the built review
 UI at `/`, same origin as `/generate`, so there is no CORS anywhere.
 
@@ -291,11 +292,14 @@ The UI has its own suite, which CI runs before the build:
 cd frontend && npm test  # Vitest over frontend/src/lib
 ```
 
-A run lands on the review, and the **Board** tab draws the board the placer
+A run lands on the review. The **Schematic** tab draws the validated circuit as
+generic IC and passive symbols with physical pin numbers and net-labelled
+connections; it deliberately does not claim to be a native `.kicad_sch` or a
+library-accurate symbol sheet. The **Board** tab draws the board the placer
 actually produced — courtyard outlines, copper pads, and part refs, straight
 from the `placements` the service returns. Selecting a finding highlights the
-parts it names on that board, and either pane will hand you the emitted
-`.kicad_pcb` as a download.
+parts it names in either drawing, and the board and review panes will hand you
+the emitted `.kicad_pcb` as a download.
 
 ### As an MCP server
 
