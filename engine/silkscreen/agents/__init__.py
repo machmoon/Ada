@@ -6,13 +6,20 @@ model call happens, and every stage checks the model rather than trusting it.
 """
 
 from .datasheet import PartFacts, read_datasheet
-from .model import Document, GeminiModel, Model, ModelError, ScriptedModel
+from .model import (
+    Document,
+    GeminiModel,
+    Model,
+    ModelError,
+    OpenCodeModel,
+    ScriptedModel,
+)
 from .pipeline import PipelineResult, generate_pcb
 from .propose import ProposalError, propose_circuit
 from .review import Finding, Severity, review_circuit
 
 __all__ = [
-    "Model", "GeminiModel", "ScriptedModel", "ModelError", "Document",
+    "Model", "GeminiModel", "OpenCodeModel", "ScriptedModel", "ModelError", "Document",
     "PartFacts", "read_datasheet",
     "propose_circuit", "ProposalError",
     "Finding", "Severity", "review_circuit",

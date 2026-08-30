@@ -185,6 +185,69 @@ KiCad install. The count is deliberately not quoted here — it drifts, and
 
 ---
 
+## PCB placement agent
+
+Open `/?mode=placement` on the service to run the focused hackathon demo. It
+starts from an intentionally damaged motor-controller placement, applies either
+the Compact Control or Thermal First company profile, and shows the exact
+geometry score before and after every accepted repair.
+
+The legality boundary is deterministic: board bounds, courtyard clearance,
+keepouts, and fixed parts. Company preferences are lower-priority terms for
+functional grouping, connector access, compactness, and thermal separation.
+Gemini can propose `PLACE` and `MOVE` actions, but it cannot override the
+verifier. The model-free policy remains available for reproducible demos.
+
+An engineer can reject a move and pin that component into the company profile.
+Cloud Run persists the correction through Firestore; offline runs use the same
+interface with an in-memory store. The repaired placement downloads as JSON.
+
+See [the placement-agent architecture](docs/placement-agent.md) for the precise
+agent, supervised fine-tuning, reinforcement learning, and verifier boundary.
+
+---
+
+## Install
+
+**1. Silkscreen itself** — Python 3.11+, no KiCad required:
+
+```bash
+git clone https://github.com/machmoon/silkscreen && cd silkscreen
+python3 -m venv .venv
+./.venv/bin/pip install -e ".[dev,agents]"
+```
+
+**2. Model access.** A Gemini key is the primary path and is required for native
+datasheet documents and Gemini embeddings. The local web service can use an
+authenticated OpenCode text model as a temporary final fallback.
+
+```bash
+cp .env.example .env      # then put your GOOGLE_API_KEY in it
+```
+
+For the text-only fallback used by the local demo:
+
+```bash
+echo 'OPENCODE_FALLBACK_MODEL=opencode-go/glm-5.3-flash' >> .env
+```
+
+This fallback is reported as GLM in the build receipt. It is not Gemini and it
+does not handle datasheet documents or semantic retrieval.
+
+**3. KiCad** — recommended, so you can open the result:
+
+| Platform | Command |
+|---|---|
+| macOS | `brew install --cask kicad` |
+| Windows | `winget install KiCad.KiCad` |
+| Debian/Ubuntu | `sudo add-apt-repository ppa:kicad/kicad-8.0-releases && sudo apt install kicad` |
+| Fedora / any Linux | `flatpak install flathub org.kicad.KiCad` |
+
+Or download from [kicad.org/download](https://www.kicad.org/download/). Then open the
+output with **File → Open** in the PCB Editor, or `pcbnew placed.kicad_pcb`.
+
+---
+
 ## Prompt to PCB
 
 ```bash

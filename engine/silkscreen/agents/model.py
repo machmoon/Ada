@@ -11,12 +11,15 @@ from __future__ import annotations
 import json
 import os
 import re
+import subprocess
+import tempfile
 from dataclasses import dataclass, field
 from typing import Any, Protocol
 
 __all__ = [
     "Model",
     "GeminiModel",
+    "OpenCodeModel",
     "ScriptedModel",
     "ModelError",
     "Document",
@@ -117,7 +120,11 @@ class GeminiModel:
                 "google-genai is not installed. pip install google-genai"
             ) from exc
 
-        key = api_key or os.getenv("GOOGLE_API_KEY")
+        key = (
+            api_key
+            or os.getenv("GOOGLE_API_KEY")
+            or os.getenv("GEMINI_API_KEY")
+        )
         if not key:
             raise ModelError(
                 "GOOGLE_API_KEY is not set. Copy .env.example to .env and fill it in."
@@ -172,6 +179,90 @@ class GeminiModel:
         if not text:
             raise ModelError(f"{self.model} returned an empty response")
         return text
+
+
+class OpenCodeModel:
+    """Text-only fallback through an existing authenticated OpenCode provider."""
+
+    def __init__(
+        self,
+        model: str,
+        *,
+        executable: str = "opencode",
+        timeout_s: float = 120.0,
+    ):
+        if not model.strip():
+            raise ValueError("OpenCode model must not be empty")
+        self.model = model.strip()
+        self.executable = executable
+        self.timeout_s = timeout_s
+
+    @staticmethod
+    def _response_text(stdout: str) -> str:
+        chunks: list[str] = []
+        for line in stdout.splitlines():
+            try:
+                event = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if event.get("type") != "text":
+                continue
+            text = event.get("part", {}).get("text")
+            if isinstance(text, str):
+                chunks.append(text)
+        answer = "".join(chunks).strip()
+        if not answer:
+            raise ModelError("OpenCode returned no text event")
+        return answer
+
+    def generate(
+        self,
+        prompt: str,
+        *,
+        documents: list[Document] | None = None,
+        system: str | None = None,
+        temperature: float = 0.0,
+        max_output_tokens: int = 8192,
+    ) -> str:
+        del temperature, max_output_tokens
+        if documents:
+            raise ModelError(
+                "OpenCode fallback is text-only; direct Gemini is required "
+                "for datasheet documents"
+            )
+        message = prompt if not system else f"{system}\n\n{prompt}"
+        message += (
+            "\n\nReturn only the requested answer. Do not call tools or modify files."
+        )
+        with tempfile.TemporaryDirectory(prefix="silkscreen-opencode-") as run_dir:
+            command = [
+                self.executable,
+                "run",
+                "--pure",
+                "--model",
+                self.model,
+                "--format",
+                "json",
+                "--dir",
+                run_dir,
+                "--title",
+                "silkscreen-fallback",
+                message,
+            ]
+            try:
+                completed = subprocess.run(
+                    command,
+                    capture_output=True,
+                    text=True,
+                    timeout=self.timeout_s,
+                    check=False,
+                )
+            except (OSError, subprocess.TimeoutExpired) as exc:
+                raise ModelError(f"OpenCode call failed: {exc}") from exc
+        if completed.returncode != 0:
+            detail = completed.stderr.strip()[-500:] or "unknown CLI error"
+            raise ModelError(f"OpenCode exited {completed.returncode}: {detail}")
+        return self._response_text(completed.stdout)
 
 
 @dataclass

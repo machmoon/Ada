@@ -52,7 +52,7 @@ from silkscreen.agents.grounding import (  # noqa: E402
     pages_for_part,
     store_pages,
 )
-from silkscreen.agents.model import GeminiModel  # noqa: E402
+from silkscreen.agents.model import GeminiModel, OpenCodeModel  # noqa: E402
 from silkscreen.agents.resilience import (  # noqa: E402
     AllProvidersFailed,
     FallbackModel,
@@ -496,19 +496,33 @@ def build_embedder() -> BatchingEmbedder:
 
 
 def build_model():
-    """Primary Gemini model with a cheaper tier behind it.
+    """Primary Gemini model, then an explicitly configured OpenCode fallback.
 
-    Two tiers, not one: a rate limit or a transient 5xx on the primary should
-    degrade the answer, not lose the request.
+    The OpenCode path is text-only and never presented as Gemini.
     """
     from silkscreen.agents.model import CHEAP_MODEL, DEFAULT_MODEL
 
-    return FallbackModel(
-        providers=[
+    providers: list[Provider] = []
+    if os.getenv("GOOGLE_API_KEY") or os.getenv("GEMINI_API_KEY"):
+        providers.extend([
             Provider("gemini-primary", GeminiModel(DEFAULT_MODEL), attempts=2),
             Provider("gemini-cheap", GeminiModel(CHEAP_MODEL), attempts=2),
-        ]
-    )
+        ])
+    fallback = os.getenv("OPENCODE_FALLBACK_MODEL", "").strip()
+    if fallback:
+        timeout_s = float(os.getenv("OPENCODE_FALLBACK_TIMEOUT_S", "300"))
+        providers.append(
+            Provider(
+                f"opencode-{fallback.rsplit('/', 1)[-1]}",
+                OpenCodeModel(fallback, timeout_s=timeout_s),
+                attempts=1,
+            )
+        )
+    if not providers:
+        raise ModelError(
+            "GOOGLE_API_KEY is not set and OPENCODE_FALLBACK_MODEL is not configured"
+        )
+    return FallbackModel(providers=providers)
 
 
 def run_chat_orchestrator(**kwargs):
