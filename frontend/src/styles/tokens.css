@@ -26,17 +26,20 @@
   --rule: light-dark(#C7BCAE, #45423C);
   --rule-soft: light-dark(#DED4C6, #37352F);
 
-  /* the board well, from design/Board.dc.html. It is a dark well in both
-     themes — the board is the board — so none of these turn over at night. */
-  --well-bg: #101B29;
-  --well-text: #6F8198;
-  --board-fill: #19344F;
-  --board-grid-dot: #747C83;
-  --board-edge-cuts: #B7BCB8;
-  --board-courtyard: #D359B8;
-  --board-silkscreen: #DDD7A4;
-  --board-copper-top: #B84B45;
-  --board-copper-bottom: #5A7FB3;
+  /* The PCB is a pale drafting object by day and a deep KiCad-like canvas at
+     night. Every layer changes together so the board belongs to the theme. */
+  --well-bg: light-dark(#D9D4C8, #101B29);
+  --well-text: light-dark(#52616D, #6F8198);
+  --board-fill: light-dark(#9FB9C4, #19344F);
+  --board-grid-dot: light-dark(#6E7778, #747C83);
+  --board-edge-cuts: light-dark(#3E4A52, #B7BCB8);
+  --board-courtyard: light-dark(#8C2F72, #D359B8);
+  --board-silkscreen: light-dark(#2F2B16, #DDD7A4);
+  --board-copper-top: light-dark(#A84640, #B84B45);
+  --board-copper-bottom: light-dark(#4B6F9E, #5A7FB3);
+  --board-component-fill: light-dark(rgba(168, 70, 64, .58), rgba(184, 75, 69, .55));
+  --board-power-fill: light-dark(rgba(75, 108, 151, .62), rgba(90, 127, 179, .7));
+  --board-keepout-fill: light-dark(rgba(34, 40, 43, .08), rgba(255, 255, 255, .08));
 
   /* the guided pointer (docs/guided-cursor.md §5). The halo lands on the
      paper chrome and on the always-dark board well alike, so it cannot come

@@ -57,9 +57,9 @@
   .well { padding: 12px; background: var(--well-bg); }
   svg { display: block; width: 100%; max-height: 360px; }
   .edge { fill: var(--board-fill); stroke: var(--board-edge-cuts); stroke-width: .35; }
-  g rect { fill: rgba(200, 52, 52, .55); stroke: var(--board-courtyard); stroke-width: .28; }
-  g rect.power { fill: rgba(77, 127, 196, .7); }
+  g rect { fill: var(--board-component-fill); stroke: var(--board-courtyard); stroke-width: .28; }
+  g rect.power { fill: var(--board-power-fill); }
   g rect.fixed { stroke: var(--board-silkscreen); stroke-width: .5; }
   text { fill: var(--board-silkscreen); font: 1.8px var(--font-mono); text-anchor: middle; dominant-baseline: middle; transform-box: fill-box; }
-  .keepout { fill: rgba(255, 255, 255, .08); stroke: var(--board-grid-dot); stroke-width: .25; stroke-dasharray: 1 1; }
+  .keepout { fill: var(--board-keepout-fill); stroke: var(--board-grid-dot); stroke-width: .25; stroke-dasharray: 1 1; }
 </style>
