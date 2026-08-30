@@ -109,9 +109,23 @@ class Runner:
     def handle(
         self, command: Command, *, channel: str, thread_ts: str, user: str = ""
     ) -> None:
-        """Execute one command, reporting everything into its thread."""
+        """Execute one command, reporting everything into its thread.
+
+        ``thread_ts`` is empty for a slash command, which has no message to
+        thread under. A design run makes its own anchor and threads beneath it
+        (see :meth:`_run_design`); a follow-up verb cannot, because "the last
+        run in this channel" is not a thing a second person's `order` should
+        silently resolve to. So those are refused with an explanation rather
+        than answered from the wrong board.
+        """
         key: ThreadKey = (channel, thread_ts)
         try:
+            if not thread_ts and command.needs_prior_run():
+                raise CommandError(
+                    f"`{command.verb}` works on the run in its own thread, so "
+                    "run it as a reply in the thread of a design run rather "
+                    "than as a slash command."
+                )
             if command.verb == "help":
                 self._post(channel, thread_ts, "silkscreen help", B.help_blocks(HELP))
             elif command.verb in ("design", "place"):
@@ -182,6 +196,15 @@ class Runner:
             f"silkscreen: working on “{command.intent[:120]}”",
             B.accepted_blocks(command.intent, user),
         )
+        if not thread_ts:
+            # A slash command had nothing to thread under, so this first
+            # message becomes the anchor and the run hangs off it. Without
+            # this every slash-command run in a channel shares the key
+            # ``(channel, "")``, and a later `review` or `order` would act on
+            # whichever run happened to finish last -- a different person's
+            # board, reported as though it were yours.
+            thread_ts = progress_ts
+            key = (channel, thread_ts)
         tracker = _Progress(
             self._client, channel, progress_ts, command.intent, started
         )
@@ -324,7 +347,7 @@ class Runner:
             channel,
             filename,
             content,
-            thread_ts=thread_ts,
+            thread_ts=thread_ts or None,
             initial_comment=comment,
         )
 
@@ -335,8 +358,10 @@ class Runner:
         text: str,
         blocks: list[dict[str, Any]] | None = None,
     ) -> str:
+        # An empty thread_ts means "no thread", and Slack rejects the empty
+        # string where it accepts an absent field.
         return self._client.post_message(
-            channel, text, thread_ts=thread_ts, blocks=blocks
+            channel, text, thread_ts=thread_ts or None, blocks=blocks
         )
 
     def _report_failure(self, channel: str, thread_ts: str, exc: Exception) -> None:

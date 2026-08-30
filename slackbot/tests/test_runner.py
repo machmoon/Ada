@@ -268,3 +268,46 @@ def test_run_store_is_bounded():
         )
     assert store.get(("C1", "0")) is None
     assert store.get(("C1", "3")) is not None
+
+
+# -- slash commands, which arrive with no thread to reply in ---------------
+
+
+def test_a_slash_run_anchors_its_own_thread(setup, monkeypatch):
+    """Greptile P1 on PR #13.
+
+    A slash command has no message to thread under, so every run in a channel
+    was stored under the key ``(channel, "")`` and posted with an empty
+    thread_ts. Two people running one in the same channel then shared a run
+    record, and a later `order` could describe someone else's board.
+    """
+    transport, runner = setup
+    install_pipeline(monkeypatch, fake_result())
+    runner.handle(parse_command("design a rail"), channel="C1", thread_ts="")
+
+    calls = transport.calls("chat.postMessage")
+    # The first message is the anchor: top-level, with no thread_ts at all.
+    assert "thread_ts" not in calls[0]
+    # Everything after it hangs off that anchor's ts, not off "".
+    anchor = "1700000000.000100"
+    assert [c.get("thread_ts") for c in calls[1:]] == [anchor] * (len(calls) - 1)
+    for call in transport.calls("files.completeUploadExternal"):
+        assert call["thread_ts"] == anchor
+
+
+def test_two_slash_runs_in_one_channel_do_not_share_a_record(setup, monkeypatch):
+    transport, runner = setup
+    install_pipeline(monkeypatch, fake_result())
+    runner.handle(parse_command("design a rail"), channel="C1", thread_ts="")
+    # The stored key is the anchor's ts, never the empty string.
+    assert runner._store.get(("C1", "")) is None
+    assert runner._store.get(("C1", "1700000000.000100")) is not None
+
+
+def test_follow_up_verbs_are_refused_outside_a_thread(setup):
+    """`order` as a slash command has no run it could honestly refer to."""
+    transport, runner = setup
+    runner.handle(Command(verb="order"), channel="C1", thread_ts="")
+    messages = posted(transport)
+    assert "in the thread of a design run" in messages
+    assert "Fabrication order" not in messages

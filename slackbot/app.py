@@ -39,6 +39,15 @@ __all__ = ["Dispatcher", "make_handler", "make_server", "main", "MAX_BODY_BYTES"
 log = logging.getLogger("slackbot.app")
 
 MAX_BODY_BYTES = 1 << 20
+#: How much of an over-length body is read before the connection is closed.
+#: Sized so a client that merely overshot the limit still reads its 413, while
+#: a body declared as gigabytes is cut off. Bounded is the property that
+#: matters: with this and the socket timeout, one connection costs an attacker
+#: at least as much as it costs us.
+MAX_DRAIN_BYTES = 2 * MAX_BODY_BYTES
+#: Socket timeout for one request. Slack's own delivery timeout is three
+#: seconds, so nothing legitimate is anywhere near this.
+SOCKET_TIMEOUT_S = 15.0
 #: How long a queued run waits for a slot before the channel is told the bot is
 #: busy. Long enough to absorb one run ahead of it, short enough that nobody
 #: sits watching a thread that will never answer.
@@ -205,6 +214,11 @@ def make_handler(dispatcher: Dispatcher) -> type[BaseHTTPRequestHandler]:
     class Handler(BaseHTTPRequestHandler):
         protocol_version = "HTTP/1.1"
         server_version = "silkscreen-slack"
+        #: Applied to the socket by ``StreamRequestHandler.setup``. Without it
+        #: an unauthenticated client that opens a connection and then sends its
+        #: body one byte at a time holds a handler thread indefinitely; this
+        #: server is thread-per-connection, so that is a way to exhaust it.
+        timeout = SOCKET_TIMEOUT_S
 
         # -- plumbing ----------------------------------------------------
 
@@ -228,10 +242,15 @@ def make_handler(dispatcher: Dispatcher) -> type[BaseHTTPRequestHandler]:
                 self._send(400, "bad Content-Length")
                 return None
             if length > MAX_BODY_BYTES:
-                # Drain before answering. Replying to a keep-alive request
-                # whose body is still in flight makes the client see a reset
-                # connection instead of the 413 explaining what went wrong.
-                self._drain(length)
+                # Drain a little before answering, so a well-behaved client
+                # gets the 413 explaining itself rather than a reset socket.
+                # Bounded, though: this happens before authentication, and
+                # reading a declared 10 GB from an unauthenticated client
+                # would hand it a handler thread for as long as it cared to
+                # dribble bytes. Past the bound the connection is closed
+                # instead, which is the only safe answer to a body we are
+                # never going to read.
+                self._drain(min(length, MAX_DRAIN_BYTES))
                 self.close_connection = True
                 self._send(413, "body too large")
                 return None

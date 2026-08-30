@@ -7,6 +7,7 @@ silently added to the service's count.
 
 from __future__ import annotations
 
+import io
 import json
 import threading
 import time
@@ -267,3 +268,55 @@ def test_make_server_binds(monkeypatch):
         assert httpd.server_port > 0
     finally:
         httpd.server_close()
+
+
+class _CountingReader(io.RawIOBase):
+    """An endless body, counting what the server actually consumed."""
+
+    def __init__(self):
+        self.consumed = 0
+
+    def read(self, size=-1):
+        size = 64 << 10 if size is None or size < 0 else size
+        self.consumed += size
+        return b"x" * size
+
+    def readable(self):
+        return True
+
+
+def test_an_oversized_body_is_not_read_in_full():
+    """Greptile P1 on PR #13.
+
+    Draining a declared body before authenticating it let an unauthenticated
+    client hold a handler thread for as long as it cared to send bytes, on a
+    thread-per-connection server. The read is bounded now, so a body declared
+    as 64 MB costs a bounded prefix and then the connection.
+    """
+    from slackbot.app import MAX_BODY_BYTES, MAX_DRAIN_BYTES
+
+    handler = make_handler(Dispatcher(CONFIG, FakeRunner())).__new__(
+        make_handler(Dispatcher(CONFIG, FakeRunner()))
+    )
+    reader = _CountingReader()
+    handler.rfile = reader
+    handler.headers = {"Content-Length": str(64 << 20)}
+    handler.close_connection = False
+    sent: list[int] = []
+    handler._send = lambda code, payload="", content_type="": sent.append(code)
+
+    assert handler._read_body() is None
+    assert sent == [413]
+    assert handler.close_connection is True
+    assert reader.consumed <= MAX_DRAIN_BYTES
+    # Bounded, and still generous enough that a client which merely overshot
+    # the limit reads its 413 instead of seeing a reset socket.
+    assert MAX_DRAIN_BYTES >= MAX_BODY_BYTES
+
+
+def test_the_handler_sets_a_socket_timeout():
+    """A slow client must not be able to hold a thread indefinitely."""
+    from slackbot.app import SOCKET_TIMEOUT_S
+
+    handler = make_handler(Dispatcher(CONFIG, FakeRunner()))
+    assert handler.timeout == SOCKET_TIMEOUT_S
