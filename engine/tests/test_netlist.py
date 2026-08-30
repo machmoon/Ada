@@ -195,3 +195,42 @@ def test_rejects_two_pin_names_on_one_pin_number():
     # itself an error, so nothing else here should fire.
     assert [e for e in exc.value.errors if "pin number '1'" in e]
     assert len(exc.value.errors) == 1
+
+
+def test_a_pin_number_has_one_spelling():
+    """``"01"`` and ``"1"`` are the same physical pin, so they parse the same.
+
+    A model that reads a pin number off two different lines of a datasheet
+    writes it two ways, and the two consumers disagreed about which one was
+    real: the schematic keyed its nets on whatever string it was handed, while
+    the board looked the pad up by exact number, found nothing, and emitted the
+    pad with no net at all. Neither raised.
+    """
+    data = _good_spec_dict()
+    data["devices"]["U1"]["pins"]["VDD"] = " 01 "
+    spec = parse_circuit_spec(data)
+    device = next(d for d in spec.devices if d.name == "U1")
+    assert device.pins["VDD"] == "1"
+
+
+def test_a_non_numeric_pin_number_is_left_alone():
+    """BGA numbers are ``"A1"``, not integers, and rewriting them would lie."""
+    data = _good_spec_dict()
+    data["devices"]["U1"]["pins"]["VDD"] = "A1"
+    spec = parse_circuit_spec(data)
+    device = next(d for d in spec.devices if d.name == "U1")
+    assert device.pins["VDD"] == "A1"
+
+
+def test_two_spellings_of_one_pin_number_are_still_two_names_on_one_pin():
+    """The alias must not be a way around the duplicate-number rule.
+
+    This is the case that made the normalisation worth doing: without it the
+    exact-string comparison sees ``"1"`` and ``"01"`` as different pins and
+    lets the spec through, and the ambiguity resurfaces as a missing net.
+    """
+    data = _good_spec_dict()
+    data["devices"]["U1"]["pins"]["VDDA"] = "01"  # VDD is already pin "1"
+    with pytest.raises(ValidationError) as exc:
+        parse_circuit_spec(data)
+    assert [e for e in exc.value.errors if "pin number '1'" in e]

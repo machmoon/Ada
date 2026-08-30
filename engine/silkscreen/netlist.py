@@ -75,6 +75,25 @@ class Passive:
         return _REF_PREFIX[self.type.value]
 
 
+def normalise_pin_number(value: object) -> str:
+    """One spelling per physical pin.
+
+    A model writes the same pin as ``"1"``, ``"01"`` or ``" 1 "`` from one line
+    of a datasheet to the next, and every one of those reaches a different
+    consumer: the schematic keys its nets on the string it was handed, while
+    the board looks the pad up by exact number and silently finds nothing.
+    Collapsing numeric spellings here means the ambiguity is gone before
+    validation runs, so the duplicate-number rule below sees the aliases as
+    the one pin they are. Non-numeric numbers (BGA ``"A1"``) keep their text.
+    """
+    text = str(value).strip()
+    # ``isdecimal`` rather than ``int``, which also accepts ``"+1"`` and
+    # ``"1_0"`` -- neither is a pin number, and quietly rewriting them would
+    # hide a malformed spec instead of letting validation see it. Not
+    # ``isdigit`` either: that is true of superscripts, which ``int`` rejects.
+    return str(int(text)) if text.isdecimal() else text
+
+
 @dataclass(frozen=True)
 class Device:
     """A main IC.
@@ -328,7 +347,7 @@ def parse_circuit_spec(raw: str | dict) -> CircuitSpec:
         devices.append(
             Device(
                 name=name,
-                pins={str(k): str(v) for k, v in spec["pins"].items()},
+                pins={str(k): normalise_pin_number(v) for k, v in spec["pins"].items()},
                 symbol=spec.get("symbol"),
             )
         )
