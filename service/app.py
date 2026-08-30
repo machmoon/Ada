@@ -142,6 +142,76 @@ def _refs_by_spec_name(spec, board) -> dict[str, str]:
     return {name: part.ref for name, part in zip(names, parts, strict=True)}
 
 
+def _schematic_dict(spec, refs: dict[str, str]) -> dict[str, Any]:
+    """The validated circuit topology in a renderer-sized wire format.
+
+    ``CircuitSpec`` is deliberately an engine object, not an HTTP contract.
+    Sending its dataclass fields directly would make the browser understand
+    enums, tuples and the endpoint mini-language.  Resolve those here instead:
+    every part has one stable spec id and its board reference, and every net
+    endpoint names both the logical pin and its physical number.
+
+    Geometry is absent on purpose.  The service owns electrical truth; a view
+    owns layout.  Versioning the block lets a later renderer add richer symbol
+    metadata without guessing which shape it received.
+    """
+    devices = {device.name: device for device in spec.devices}
+    passives = {passive.name: passive for passive in spec.passives}
+
+    parts: list[dict[str, Any]] = []
+    for device in spec.devices:
+        parts.append(
+            {
+                "id": device.name,
+                "ref": refs.get(device.name),
+                "kind": "device",
+                "value": device.name,
+                "symbol": device.symbol,
+                "pins": [
+                    {"name": name, "number": number}
+                    for name, number in device.pins.items()
+                ],
+            }
+        )
+    for passive in spec.passives:
+        parts.append(
+            {
+                "id": passive.name,
+                "ref": refs.get(passive.name),
+                "kind": passive.type.value,
+                "value": passive.value,
+                "symbol": None,
+                "pins": [
+                    {"name": "1", "number": "1"},
+                    {"name": "2", "number": "2"},
+                ],
+            }
+        )
+
+    nets: list[dict[str, Any]] = []
+    for connection in spec.connections:
+        endpoints: list[dict[str, Any]] = []
+        for raw in connection.endpoints:
+            part_id, _, pin = raw.rpartition(".")
+            device = devices.get(part_id)
+            number = device.pins.get(pin) if device is not None else pin
+            # The spec was validated before this point, so the only other
+            # legitimate endpoint owner is a declared two-terminal passive.
+            if device is None and part_id not in passives:
+                continue
+            endpoints.append(
+                {
+                    "part_id": part_id,
+                    "ref": refs.get(part_id),
+                    "pin": pin,
+                    "number": number,
+                }
+            )
+        nets.append({"name": connection.net, "endpoints": endpoints})
+
+    return {"version": 1, "parts": parts, "nets": nets}
+
+
 def _finding_dict(finding, refs: dict[str, str] | None = None) -> dict[str, Any]:
     """One review finding, whole.
 
@@ -535,6 +605,9 @@ def generate(
         # Geometry, resolved server-side. Additive: nothing above changes
         # shape, so a client that only reads "parts" keeps working.
         "placements": _placements_dict(board),
+        # Electrical topology, separate from physical placement.  The browser
+        # lays this out as a schematic without having to parse CircuitSpec.
+        "schematic": _schematic_dict(result.spec, refs),
         "wirelength_mm": (
             None
             if board.wirelength_nm is None

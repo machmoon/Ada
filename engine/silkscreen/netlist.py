@@ -75,6 +75,25 @@ class Passive:
         return _REF_PREFIX[self.type.value]
 
 
+def normalise_pin_number(value: object) -> str:
+    """One spelling per physical pin.
+
+    A model writes the same pin as ``"1"``, ``"01"`` or ``" 1 "`` from one line
+    of a datasheet to the next, and every one of those reaches a different
+    consumer: the schematic keys its nets on the string it was handed, while
+    the board looks the pad up by exact number and silently finds nothing.
+    Collapsing numeric spellings here means the ambiguity is gone before
+    validation runs, so the duplicate-number rule below sees the aliases as
+    the one pin they are. Non-numeric numbers (BGA ``"A1"``) keep their text.
+    """
+    text = str(value).strip()
+    # ``isdecimal`` rather than ``int``, which also accepts ``"+1"`` and
+    # ``"1_0"`` -- neither is a pin number, and quietly rewriting them would
+    # hide a malformed spec instead of letting validation see it. Not
+    # ``isdigit`` either: that is true of superscripts, which ``int`` rejects.
+    return str(int(text)) if text.isdecimal() else text
+
+
 @dataclass(frozen=True)
 class Device:
     """A main IC.
@@ -185,6 +204,43 @@ class CircuitSpec:
                         f"part {part!r}"
                     )
 
+        # One physical pin, one net. Two nets sharing a pin are electrically
+        # one net, so every consumer downstream has to guess which name wins:
+        # nets_of() keeps the last, the schematic's labels disagree with each
+        # other, and the board's pad-to-net map takes a third answer. Nothing
+        # raises and the two files describe different circuits. Caught here so
+        # the repair loop sends it back to the model, which is the only place
+        # that knows which net was meant.
+        pin_nets: dict[str, list[str]] = {}
+        for conn in self.connections:
+            for ep in conn.endpoints:
+                nets = pin_nets.setdefault(ep, [])
+                if conn.net not in nets:
+                    nets.append(conn.net)
+        for ep, nets in pin_nets.items():
+            if len(nets) > 1:
+                errors.append(
+                    f"pin {ep!r} is on {len(nets)} nets ({', '.join(sorted(nets))}); "
+                    f"a pin joins exactly one net -- if these are the same node, "
+                    f"merge them into one net"
+                )
+
+        # Two pin names on one pin number is the same ambiguity one level down:
+        # the number is what reaches the footprint and the symbol, so the
+        # second name silently overwrites the first and one specified
+        # connection disappears from both files.
+        for dev in self.devices:
+            by_number: dict[str, list[str]] = {}
+            for pin_name, number in dev.pins.items():
+                by_number.setdefault(str(number), []).append(pin_name)
+            for number, names in by_number.items():
+                if len(names) > 1:
+                    errors.append(
+                        f"device {dev.name!r} maps {len(names)} pin names "
+                        f"({', '.join(sorted(names))}) to pin number {number!r}; "
+                        f"each pin number names one physical pin"
+                    )
+
         # A passive wired on only one leg is almost always a model error, and
         # the original silently emitted these as floating parts.
         for passive in self.passives:
@@ -203,6 +259,40 @@ class CircuitSpec:
 
         if errors:
             raise ValidationError(errors)
+
+    def assign_refs(self) -> dict[str, str]:
+        """Map each part's spec name to its reference designator.
+
+        The schematic and the board must agree on what ``C3`` is, or the two
+        files describe different circuits while both looking plausible. Both
+        emitters call this rather than numbering parts themselves, so the
+        mapping is defined once: devices first as ``U1..Un`` in spec order,
+        then passives in spec order, each counted per prefix.
+        """
+        counters: dict[str, int] = {}
+
+        def next_ref(prefix: str) -> str:
+            counters[prefix] = counters.get(prefix, 0) + 1
+            return f"{prefix}{counters[prefix]}"
+
+        refs = {device.name: next_ref("U") for device in self.devices}
+        for passive in self.passives:
+            refs[passive.name] = next_ref(passive.ref_prefix)
+        return refs
+
+    def nets_of(self, part_name: str) -> dict[str, str]:
+        """``{pin_name: net}`` for one part, from the connection list.
+
+        A pin absent from every net is absent from the mapping: an unconnected
+        pin and a pin tied to a net named ``""`` are different circuits.
+        """
+        found: dict[str, str] = {}
+        for conn in self.connections:
+            for endpoint in conn.endpoints:
+                part, _, pin = endpoint.rpartition(".")
+                if part == part_name:
+                    found[pin] = conn.net
+        return found
 
     def part_count(self) -> int:
         return len(self.devices) + len(self.passives)
@@ -257,7 +347,7 @@ def parse_circuit_spec(raw: str | dict) -> CircuitSpec:
         devices.append(
             Device(
                 name=name,
-                pins={str(k): str(v) for k, v in spec["pins"].items()},
+                pins={str(k): normalise_pin_number(v) for k, v in spec["pins"].items()},
                 symbol=spec.get("symbol"),
             )
         )

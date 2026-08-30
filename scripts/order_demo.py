@@ -17,11 +17,10 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "engine"))
 
-from silkscreen.board import build_board  # noqa: E402
+from silkscreen.board import build_board, route_board  # noqa: E402
 from silkscreen.fab import fab_files  # noqa: E402
 from silkscreen.netlist import parse_circuit_spec  # noqa: E402
 from silkscreen.order import OrderOptions, order_manifest, preflight  # noqa: E402
-from silkscreen.route import route_board  # noqa: E402
 
 #: A 3.3 V LDO with input and output bulk capacitors -- the same circuit the
 #: live pipeline produces from a plain-language prompt. Note that Device.pins
@@ -68,22 +67,19 @@ def main() -> int:
     show(before)
 
     rule("3. Route it")
-    routes = route_board(board, time_limit_s=25.0)
-    print(f"  status: {routes.status}   routed: {', '.join(routes.routed_nets)}")
-    print(
-        f"  {len(routes.segments)} segments,"
-        f" {routes.total_length_nm / 1e6:.1f} mm of copper"
-    )
-    for warning in routes.warnings:
-        print(f"  warning: {warning}")
+    route_board(board)
+    print(f"  routed: {', '.join(board.routed_nets) or 'nothing'}")
+    print(f"  {len(board.tracks)} tracks, {len(board.vias)} vias")
+    for net, why in sorted(board.unrouted_nets.items()):
+        print(f"  unrouted: {net} -- {why}")
 
     rule("4. Try again, routed")
-    after = preflight(board, spec=spec, options=options, routes=routes)
+    after = preflight(board, spec=spec, options=options)
     print(f"  ORDERABLE: {after.orderable}")
     show(after)
 
     rule("5. The fab package")
-    files = fab_files(board, routes=routes)
+    files = fab_files(board)
     for layer in files:
         print(f"  {layer.filename:32s} {len(layer.content):6d} bytes")
     manifest = order_manifest(board, options, after)

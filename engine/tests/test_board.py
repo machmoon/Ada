@@ -203,15 +203,24 @@ def test_part_name_containing_a_dot_is_handled():
     """Regression: 'AMS1117-3.3' split on the first dot, losing the part."""
     spec = parse_circuit_spec({
         "devices": {"LM317-2.5": {"pins": {"ADJ": "1", "OUT": "2", "IN": "3"}}},
-        "passives": {"c1": {"type": "capacitor", "value": "10uF"}},
+        "passives": {
+            "c1": {"type": "capacitor", "value": "10uF"},
+            "c2": {"type": "capacitor", "value": "22uF"},
+        },
+        # ADJ was on GND and VOUT both, which validation now rejects: a pin
+        # joins exactly one net. Nothing about the dot-in-a-name regression
+        # needed it, so it goes on GND alone and c2 gives VOUT its second
+        # endpoint.
         "nets": {
             "VIN": ["LM317-2.5.IN", "c1.1"],
-            "GND": ["LM317-2.5.ADJ", "c1.2"],
-            "VOUT": ["LM317-2.5.OUT", "LM317-2.5.ADJ"],
+            "GND": ["LM317-2.5.ADJ", "c1.2", "c2.2"],
+            "VOUT": ["LM317-2.5.OUT", "c2.1"],
         },
     })
     board = build_board(spec, time_limit_s=10.0)
-    assert len(board.parts) == 2
+    # By ref, not by count: the claim is that the dotted part survived at all.
+    assert "U1" in {p.ref for p in board.parts}
+    assert [p.value for p in board.parts if p.ref == "U1"] == ["LM317-2.5"]
 
 
 def test_unknown_pin_count_refuses_rather_than_guessing():

@@ -93,15 +93,37 @@ rather than `OPTIMAL` because that is what the solver proved in 20 s. The run is
 reproducible at `workers=1`.
 
 **5. Write a real file. [built]**
-Silkscreen reads and writes `.kicad_pcb` directly. No KiCad installation, no `pcbnew`
+Silkscreen reads and writes KiCad files directly. No KiCad installation, no `pcbnew`
 DLLs, no platform lock, and — emphatically — no controlling the user's mouse. It runs
 identically on macOS, Linux, and Windows, which is the difference between a demo and a
 tool.
 
-**6. Review it, and say why. [not yet built]**
+A run leaves a whole project, one file per stage: the `.kicad_pro`, the `.kicad_sch`
+schematic, the placed board before any copper, and the routed board. Symbols and
+footprints are both generated and embedded, so the project opens on a machine with no
+KiCad libraries installed and cannot silently resolve to a different part than the one
+it was drawn for. The schematic and the board number parts from one shared call, so
+`C3` on the drawing is `C3` on the board — numbered separately, the two files would each
+be self-consistent and describe different circuits.
+
+The copper is laid by a two-layer A* grid maze router. **It is not a competitive
+autorouter and the output says so:** a uniform 0.25 mm grid cannot reach every pin of a
+fine-pitch package, and a sequential router paints itself into corners a rip-up-and-retry
+router escapes. On a dense LQFP board it finishes 6 of 50 nets. Every net it cannot
+finish is named, with the reason, and left as ratsnest for a human — a router that
+silently dropped a connection would be worse than no router at all.
+
+Both emitters are checked against KiCad itself, not only against a parser: `kicad-cli
+sch erc` and `pcb drc` are run on the output. That is how we found a via shorting a
+foreign track on a board the entire test suite passed.
+
+**6. Review it, and say why. [built]**
 An adversarial reviewer re-reads the datasheets and argues against the design: this pin
 is an input, you drove it; this cap is on the wrong side of the regulator; this part is
-end-of-life. Findings cite the datasheet page. Nothing is applied without approval.
+end-of-life. Findings cite the datasheet page, and each one is checked against the spec
+before it is shown. **[not yet built]** The approval gate that would let you accept a
+suggested fix and have it applied: the fix buttons in the review UI are deliberately
+inert until that exists.
 
 **7. Show, don't tell. [not yet built]**
 Professional EDA tools are dense — KiCad has dozens of panels, and knowing *where to
@@ -114,20 +136,38 @@ the difference between automating a beginner out of the loop and bringing them i
 
 ## How we built it
 
-**[not yet built]** The agent layer is Google's Agent Development Kit. The topology is
-deliberate rather than a flat pile of prompts:
+**STATUS:** the ADK driver is the default engine; `SILKSCREEN_ENGINE=sdk` keeps the
+straight-line driver one environment variable away.
 
-- a **SequentialAgent** for the main pipeline — read → propose → validate → place → review
-- a **ParallelAgent** fanning out one datasheet reader per component, since parts are
-  independent
-- a **LoopAgent** on validation repair, bounded, terminating when the IR validates
-- a dedicated **adversarial reviewer** prompted to *refute* the design rather than
-  confirm it, because an agent asked "is this correct?" will say yes
+The agent layer is Google's Agent Development Kit. The pipeline — read → propose →
+validate → place → review — is an ADK dynamic **Workflow** in
+`engine/silkscreen/agents/adk/`, where each stage is a node that calls the same stage
+body the plain SDK path calls. `generate_pcb(engine=...)` chooses the driver, and both
+drivers emit the same events from inside those shared bodies, so which one ran is not
+something a client can observe. The topology is deliberate rather than a flat pile of
+prompts:
 
-Model tiering by task: `gemini-3.7-flash` for datasheet vision and reasoning, dropping to
-`gemini-3.5-flash-lite` for high-volume mechanical passes. Tool confirmation gates any
-step that writes a file. Deployment is Cloud Run; extracted datasheet facts persist to
-Firestore so the second run on a part is free.
+- an **orchestrator node** for the main pipeline, running the stages as successive
+  `await ctx.run_node(...)` calls, so the order is ordinary program text and a stage
+  that fails comes back out of the run as the original exception
+- a **bounded repair cycle** inside the propose node: every IR failure in a batch goes
+  back to the model as one repair prompt, and the loop ends when the IR validates
+- a dedicated **adversarial reviewer** node, prompted to *refute* the design rather than
+  confirm it, because an agent asked "is this correct?" will say yes — and its findings
+  are filtered against the spec, so a part reference the circuit does not contain is
+  stripped out of the finding that named it, while the finding itself is still shown
+- **[not yet built]** a **parallel fan-out** over datasheets, one reader per component,
+  since parts are independent: an `asyncio.gather` inside the read node. Today parts are
+  read one after another.
+
+Model tiering: `gemini-3.7-flash` for datasheet vision and reasoning, dropping to
+`gemini-3.5-flash-lite` behind it. It is a failover chain rather than per-task routing,
+and every provider's output is checked for usable text before it is accepted, because a
+fallback path nobody has exercised is a second bug and not a backup. Deployment is
+Cloud Run; extracted datasheet facts persist to Firestore so the second run on a part is
+free.
+
+**[not yet built]** Tool confirmation gates any step that writes a file.
 
 **[built]** The engine underneath is deliberately boring and has no network in it at all:
 
@@ -136,7 +176,7 @@ Firestore so the second run on a part is free.
 - Pure-integer nanometre arithmetic end to end, because unit confusion between
   millimetres, mils, and KiCad's internal nanometres is a silent, board-destroying class
   of bug
-- 454 tests that run with no network, no API key, and no KiCad installed
+- 490 tests that run with no network, no API key, and no KiCad installed
 
 Splitting it this way is the point. The parts that must be *correct* are testable
 offline. The parts that must be *smart* are the ones talking to a model.
@@ -194,7 +234,7 @@ valuable engineering artifact we produced was an honest list of what was actuall
 What we're proud of in the new one:
 
 - **The engine has no network calls.** Every correctness-critical path is tested offline.
-- **454 tests, and the interesting ones are regressions** — each pins down a specific bug
+- **490 tests, and the interesting ones are regressions** — each pins down a specific bug
   that shipped in the previous version and can never ship again.
 - **A validation layer whose job is to say no.** The IR makes a floating capacitor and a
   hallucinated pin unrepresentable rather than merely unlikely.
@@ -231,7 +271,7 @@ meant to build. The lesson we took is that the README should be written from the
 at revision `ad58192`, MIT licensed, included unmodified with its licence file
 intact as a working reference for the guided-cursor overlay we have not built
 yet. Nothing in `engine/`, `service/`, or `scripts/` imports from it, it is
-excluded from lint and tests, and it contributes nothing to the 454 tests or to
+excluded from lint and tests, and it contributes nothing to the 490 tests or to
 any figure quoted in this document. Everything else in the repository was
 written during the submission period.
 

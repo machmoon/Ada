@@ -640,6 +640,32 @@ describe('stageEvent: the synthetic validate row', () => {
 })
 
 describe('stageEvent: the feed', () => {
+  it('keeps the route stage tally on its own row', () => {
+    startRun({ intent: 'x' })
+
+    stageEvent({ event: 'stage.start', stage: 'route', t_s: 4.0 })
+    expect(get(run).stages.route).toEqual({ state: 'running', t_s: 4.0 })
+
+    stageEvent({
+      event: 'stage.done',
+      stage: 'route',
+      t_s: 4.6,
+      tracks: 28,
+      vias: 5,
+      routed_nets: 5,
+      unrouted_nets: 1,
+      copper_mm: 59.0,
+    })
+    expect(get(run).stages.route).toEqual({
+      state: 'done',
+      t_s: 4.6,
+      tracks: 28,
+      vias: 5,
+      routed_nets: 5,
+      unrouted_nets: 1,
+    })
+  })
+
   it('appends the sentence, the time and the event name', () => {
     startRun({ intent: 'x' })
 

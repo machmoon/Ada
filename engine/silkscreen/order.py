@@ -7,14 +7,13 @@ refuses an inconsistent circuit, ``footprints`` refuses to invent a land
 pattern -- and it refuses to call a board orderable when it is not.
 
 The refusal that matters most today is ``unrouted-nets``. A
-:class:`~silkscreen.board.BoardResult` carries parts, net names and an outline
-and **nothing else**: there is no track, no arc and no via anywhere in the
-emitted ``.kicad_pcb``, because the placer places and nothing in this pipeline
-routes. Every net reaching two or more pads is therefore still open, and a board
+Placement is not a finished board. Until :func:`~silkscreen.board.route_board`
+has laid copper, every net reaching two or more pads is still open, and a board
 fabricated in that state arrives electrically dead -- it looks exactly like the
-finished article and does nothing whatsoever. That is a blocker, it fires on
-every board this pipeline currently produces, and there is deliberately no flag
-to suppress it. When a router lands, the blocker stops firing on its own.
+finished article and does nothing whatsoever. So the gate reads the router's own
+verdict on the board and blocks on whatever is still open. There is deliberately
+no flag to suppress it: a net the router could not finish is a net without
+copper, whoever is in a hurry.
 
 Nothing here contacts a fabricator, prices a board, or spends money. The output
 is a manifest and a zip for a **human** to read and submit.
@@ -298,7 +297,6 @@ def preflight(
     *,
     spec: CircuitSpec | None = None,
     options: OrderOptions | None = None,
-    routes: object | None = None,
 ) -> OrderPreflight:
     """Decide whether ``board`` may be ordered, and say why not.
 
@@ -311,13 +309,16 @@ def preflight(
 
     issues: list[OrderIssue] = []
 
-    open_nets = _nets_needing_copper(board, spec)
-    if routes is not None:
-        # A net the router actually connected no longer needs copper. Only
-        # nets it reports as routed are cleared: an unrouted or partially
-        # routed net keeps blocking, which is the whole point of the gate.
-        connected = set(getattr(routes, "routed_nets", ()))
-        open_nets = tuple(n for n in open_nets if n not in connected)
+    # A net the router finished no longer needs copper. The board carries that
+    # verdict itself, so the gate reads the same field the router wrote rather
+    # than trusting a caller to pass the good news along. Only fully routed
+    # nets clear: anything the router left open keeps blocking, which is the
+    # whole point of the gate.
+    open_nets = tuple(
+        net
+        for net in _nets_needing_copper(board, spec)
+        if net not in set(board.routed_nets)
+    )
     if open_nets:
         issues.append(
             OrderIssue(
@@ -327,14 +328,12 @@ def preflight(
                     f"{len(open_nets)} net(s) have no copper connecting them"
                 ),
                 detail=(
-                    f"This board has no traces, no vias and no copper pours: "
-                    f"the placer positions footprints and nothing in this "
-                    f"pipeline routes them. {len(open_nets)} net(s) join two or "
-                    f"more pads and every one of them is still open: "
-                    f"{_summarise_nets(open_nets)}. Fabricated as it stands, "
-                    f"the board would arrive electrically dead -- correct "
-                    f"parts, correct outline, no circuit. Route it before "
-                    f"ordering."
+                    f"{len(open_nets)} net(s) join two or more pads with no "
+                    f"copper between them: {_summarise_nets(open_nets)}. "
+                    f"Fabricated as it stands, the board would arrive "
+                    f"electrically dead -- correct parts, correct outline, no "
+                    f"circuit. Run the router over it before ordering, and "
+                    f"check what it reports it could not finish."
                 ),
             )
         )
