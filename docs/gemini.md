@@ -35,8 +35,10 @@ protocol declared at `model.py:57` — rather than a concrete client, and `gener
 `engine/silkscreen/agents/pipeline.py:65` threads one model object through the whole run.
 
 The dependency is declared as an optional extra rather than a base requirement. In
-`pyproject.toml:20` the `agents` extra pins `google-genai>=1.0`, and the `cloud` extra at
-`pyproject.toml:21` adds Firestore alongside it. The base dependency list at
+`pyproject.toml:20` the `agents` extra pins `google-genai>=2.19,<3`, and the `cloud` extra
+at `pyproject.toml:21` repeats that pin and adds Firestore alongside it. The upper bound
+is deliberate: the SDK has an announced breaking 3.0, and the bound is what stops it
+arriving in a fresh install without anyone deciding to take it. The base dependency list at
 `pyproject.toml:13` contains only OR-Tools and kiutils, which is what keeps the deterministic
 engine free of any model dependency at all.
 

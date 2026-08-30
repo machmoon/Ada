@@ -1,21 +1,23 @@
 TODO — agent layer (from DEVPOST.md "[not yet built]" section)
 
-Decision (2026-08-29): the team considers the agent-layer features met by the
-existing Gen AI SDK implementation in engine/silkscreen/agents/. The ADK
-adoption idea is ARCHIVED — the behaviour its wrappers would have wrapped
-already runs (analysis in docs/agent-framework.md). ADK sub-items below are
-kept for the record, marked [ARCHIVED]; do not pick them up.
+Decision (2026-08-30): James reversed the 2026-08-29 archive decision. ADK 2.8
+dynamic workflows now drive the pipeline, tracked as feature 12 below, and
+SILKSCREEN_ENGINE selects which driver runs. For the record, the idea had been
+archived a day earlier because the SDK implementation already covered the agent
+behaviour (analysis in docs/agent-framework.md); the reversal moves the
+framework claim onto ADK itself rather than onto a wrapper around the SDK.
 
-2026-08-30: the pipeline now emits typed stage and model-call events through
+2026-08-30: the pipeline emits typed stage and model-call events through
 generate_pcb(on_event=...) — an ADK-shaped seam mirroring ADK's callback/event
-model without the dependency. If adoption is ever revisited, it attaches there.
+model. That is where the ADK workflow attached, exactly as designed.
 
 RAG / retrieval is Leo's lane and is tracked separately — retrieval.py
 (GeminiEmbedder, page-level citations) is the starting point; do not pick up
 retrieval work from this file.
 
-NOTE: DEVPOST still describes the ADK topology as the plan. With the idea
-archived, that section needs rewriting around the SDK implementation.
+NOTE: DEVPOST's agent section is being rewritten in ADK 2.0 vocabulary as part
+of the adoption — dynamic workflows and nodes, not the template agents of the
+1.x topology it described as the plan.
 
 [EXAMPLES of PROMPTS]
 - a 3.3 V LDO regulator board using an AMS1117-3.3 with input and output bulk capacitors
@@ -26,23 +28,28 @@ archived, that section needs rewriting around the SDK implementation.
 
 FEATURES
 --------
+[DONE-SDK] means shipped on the plain SDK path; the ADK re-expression of that
+feature is tracked under feature 12.
+
  #   Feature / sub-feature                             Status        Note
  --  ------------------------------------------------  ------------  --------------------------------------------
- 1   Pipeline sequence                                 [DONE-SDK]    was: ADK SequentialAgent
- ----- Five-stage read/propose/validate/place/review   [DONE]        pipeline.py
+ 1   Pipeline sequence                                 [DONE-SDK]    now: ADK Workflow node
+ ----- Read/propose+validate/place/review sequence     [DONE]        validation is embedded in propose.py
  ----- Model protocol seam; stages never see the SDK   [DONE]        model.py; ScriptedModel keeps tests offline
- ----- ADK SequentialAgent re-expression               [ARCHIVED]
- 2   Parallel datasheet reads                          [NOT BUILT]
- ----- Thread-pool fan-out, one generate per part      [NOT BUILT]   around the existing Model protocol
- ----- Client thread-safety decided and tested         [NOT BUILT]   shared genai client vs one per worker
+ ----- ADK SequentialAgent re-expression               [SUPERSEDED]  ADK 2.0 dynamic workflows took its place; the
+                                                                     template class still ships, see feature 12
+ 2   Parallel datasheet reads                          [NOT BUILT]   now: the R11 rung under feature 12
+ ----- asyncio.gather fan-out, one read per part       [NOT BUILT]   inside the ADK read node; see 12 R11
+ ----- Client concurrency decided and tested           [NOT BUILT]   shared genai client vs one per task
  ----- Failure isolation + concurrency cap             [NOT BUILT]   one bad part must not sink the batch
- 3   Validation repair loop                            [DONE-SDK]    was: ADK LoopAgent
+ 3   Validation repair loop                            [DONE-SDK]    now: for-loop inside an ADK node
  ----- Batched error collection, all failures at once  [DONE]        parse_circuit_spec, netlist.py
  ----- Bounded loop, ends when the IR validates        [DONE]        propose.py
- ----- ADK LoopAgent wrapper                           [ARCHIVED]
+ ----- ADK LoopAgent wrapper                           [SUPERSEDED]  the bounded loop is plain Python inside a
+                                                                     node under ADK 2.0; see feature 12
  4   Adversarial reviewer                              [DONE-SDK]
  ----- Refute-not-confirm prompt                       [DONE]        review.py
- ----- Findings filtered against the actual spec       [DONE]        hallucinated findings dropped
+ ----- Findings filtered against the actual spec       [PARTIAL]     unknown part refs dropped; findings retained
  ----- Specialised reviewer split, merged verdict      [IDEA]        power / signal integrity / manufacturability
  5   Model tiering                                     [DONE-SDK]
  ----- FallbackModel chain w/ response validation      [DONE]        resilience.py
@@ -95,12 +102,51 @@ FEATURES
                                                                      the fallback duplicates model calls. Tighten the
                                                                      fallback to the 404 branch only.
 
+ 12  Google ADK adoption (dynamic workflows)           [PARTIAL]     ADK 2.8 owns orchestration; SILKSCREEN_ENGINE
+                                                                     selects the driver
+ ----- R1 install + offline smoke                      [DONE]        google-adk 2.8 imports and runs with no key
+ ----- R2 spike: workflow, state, exceptions           [DONE]        throwaway, in the scratchpad, never committed
+ ----- R3 dependency + pin                             [DONE]        adk extra; google-genai pinned >=2.19,<3
+ ----- R4 stages.py shared stage bodies                [DONE]        one body per stage, both drivers call it
+ ----- R5 @node graph in adk/workflow.py               [DONE]        read, propose, place and review as nodes
+ ----- R6 in-process runner in adk/runner.py           [DONE]        Runner and session per run; token registry
+ ----- R7 engine dispatcher, default "sdk"             [DONE]        kwarg > SILKSCREEN_ENGINE > default
+ ----- R8 parity suite, test_adk.py                    [DONE]        same events and same result on both engines
+ ----- R12 Dockerfile + setup gain the adk extra       [DONE]        image, CI and setup all install the extra
+ ----- R10 default engine flips to adk                 [GATED]       gated on one clean manual SPA run with a
+                                                                     real key
+ ----- R9 agents dir for adk web and /docs             [NOT BUILT]   a dev surface only, off the request path
+ ----- R11 parallel reads via asyncio.gather           [NOT BUILT]   closes feature 2; needs an order-independent
+                                                                     event test
+ ----- R13 ScriptedLlm(BaseLlm) adapter                [NOT BUILT]   the offline stand-in for an LlmAgent path
+ ----- R14 Pydantic transport schemas                  [NOT BUILT]   CircuitSpec stays a dataclass; the batched
+                                                                     ValidationError must survive
+ ----- R15 review as an LlmAgent                       [NOT BUILT]   the first stage to leave the Model protocol
+ ----- R16 FallbackLlm vs RetryConfig                  [NOT BUILT]   served_by and model.retry must survive
+ ----- R17 validate as a real stage                    [IDEA]        today it lives inside propose
+ ----- R18 retire _EventingModel and the SDK path      [IDEA]        only once R10 has held
+
+ 13  ADK reversal: docs and decision record            [PARTIAL]
+ ----- D0 CLAUDE.md ADK decision reversed              [DONE]        the reversal and its three decisions
+ ----- D1 this file: decision, notes, features         [DONE]        12 and 13 added, ADK rows reworded
+ ----- D2 docs/agent-framework.md rewritten            [DONE]        the framework claim now rests on ADK
+ ----- D3 DEVPOST agent section in ADK vocabulary      [DONE]        dynamic workflows, not template agents
+ ----- D4 CLAUDE.md seam, setup, framework claim       [DONE]        layout, dispatcher, extras, known issue 6
+ ----- D5 check_docs --fix once counts settle          [OPEN]        run after the ADK tests land
+
 OPEN WORK, SUMMARISED
 ---------------------
-Everything actionable reduces to: feature 2 in full (parallel reads, an SDK
-thread-pool task), feature 6 in full (confirmation gates), the deploy and
-smoke check under 7, the ops polish under 8, voice under 9, the error
-taxonomy under 10 (from PR #5 review), and the stream-fallback tightening
-under 11 (from PR #9 review). The board well shipped, so voice is
-all that is left of 9 and stays last. The [IDEA] rows under 4 and 5 are
-ideas, not commitments.
+Everything actionable reduces to: feature 2 in full (parallel reads, now the
+R11 rung under 12), finding-level hallucination filtering under 4, the request
+timeout under 5, feature 6 in full (confirmation gates), the deploy and smoke
+check under 7, the ops polish under 8, voice under 9, the error taxonomy under
+10 (from PR #5 review), and the stream-fallback tightening under 11 (from PR #9
+review). The board well shipped, so voice is all that is left of 9 and stays
+last. The [IDEA] rows under 4 and 5 are ideas, not commitments.
+
+The ADK lane runs alongside that. Feature 12 is live, and R12 has landed: the
+image, CI and setup all install the adk extra. What is left of the flip is R10
+alone — the default engine going from "sdk" to "adk" — and it is gated on one
+clean manual SPA run with a real key. Everything else under 12 queues behind
+that gate: R9 and R11, then R13 through R16, with R17 and R18 as ideas. Under
+13, D5 is the last docs step, a check_docs --fix once the test counts settle.

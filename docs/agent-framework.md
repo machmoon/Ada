@@ -10,23 +10,88 @@ hand-rolled HTTP client against a model endpoint.
 
 ## What Silkscreen uses
 
-Silkscreen uses the **Google Gen AI SDK**, the Python package published as `google-genai`.
-It is declared in `pyproject.toml` under two optional dependency groups:
+Silkscreen uses two of the four. The **Agent Development Kit**, the Python package
+published as `google-adk`, drives the generation pipeline as a dynamic workflow. The
+**Google Gen AI SDK**, published as `google-genai`, sits underneath it as the only model
+interface. Because both packages are named on the accepted list, the claim does not depend
+on which of the two a reader considers the framework: either one satisfies the requirement
+on its own terms, and the project ships both.
+
+Both are declared in `pyproject.toml` as optional dependency groups:
 
 ```toml
-agents = ["google-genai>=1.0"]
-cloud  = ["google-genai>=1.0", "google-cloud-firestore>=2.16"]
+agents = ["google-genai>=2.19,<3", "pypdf>=4.0"]
+cloud  = ["google-genai>=2.19,<3", "google-cloud-firestore>=2.16"]
+adk    = ["google-adk>=2.8,<3"]
 ```
 
-The base install deliberately does not include it. The engine that computes footprints,
-packs parts, and writes KiCad files has no model dependency at all, and the split is stated
-in `engine/silkscreen/agents/__init__.py`: "The engine below this package is deliberately
+The base install deliberately includes neither. The engine that computes footprints, packs
+parts, and writes KiCad files has no model dependency at all, and the split is stated in
+`engine/silkscreen/agents/__init__.py`: "The engine below this package is deliberately
 model-free so the parts that must be _correct_ can be tested without a network."
+
+### The ADK layer
+
+STATUS: the default engine is currently `sdk`; `SILKSCREEN_ENGINE=adk` selects the ADK
+driver, and the default flips once the pre-deadline live run gate passes.
+
+`generate_pcb` in `engine/silkscreen/agents/pipeline.py` is now a dispatcher. Its `engine`
+parameter chooses which driver executes the run, and everything else about the function —
+its signature, its return type, its `on_event` callback — is unchanged from before the
+adoption.
+
+`engine/silkscreen/agents/adk/workflow.py` expresses the read, propose, place, and review
+pipeline as an ADK `Workflow` assembled from `@node` functions, with an orchestrator node
+on the workflow's entry edge and one node per pipeline stage beneath it. The orchestrator
+is an `async def` taking an ADK `Context`, and it awaits `ctx.run_node(...)` for each stage
+in turn; the stage nodes themselves are plain synchronous functions, and each one returns
+the run token it was handed rather than its results. Running ADK 2.8.0 on a development
+machine established that a node's return value does pass back through `run_node`
+unchanged, including the project's own dataclasses, which are not JSON-serialisable, but
+the shipped workflow deliberately does not lean on that. Only the token string travels the
+graph, and everything rich — the wrapped model, the extracted facts, the validated spec,
+the solved board, and the emit closure — lives in the runner's registry under that token.
+The reason is in `runner.py`'s own docstring: ADK state is session state, which is
+serialised, persisted and echoed into ADK's event stream, so "a model object or a solved
+board must never enter it". The validation repair loop was deliberately not
+re-expressed as a graph cycle. It remains the bounded `for` loop inside the propose stage,
+because what makes that loop converge is batching every validator error into a single
+repair prompt, and that is a property of the prompt rather than of the control flow. A
+graph cycle would have relocated the loop without improving it.
+
+`engine/silkscreen/agents/adk/runner.py` runs that workflow in-process:
+`Runner(node=workflow, session_service=InMemorySessionService())`, with the session created
+up front and the run's parameters bound by name out of `state_delta`, which is ADK's
+default parameter-binding mode for root-node arguments. Nothing on this path opens a port,
+contacts an external session store, or requires credentials. ADK's own events are consumed
+by the runner and dropped, while Silkscreen's events continue to flow through the
+pipeline's own emit closure inside the stage bodies. An exception raised inside a node
+propagates out of `run_async` as the original exception object, which is what lets existing
+behaviour survive intact: a callback that raises in order to abort a run whose HTTP client
+disconnected still aborts the run, and a `ModelError` still reaches `service/app.py`'s
+cause-chain walk as itself rather than as a framework wrapper.
+
+The load-bearing design decision is that neither driver owns the work. Both the SDK path
+and the ADK nodes call the same stage bodies in `engine/silkscreen/agents/stages.py`
+(`read_stage`, `propose_stage`, `place_stage`, `review_stage`). The two engines therefore
+emit identical event streams by construction rather than by careful maintenance, and a
+parity suite in `engine/tests/test_adk.py` pins that property by driving the same input
+through both and comparing the event sequences. Parity is not cosmetic here.
+`service/app.py` streams these exact event names as NDJSON frames from
+`POST /generate/stream`, and the Svelte SPA ticks its live stage list from them, so a
+renamed, reordered, or dropped event is a user-visible break two layers away.
+
+Model access did not move. The nodes call the `Model` protocol in
+`engine/silkscreen/agents/model.py`, the same seam every stage already used, so
+`ScriptedModel` keeps the whole test suite offline and keyless under either engine, and
+`FallbackModel`'s failover semantics survive unchanged — the `served_by` field the service
+reports and the `model.retry` events the UI shows come from the code they always did.
 
 ### Where the SDK is called
 
-There are exactly two places in the repository that import the SDK, and both are inside
-`engine/silkscreen/agents/`.
+There are exactly two places in the repository that import the Gen AI SDK, and both are
+inside `engine/silkscreen/agents/`. The ADK layer sits above them and does not call the
+vendor SDK itself.
 
 The first is `engine/silkscreen/agents/model.py`. The class `GeminiModel` imports
 `from google import genai`, constructs a `genai.Client(api_key=key)` from `GOOGLE_API_KEY`,
@@ -58,23 +123,23 @@ datasheet pin tables are set in small type.
 
 ### Where the agent structure lives
 
-The SDK is the transport. The agent architecture sits above it, and it is worth describing
-because it is the substance of the claim that this is an agentic project rather than a
-project that happens to call a model.
+The Gen AI SDK is the transport and ADK is the orchestration. The domain-specific agent
+behaviour sits between them, in the stage bodies, and it is worth describing because it is
+the substance of the claim that this is an agentic project rather than a project that
+happens to call a model.
 
 `engine/silkscreen/agents/model.py` defines a `Model` protocol with a single `generate`
-method. Every stage in the package talks to that protocol and never to the vendor SDK
-directly. Three types satisfy it: `GeminiModel` for the live path, `ScriptedModel` for
-tests, and `FallbackModel` in `engine/silkscreen/agents/resilience.py` for provider
-failover. Because the seam is a protocol rather than a base class, a caller can substitute
-any of the three without the calling code knowing which it has.
+method. Every stage talks to that protocol and never to the vendor SDK directly. Three
+types satisfy it: `GeminiModel` for the live path, `ScriptedModel` for tests, and
+`FallbackModel` in `engine/silkscreen/agents/resilience.py` for provider failover. Because
+the seam is a protocol rather than a base class, a caller can substitute any of the three
+without the calling code knowing which it has.
 
-`engine/silkscreen/agents/pipeline.py` runs the multi-stage pipeline. `generate_pcb` reads
-each supplied datasheet into structured facts, proposes a circuit from those facts, builds
-and places a board with the constraint solver, runs an adversarial review pass, and
-optionally writes the `.kicad_pcb` file. Each stage is a separate model call with its own
-prompt and its own output contract, and the output of one stage is the typed input to the
-next.
+`engine/silkscreen/agents/stages.py` holds the stage bodies that both drivers execute: read
+each supplied datasheet into structured facts, propose a circuit from those facts, build and
+place a board with the constraint solver, and run an adversarial review pass. Each stage is
+a separate model call with its own prompt and its own output contract, and the output of one
+stage is the typed input to the next.
 
 `engine/silkscreen/agents/datasheet.py` is the extraction stage. `read_datasheet` puts a
 PDF in front of the model with a prompt that demands a page number on every requirement and
@@ -137,12 +202,17 @@ can see which provider actually served a request.
 either in order or matched by a substring marker in the prompt, and records every call.
 Because the whole package speaks to the `Model` protocol, `engine/tests/test_agents.py`
 drives the entire prompt-to-PCB pipeline — including the repair loop and the failure paths
-that only fire against a badly behaved model — with no network and no API key. The same
-approach applies to retrieval, where `HashEmbedder` is a deterministic offline stand-in
-that hashes token trigrams into a fixed-width bag of counts. Its docstring is explicit that
-it is not a semantic model, and nothing in the codebase pretends otherwise. CI installs the
-`agents` and `cloud` extras and runs `pytest` on Linux, macOS, and Windows, so the SDK is
-present in CI while no test requires a live call.
+that only fire against a badly behaved model — with no network and no API key.
+
+Adopting ADK did not weaken that guarantee, because ADK was adopted above the protocol
+rather than across it. The workflow runs against `ScriptedModel` exactly as the SDK path
+does, with an in-memory session service and no credentials, which is what makes the parity
+suite in `engine/tests/test_adk.py` runnable in CI at all. The same approach applies to
+retrieval, where `HashEmbedder` is a deterministic offline stand-in that hashes token
+trigrams into a fixed-width bag of counts. Its docstring is explicit that it is not a
+semantic model, and nothing in the codebase pretends otherwise. CI installs the extras and
+runs `pytest` on Linux, macOS, and Windows, so both frameworks are present in CI while no
+test requires a live call.
 
 ### Tool exposure over MCP
 
@@ -165,9 +235,10 @@ those frameworks could call Silkscreen's engine today without a line of adapter 
 ## Is the Gen AI SDK an "agent framework"?
 
 This deserves a direct answer rather than a deflection, because a judge could reasonably
-raise it.
+raise it. It is also the question that produced the ADK adoption, so the answer is kept
+here in full rather than replaced by its conclusion.
 
-On the narrow reading, the question does not arise: the requirement names the GenAI SDK as
+On the narrow reading, the question does not arise: the requirement names the Gen AI SDK as
 one of four acceptable frameworks, and Silkscreen uses it as its only model interface. That
 is the requirement met on its own terms.
 
@@ -186,45 +257,39 @@ does not provide is the layer above that: agent hierarchies, session services, w
 composition, and an evaluation harness. ADK provides those, which is why ADK exists as a
 separate package that depends on the Gen AI SDK rather than replacing it.
 
-The substantive claim is therefore not that the SDK supplies the agent architecture. It is
-that Silkscreen builds the agent architecture on top of the SDK, in code that can be read
-and checked. Concretely, that architecture consists of a multi-stage pipeline in
-`pipeline.py` where each stage is a distinct model call with its own contract; a
-propose-and-repair loop in `propose.py` where a deterministic validator rejects the model's
-output and returns every error for a bounded, converging repair cycle; an adversarial review
-stage in `review.py` where a second model call is prompted to refute the first one's work
-and its findings are filtered against ground truth; a provider failover chain in
-`resilience.py` with validated responses; a retrieval pipeline in `retrieval.py` with
-page-level citations; and a tool surface in `mcp/server.py` that other agents can call.
-Those are the things an agent framework would otherwise supply, written here against the
-project's own domain constraints.
+That concession is now the stated reason for the adoption rather than a caveat attached to
+its absence. The missing piece was the runtime, and the runtime is precisely what ADK was
+brought in to supply. The pipeline's stage sequencing is a `Workflow` of nodes executed by
+an ADK `Runner` over a session service, while the domain-specific parts — the validator, the
+repair prompt, the adversarial critic, the solver — stayed where they were.
 
-There is one thing worth being candid about. Because Silkscreen's engine is deterministic
-and its correctness checks are exact, the model is never given a tool-calling loop over the
-engine within a single generation. Validation happens in Python between calls rather than
-through the SDK's automatic function calling. That is a deliberate choice — a solver result
-should not depend on whether the model decided to invoke the solver — but it does mean the
-project does not exercise the SDK's own agentic loop. The agent loop is the one in
+An earlier version of this document doubted that "wrapping ADK behind the existing `Model`
+protocol ... would be difficult to defend as a real adoption." The doubt was correct, and
+the shipped design is the opposite arrangement. ADK is not behind the protocol; it is above
+it. The workflow owns the control flow and its nodes call the `Model` protocol, which is
+the direction that makes the adoption load-bearing rather than decorative: remove ADK from
+that path and there is no orchestration left on it, whereas removing a hypothetical
+ADK-backed `Model` implementation would have changed nothing but the vendor of one
+`generate` call.
+
+There is one thing worth being candid about, and it did not change with the adoption.
+Because Silkscreen's engine is deterministic and its correctness checks are exact, the model
+is never given a tool-calling loop over the engine within a single generation. The workflow
+nodes are Python functions the runtime calls in a fixed order, not tools the model may
+choose to invoke, and validation happens in Python between calls rather than through the
+SDK's automatic function calling. That is a deliberate choice — a solver result should not
+depend on whether the model decided to invoke the solver — but it does mean the project
+still does not exercise a model-driven agentic loop. The agent loop is the one in
 `propose.py`.
 
 ## The four options, compared for this project
 
 | Framework | Package | Languages | Status | What it gives you |
 | --- | --- | --- | --- | --- |
-| Gen AI SDK | `google-genai` | Python (and other language SDKs) | 2.20.0, released 25 Aug 2026, Python ≥3.10 | Model access, embeddings, files, chat, function calling |
-| ADK | `google-adk` | Python, TypeScript, Go, Java, Kotlin | 2.8.0, released 26 Aug 2026, Python ≥3.10 | Agent hierarchies, sessions, workflows, evaluation, deployment |
-| Genkit | `genkit` | TypeScript and Go stable; Python and Dart in preview | Python announced as Alpha in April 2025 | Flows, tools, plugins, browser dev UI |
-| Antigravity SDK | `google-antigravity` | Python, with TypeScript and Go planned | Preview, announced 19 May 2026, docs show v0.1.15 | Stateful agent runtime, safety policies, subagent delegation |
-
-**The Gen AI SDK** is what the project uses. It fits because the pipeline's requirements are
-narrow and specific rather than broad. The project needs exactly three things from a model
-layer: native PDF vision at controllable resolution, deterministic JSON output at
-temperature zero, and asymmetric retrieval embeddings. All three are direct SDK calls. The
-project does not need conversation state, because every stage is a single-shot call with a
-typed input and a typed output. It does not need agent-to-agent delegation, because the
-stages form a fixed sequence. Adopting a heavier framework would add a dependency without
-removing any code, since the parts that would be replaced — the repair loop and the review
-pass — are the parts encoding the domain knowledge that makes the project worth anything.
+| ADK | `google-adk` | Python, TypeScript, Go, Java, Kotlin | **In use.** 2.8.0 installed and running here; `requires_python >=3.10`; declares `google-genai>=2.19,<3` | Agent hierarchies, sessions, workflows, evaluation, deployment |
+| Gen AI SDK | `google-genai` | Python (and other language SDKs) | **In use, underneath ADK.** 2.20.0 installed, released 25 Aug 2026, Python ≥3.10 | Model access, embeddings, files, chat, function calling |
+| Genkit | `genkit` | TypeScript and Go stable; Python and Dart in preview | Not adopted; Python announced as Alpha in April 2025 | Flows, tools, plugins, browser dev UI |
+| Antigravity SDK | `google-antigravity` | Python, with TypeScript and Go planned | Not adopted; preview, announced 19 May 2026, docs show v0.1.15 | Stateful agent runtime, safety policies, subagent delegation |
 
 **ADK** is Google's dedicated agent framework, described on its site as "the open-source
 agent development framework that lets you build, debug, and deploy reliable AI agents at
@@ -235,14 +300,37 @@ multi-agent systems"
 It supports Python, TypeScript, Go, Java, and Kotlin, is model-agnostic — the site states
 that "ADK can work with almost any generative AI model" — and provides agents, tools
 including MCP and OpenAPI tools, session management, graph and multi-agent workflows,
-criteria-based evaluation, and one-command deployment to Google Cloud. It is the natural
-choice for a system where several agents negotiate with each other or where conversation
-state must survive across turns. Silkscreen's pipeline is a fixed five-stage sequence with
-no delegation and no persistent conversation, so most of that surface would sit unused.
-Notably, ADK does not replace the Gen AI SDK; `google-adk` declares `google-genai>=2.19,<3`
-as a direct dependency
+criteria-based evaluation, and one-command deployment to Google Cloud. Silkscreen uses the
+dynamic-workflow and session-service parts of that surface and, for now, none of the rest.
+
+The version facts were checked against the installed package rather than only against the
+documentation. `google-adk` 2.8.0 reports `requires_python >=3.10` and declares
+`google-genai>=2.19,<3` as a direct dependency
 ([adk-python pyproject.toml](https://raw.githubusercontent.com/google/adk-python/main/pyproject.toml)),
-so adopting ADK would layer on top of what Silkscreen already uses rather than displace it.
+which the installed `google-genai` 2.20.0 satisfies; Silkscreen's own `agents` and `cloud`
+extras were tightened from the old unbounded `>=1.0` to the same `>=2.19,<3`, so the two
+constraints cannot disagree. ADK's bundled `api_server` was evaluated and deliberately kept
+off the request path: the service already owns a stdlib-only, same-origin HTTP surface whose
+NDJSON streaming contract and static-asset behaviour the SPA and the Cloud Run image are
+built around, so ADK runs in-process behind that handler rather than adding a second web
+application in front of it.
+
+**The Gen AI SDK** remains the model layer beneath ADK. It fits because the pipeline's
+model-facing requirements are narrow and specific: native PDF vision at controllable
+resolution, deterministic JSON output at temperature zero, and asymmetric retrieval
+embeddings. All three are direct SDK calls.
+
+An earlier version of this document argued that "adopting a heavier framework would add a
+dependency without removing any code." Half of that is still true and should be stated
+plainly: the adoption happened at the orchestration layer and has not yet deleted anything.
+The repair loop and the review pass — the parts encoding the domain knowledge that makes the
+project worth anything — were never candidates for replacement and still are not. What the
+argument got wrong was the implied conclusion that nothing could ever be removed. The
+planned `LlmAgent` re-expression described below is what retires the roughly ninety-line
+`_EventingModel` wrapper in `pipeline.py`, whose whole job is timing model round-trips and
+surfacing failover retries as events — bookkeeping an agent runtime does natively. Until
+that lands, the dependency is paid for by the runtime it supplies, not by the code it
+removed.
 
 **Genkit** describes itself as "Google's open-source framework for building full-stack,
 AI-powered and agentic applications for any platform" ([genkit.dev](https://genkit.dev/)),
@@ -266,47 +354,88 @@ Architecturally, the Python layer acts as a control plane over a bundled Go harn
 runs the agentic loop and sandboxes tool execution, and it can consume external MCP servers.
 The fit question is about shape rather than quality. Its built-in toolset is oriented around
 filesystem and terminal work for coding agents, and its value proposition is a managed
-runtime for open-ended autonomous work. Silkscreen's pipeline is closed-ended: five known
-stages, a solver in the middle, and a file at the end. The documentation version shown is
-v0.1.15, which is early enough that a demo-critical path should not depend on it.
+runtime for open-ended autonomous work. Silkscreen's pipeline is closed-ended: known stages,
+a solver in the middle, and a file at the end. The documentation version shown is v0.1.15,
+which is early enough that a demo-critical path should not depend on it.
 
-## What a second framework would add, and what it would cost
+## What the second framework added, and what it cost
 
-If the team wanted to add a second Google framework, ADK is the better candidate and the
-`Model` protocol in `model.py` is where it would attach. Because every stage already talks
-to that protocol rather than to the SDK, an ADK-backed implementation of `generate` would
-drop in beside `GeminiModel`, `ScriptedModel`, and `FallbackModel` without touching any
-stage.
+This section previously argued the adoption in the conditional. It is kept here in the
+indicative, because its central prediction held.
 
-ADK would add four things Silkscreen does not have today. Its evaluation harness would let
-the propose-and-repair loop be scored against a fixture set of intents, turning
-`repair_rounds` from a number printed at the end of a run into a tracked regression metric.
-Its session service would give the review stage memory across runs, so a finding raised once
-about a part could be recalled when that part appears again. Its deployment integration
-would replace the hand-rolled `http.server` handler in `service/app.py` with a managed
-runtime. Its multi-agent workflow support would matter if the review stage were split into
-several specialised reviewers — a power reviewer, a signal-integrity reviewer, a
-manufacturability reviewer — arguing separately and having their findings merged.
+The prediction was that if the team added a second Google framework, ADK would be the
+candidate and the seam in `agents/` — the `Model` protocol, and later the `on_event`
+callback — would be where it attached. That is what happened. `on_event` was designed in
+advance as an ADK-shaped seam, mirroring ADK's callback and event model without taking the
+dependency, and when the dependency arrived the seam did not have to move: the ADK nodes
+emit through the same closure the SDK path does. The `Model` protocol turned out to be the
+attachment point in the opposite direction from the one first sketched, with ADK above it
+calling through it rather than an ADK-backed implementation sitting inside it, and that
+inversion is what let the offline test story survive the adoption unchanged.
 
-The costs are concrete. ADK is a large dependency with its own transitive tree, including
-FastAPI, Starlette, uvicorn, OpenTelemetry, and a dozen others, against a project whose
-current runtime dependencies are two packages. Adopting it would mean either restructuring
-the pipeline into ADK agents, which would put a framework abstraction between the code and
-the domain logic that is currently the point of the code, or wrapping ADK behind the
-existing `Model` protocol, which would use almost none of what ADK offers and would be
-difficult to defend as a real adoption. The `ScriptedModel` testing story would need an ADK
-equivalent, or the offline test guarantee would erode. And ADK's requirement of
-`google-genai>=2.19,<3` is tighter than Silkscreen's own unbounded `>=1.0`, which would
-force a version decision the project has so far not had to make.
+ADK adds four things Silkscreen did not have. Its evaluation harness would let the
+propose-and-repair loop be scored against a fixture set of intents, turning `repair_rounds`
+from a number printed at the end of a run into a tracked regression metric. Its session
+service would give the review stage memory across runs, so a finding raised once about a
+part could be recalled when that part appears again. Its deployment integration could
+replace the hand-rolled `http.server` handler in `service/app.py` with a managed runtime.
+Its multi-agent workflow support would matter if the review stage were split into several
+specialised reviewers — a power reviewer, a signal-integrity reviewer, a manufacturability
+reviewer — arguing separately and having their findings merged. Of those four, only the
+workflow runtime is in use today; the other three are available and unused.
 
-The reasonable summary is that ADK is the right tool for a different shape of problem.
-Silkscreen's agentic value is in the domain-specific checks between stages, not in
-orchestration, and orchestration is what ADK sells.
+The costs were the predicted ones, and they were paid rather than avoided. ADK is a large
+dependency with its own transitive tree, including FastAPI, Starlette, uvicorn, and
+OpenTelemetry, against an engine whose runtime dependencies are two packages — which is why
+it is an optional extra and why the base install and the deterministic engine still pull
+none of it. The `ScriptedModel` testing story did have to hold under the new driver, and it
+does, because the driver calls the same protocol. And ADK's `google-genai>=2.19,<3` forced
+the version decision the project had so far avoided: Silkscreen's own pins were unbounded
+above and are now bounded to match.
+
+The claim this section no longer makes is that orchestration was not worth a framework.
+Orchestration is what ADK sells, the pipeline is orchestration, and running it on the
+framework built for it is easier to defend than a hand-rolled sequencer doing the same
+thing.
+
+## Planned next steps [not yet built]
+
+None of the following is implemented. It is recorded as feature 12 in `TODO.txt`, and it is
+listed here so that the shipped state described above is not confused with the intended one.
+
+The next step is to re-express each stage as an ADK `LlmAgent` rather than as a node that
+calls the `Model` protocol by hand. That is the change that actually removes code: with the
+model call owned by the framework, the `_EventingModel` wrapper in `pipeline.py` — roughly
+ninety lines whose entire purpose is timing each round-trip and surfacing `FallbackModel`
+retries as events — is replaced by the runtime's own callbacks. It also requires rebuilding
+the two offline guarantees one level up, as a scripted LLM implementation standing in for
+the live one and a failover LLM wrapping a provider list, so that the properties
+`ScriptedModel` and `FallbackModel` supply today survive the move. Until those exist, the
+protocol-calling nodes stay, because losing keyless tests to gain framework idiom would be a
+bad trade.
+
+The evaluation harness and the cross-run session memory described in the previous section
+are the other two candidates, in that order. Both are additive, and neither is started.
 
 ## What this document does not establish
 
-Several things were checked in the code or against published documentation, and a few were
-not. Stating which is which matters more than a clean-looking claim.
+Several things were checked in the code, against published documentation, or by running the
+package locally, and a few were not. Stating which is which matters more than a clean-looking
+claim.
+
+The ADK behaviours described above — offline import, workflow construction, in-process
+execution through `Runner` with an in-memory session service, state-based parameter binding,
+pass-through of return values that are not JSON-serialisable, and unwrapped exception
+propagation out of `run_async` — were established by running ADK 2.8.0 on a development
+machine and observing the results, not by reading them off the published documentation. That
+is strong evidence for this version and weaker evidence for ADK in general: a later 2.x
+release could change any of it without contradicting anything cited here, which is what the
+`<3` upper bound is for.
+
+The ADK path has been exercised offline against `ScriptedModel`, including the parity suite.
+It has not been run end to end against the live Gemini API. That gap is exactly what the
+STATUS line at the top of this document refers to, and it is why the default engine is still
+`sdk`.
 
 The model identifiers `gemini-3.7-flash` and `gemini-3.5-flash-lite` in `model.py` were read
 from the source but were not verified against a current Gemini model list, so this document
@@ -317,10 +446,11 @@ No live model call was made while writing this. Every statement about the pipeli
 behaviour comes from reading the source and the offline tests, not from observing a run
 against the API.
 
-The `google-genai>=1.0` constraint in `pyproject.toml` is unbounded on the upper end. PyPI
-currently shows 2.20.0 with a notice of breaking changes planned for 3.0.0, so a fresh
-install could eventually pick up a major version the code was not written against. This is
-an observation about the pin, not a claim that anything is broken today.
+The `google-genai` pin was previously flagged here as unbounded above, with PyPI showing
+2.20.0 and a notice of breaking changes planned for 3.0.0. That observation is resolved
+rather than outstanding: the pin is now `>=2.19,<3`, matching ADK's own constraint. The note
+is kept because the resolution is recent, and a reader comparing this document against an
+older checkout would otherwise see a contradiction.
 
 Genkit's Python stability was cross-checked in two places that agree in substance but not in
 wording: genkit.dev marks Python as preview in its language selector, while Google's own
@@ -329,15 +459,15 @@ drawn above, which is that it is not stable.
 
 ## Sources
 
+- Agent Development Kit documentation — <https://adk.dev/>
+- ADK announcement, Google Developers Blog, 9 April 2025 — <https://developers.googleblog.com/en/agent-development-kit-easy-to-build-multi-agent-applications/>
+- `google-adk` on PyPI — <https://pypi.org/project/google-adk/>
+- `adk-python` dependency declaration — <https://raw.githubusercontent.com/google/adk-python/main/pyproject.toml>
 - Google Gen AI Python SDK repository — <https://github.com/googleapis/python-genai>
 - Gen AI Python SDK reference, including automatic function calling and `embed_content` — <https://googleapis.github.io/python-genai/>
 - `google-genai` on PyPI — <https://pypi.org/project/google-genai/>
 - Gemini API document processing, page limits and `media_resolution` — <https://ai.google.dev/gemini-api/docs/document-processing>
 - Gemini API function calling — <https://ai.google.dev/gemini-api/docs/function-calling>
-- Agent Development Kit documentation — <https://adk.dev/>
-- ADK announcement, Google Developers Blog, 9 April 2025 — <https://developers.googleblog.com/en/agent-development-kit-easy-to-build-multi-agent-applications/>
-- `google-adk` on PyPI — <https://pypi.org/project/google-adk/>
-- `adk-python` dependency declaration — <https://raw.githubusercontent.com/google/adk-python/main/pyproject.toml>
 - Genkit — <https://genkit.dev/>
 - Genkit for Python and Go announcement, Firebase Blog, April 2025 — <https://firebase.blog/posts/2025/04/genkit-python-go/>
 - Google Antigravity SDK overview — <https://antigravity.google/docs/sdk/overview/>
