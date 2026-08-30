@@ -93,7 +93,7 @@ that consumes the file. Install it if you are a person who wants to see a board.
 | `agents/resilience.py` — provider failover | **Working** · 14 tests |
 | `fab.py` — Gerber, Excellon, BOM, pick-and-place | **Working** · fab package export |
 | `order.py` — order options, manufacturability preflight | **Working** · blocks an unrouted board |
-| `mcp/` — MCP server over stdio | **Working** · 23 tests |
+| `mcp/` — MCP server over stdio | **Working** · 32 tests |
 | `audit/` — optional visual design review | **Working** · 52 tests |
 | `service/` — Cloud Run + Firestore cache | **Working** · 103 tests |
 | `frontend/` — Svelte review UI, served by the service | **Working** · persistent orchestrator chat, expandable model/tool traces, session JSON, review, schematic and board tabs |
@@ -226,6 +226,65 @@ Nothing sets rotation today.
 
 `--no-route` stops after placement, which is what every run produced before this
 existed.
+
+### Simulating the circuit
+
+DRC answers whether a board can be *made*. Nothing answered whether the circuit
+*works* — and that gap is why a design loop cannot close itself: it can produce a
+plausible schematic and a manufacturable board with no evidence the thing does what it
+was asked for. `spice/` is that missing check, shaped like a test runner rather than a
+waveform viewer.
+
+```python
+from silkscreen.spice import Assertion, Measurement, Source, Testbench, Transient, verify
+
+bench = Testbench(
+    analysis=Transient(step=1e-6, stop=2e-3),
+    sources=[Source.pulse("V1", "VIN", "GND",
+                          initial=0, pulsed=5, width=1e-3, period=2e-3)],
+)
+report = verify(spec, bench, [
+    Assertion(name="rise time under 250 us",
+              measurement=Measurement(kind="rise_time", signal="VOUT",
+                                      window=(0, 1e-3)),
+              op="<", value=250e-6, unit="s"),
+])
+report.passed        # bool
+report.summary()     # which clause failed, and by how much
+```
+
+`python scripts/simulate_demo.py` runs it end to end against an RC low-pass, checking
+every result against closed-form circuit theory:
+
+```
+  PASS  10-90% rise time is tau*ln(9)
+        measured 0.00021946s, expected within 0.000219503s (margin -4.28e-08)
+  PASS  -3 dB corner is 1/(2*pi*R*C)
+        measured 1593.23Hz, expected within 1593.14Hz (margin -0.0889)
+```
+
+**Nothing here can return a quiet zero.** An agent that gets an empty result reads it as
+a circuit that behaves. So a missing model, a probe on a net that does not exist, a
+signal with no rising edge, and a solver that will not converge each raise a distinct,
+self-describing error. A measurement that cannot be taken fails its clause rather than
+passing it vacuously.
+
+**Where it stops, plainly.** A device (an IC) in the circuit IR is a pin map with no
+behaviour attached, and no netlist generator can invent one. Simulating a circuit with
+an IC in it requires you to supply a `SubcircuitModel` — the part's own SPICE model —
+and without one the run raises and names the part rather than quietly leaving it out.
+Passive networks need nothing extra. A diode with no model gets a generic silicon
+stand-in and a warning saying so; `Testbench(strict=True)` turns that warning into an
+error, which is what you want when the verdict has to be about the specified part.
+
+ngspice and LTspice sit behind one interface, selected automatically. ngspice is what CI
+installs and what this is verified against; LTspice discovery and batch invocation are
+implemented but have not been run end to end — see the note in
+`spice/simulators.py`. Install ngspice with `brew install ngspice` or
+`apt-get install ngspice`; without a simulator the simulation tests skip and the rest of
+the suite is unaffected.
+
+---
 
 ### Generating footprints
 
@@ -417,8 +476,8 @@ and the board and review panes offer the emitted `.kicad_pcb` as a download.
 silkscreen-mcp        # JSON-RPC 2.0 over stdio
 ```
 
-Five tools: `validate_circuit`, `build_board`, `emit_kicad_pcb`, `place_parts`,
-`generate_footprint`.
+Tools: `validate_circuit`, `build_board`, `emit_kicad_pcb`, `place_parts`,
+`generate_footprint`, `simulate_circuit`, `spice_capabilities`.
 
 ---
 

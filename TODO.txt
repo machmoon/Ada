@@ -186,6 +186,23 @@ feature is tracked under feature 12.
                                                                      the runners and installing one would dominate
                                                                      the job
 
+ 16  SPICE simulation as a verifier                    [PARTIAL]     passive-network verification is real; trusted
+                                                                     IC model sourcing and agent-loop use remain
+ ----- CircuitSpec -> SPICE netlist                   [DONE]        spice/deck.py; the caller supplies sources,
+                                                                     analysis and trusted behavioural models
+ ----- Declarative measurements + assertions          [DONE]        measured value and signed margin per clause
+ ----- ngspice runner, verified end to end            [DONE]        CI checks RC results against closed-form theory
+ ----- LTspice runner                                 [UNVERIFIED]  process launch has not run against LTspice;
+                                                                     binary RAW parsing has offline fixtures
+ ----- MCP simulate_circuit + spice_capabilities      [DONE]        mcp/server.py; spice/spec.py is the JSON bridge
+ ----- Secure executable-deck boundary                [IN PROGRESS] PR #15 review: reject directive injection and
+                                                                     bound MCP-controlled runtime/output settings
+ ----- Windowed reference bandwidth alignment         [IN PROGRESS] PR #15 review: numerator and reference must use
+                                                                     the same frequency samples
+ ----- Device models for ICs                          [OPEN]        use a trusted server-side model registry; never
+                                                                     execute raw model programs supplied over MCP
+ ----- Wire simulation into the agent loop            [OPEN]        future propose -> simulate -> repair feedback
+
 OPEN WORK, SUMMARISED
 ---------------------
 Everything actionable reduces to: feature 2 in full (parallel reads, now the
