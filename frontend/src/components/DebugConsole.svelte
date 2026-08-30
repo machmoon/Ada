@@ -1,4 +1,13 @@
+<script module>
+  // The drawer unmounts when it closes, so the height a reader dragged to has
+  // to outlive the instance. Module scope, not localStorage: it is a reading
+  // posture for this page, not a setting worth carrying between visits.
+  // NaN until the first open, which clampHeight reads as "use the default".
+  let lastHeight = Number.NaN
+</script>
+
 <script>
+  import { MIN_HEIGHT, clampHeight, maxHeight, stepHeight } from '../lib/console-size.js'
   import { downloadText } from '../lib/download.js'
   import { formatCount, joinDot } from '../lib/format.js'
   import {
@@ -6,6 +15,7 @@
     LOG_TEXT_MIME,
     clearLog,
     log,
+    logEvent,
     logFilename,
     toNdjson,
     toText,
@@ -20,16 +30,30 @@
   const STICK_PX = 8
   const MAX_DATA_CHARS = 300
   const COPY_FLASH_MS = 1200
+  /** Quiet time that ends a run of arrow keys. One entry per burst, not one
+      per key: a reader nudging the drawer taller is doing one thing. */
+  const KEY_BURST_MS = 400
 
   let errorsOnly = $state(false)
   let showAll = $state(false)
   let copyLabel = $state('Copy')
   let list = $state(null)
+  let viewport = $state(window.innerHeight)
+  let height = $state(clampHeight(lastHeight, window.innerHeight))
 
   // Plain lets: neither is read during render, and making them reactive would
   // schedule an update for something only an effect ever looks at.
   let stick = true
   let copyTimer = 0
+
+  let dragging = false
+  let dragFrom = 0
+  let grabY = 0
+  let grabHeight = 0
+  let keyTimer = 0
+  let keyFrom = 0
+
+  const ceiling = $derived(maxHeight(viewport))
 
   const entries = $derived($log.entries)
   const errors = $derived(entries.filter((e) => e.level === 'error').length)
@@ -113,6 +137,62 @@
     document.querySelector('#debug-console-toggle')?.focus()
   }
 
+  function noteResize(from, to) {
+    if (from === to) return
+    logEvent('ui.console-resize', `console ${from} → ${to} px`, { from, to })
+  }
+
+  function startDrag(event) {
+    if (event.button > 0) return
+    dragging = true
+    dragFrom = height
+    grabY = event.clientY
+    grabHeight = height
+    event.currentTarget.setPointerCapture(event.pointerId)
+    // The drawer's top edge sits against the body's text; without this a drag
+    // that starts on the grip selects whatever it passes over.
+    event.preventDefault()
+  }
+
+  function onDrag(event) {
+    if (!dragging) return
+    // Upward is taller: the drawer is anchored to the bottom of the window.
+    height = clampHeight(grabHeight + (grabY - event.clientY), viewport)
+  }
+
+  function endDrag(event) {
+    if (!dragging) return
+    dragging = false
+    // Capture is released implicitly by the browser on pointerup, and asking
+    // for a pointer it no longer holds throws.
+    if (event.currentTarget.hasPointerCapture?.(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId)
+    }
+    noteResize(dragFrom, height)
+  }
+
+  /** Ends a run of arrow keys, whether it ran out of quiet time or the drawer
+      closed underneath it. Either way the burst is one entry. */
+  function flushKeys() {
+    if (!keyTimer) return
+    clearTimeout(keyTimer)
+    keyTimer = 0
+    noteResize(keyFrom, height)
+  }
+
+  function onGripKey(event) {
+    const direction = event.key === 'ArrowUp' ? 1 : event.key === 'ArrowDown' ? -1 : 0
+    if (!direction) return
+    // Kept off the page: the arrows would otherwise scroll the entry list.
+    event.preventDefault()
+    const to = stepHeight(height, direction, viewport)
+    if (to === height) return
+    if (!keyTimer) keyFrom = height
+    height = to
+    clearTimeout(keyTimer)
+    keyTimer = setTimeout(flushKeys, KEY_BURST_MS)
+  }
+
   // Measured before the rows are patched in: once a new entry is in the DOM the
   // old scroll position no longer says whether the tail was being read.
   $effect.pre(() => {
@@ -137,10 +217,57 @@
     return () => window.removeEventListener('keydown', onkey)
   })
 
-  $effect(() => () => clearTimeout(copyTimer))
+  // Written here rather than at each assignment, so every path that changes the
+  // height -- drag, arrows, a shrunken window -- is remembered by one of them.
+  $effect(() => {
+    lastHeight = height
+  })
+
+  // A drawer left at 80% of a tall window would be taller than a short one.
+  $effect(() => {
+    const onresize = () => {
+      viewport = window.innerHeight
+      height = clampHeight(height, viewport)
+    }
+    window.addEventListener('resize', onresize)
+    return () => window.removeEventListener('resize', onresize)
+  })
+
+  $effect(() => () => {
+    clearTimeout(copyTimer)
+    flushKeys()
+  })
 </script>
 
-<section id="debug-console" class="console" aria-label="Debug console" data-testid="debug-console">
+<section
+  id="debug-console"
+  class="console"
+  aria-label="Debug console"
+  style:height="{height}px"
+  data-testid="debug-console"
+>
+  <!-- A focusable separator is the ARIA window-splitter pattern, and the one
+       role aria-valuenow is defined on; Svelte's checker reads every separator
+       as decorative. -->
+  <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
+  <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
+  <div
+    class="grip"
+    role="separator"
+    tabindex="0"
+    aria-orientation="horizontal"
+    aria-label="Resize console"
+    aria-valuemin={MIN_HEIGHT}
+    aria-valuemax={ceiling}
+    aria-valuenow={height}
+    onpointerdown={startDrag}
+    onpointermove={onDrag}
+    onpointerup={endDrag}
+    onpointercancel={endDrag}
+    onkeydown={onGripKey}
+    data-testid="debug-console-resize"
+  ></div>
+
   <div class="toolbar" data-testid="debug-console-toolbar">
     <span class="lbl">Console</span>
     <span class="mono counts" data-testid="debug-console-counts">{counts}</span>
@@ -228,13 +355,26 @@
      so the drawer pushes the layout rather than covering it. */
   .console {
     flex-shrink: 0;
-    height: clamp(160px, 34vh, 340px);
     display: flex;
     flex-direction: column;
     min-height: 0;
     background: var(--well);
     border-top: 1px solid var(--rule);
   }
+
+  /* Pulled up over the drawer's top border, so the hairline someone aims at is
+     inside the target rather than one pixel above it. */
+  .grip {
+    flex-shrink: 0;
+    height: 9px;
+    margin-top: -1px;
+    cursor: row-resize;
+    touch-action: none;
+  }
+  /* Darkens the border it covers rather than painting a bar of its own: the
+     drawer's edge is already the line, and it only has to say it can move. */
+  .grip:hover, .grip:focus-visible { box-shadow: inset 0 1px 0 var(--ink-soft); }
+  .grip:focus-visible { outline-offset: -2px; }
 
   .toolbar {
     height: 30px;
