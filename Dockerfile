@@ -22,7 +22,7 @@ WORKDIR /app
 # Dependencies first, so a source edit does not invalidate the wheel layer.
 COPY pyproject.toml README.md ./
 COPY engine/ ./engine/
-RUN pip install --no-cache-dir -e ".[agents,cloud]"
+RUN pip install --no-cache-dir -e ".[agents,cloud,adk]"
 
 COPY service/ ./service/
 
