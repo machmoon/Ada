@@ -13,6 +13,13 @@ retrieval work from this file.
 NOTE: DEVPOST still describes the ADK topology as the plan. With the idea
 archived, that section needs rewriting around the SDK implementation.
 
+[EXAMPLES of PROMPTS]
+- a 3.3 V LDO regulator board using an AMS1117-3.3 with input and output bulk capacitors
+- a 555 timer LED blinker at about 1 Hz on a 9 V supply
+- an STM32F030 breakout with a 3.3 V regulator, decoupling, and a reset button
+- a USB-powered dual LED driver with current-limit resistors
+- an attiny85 board with ISP header and power indicator LED (good for showing the reviewer flag missing decoupling)
+
 FEATURES
 --------
  #   Feature / sub-feature                             Status        Note
@@ -50,7 +57,7 @@ FEATURES
  ----- Real write-back + preloaded_facts feed-in       [DONE]        commit 4249c5b
  ----- Ops polish: client reuse, document env var      [OPEN]        USE_FIRESTORE undocumented today
  9   Web review UI                                     [PARTIAL]
- ----- Review page, served by the service at /         [DONE]        web/ Svelte SPA; same origin, so no CORS
+ ----- Review page, served by the service at /         [DONE]        frontend/ Svelte SPA; same origin, so no CORS
  ----- Board well (Option B), placements in the API    [DONE]        service resolves the geometry; SVG flips Y once
  ----- Findings cross-highlight, review <-> board      [DONE]        a selected finding lights up its parts
  ----- Grounding toggle on the intent form             [DONE]        sends "ground" only when a datasheet is given
