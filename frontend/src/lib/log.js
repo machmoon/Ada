@@ -18,7 +18,9 @@ export const LOG_NDJSON_MIME = 'application/x-ndjson'
 
 /** console.log lands on info; there is no separate trace level. */
 export const LEVELS = ['error', 'warn', 'info', 'debug']
-export const SOURCES = ['app', 'console', 'window']
+/** app and server are lines we wrote — the client's own and the pipeline's,
+    relayed from the stream; console and window are captures from the page. */
+export const SOURCES = ['app', 'server', 'console', 'window']
 
 /** Longest list safeArg keeps; whatever is past it becomes one marker element. */
 const MAX_ITEMS = 50

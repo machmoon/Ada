@@ -93,9 +93,11 @@ describe('the constants other modules build against', () => {
     expect(LOG_NDJSON_MIME).toBe('application/x-ndjson')
   })
 
-  it('lists the four levels and the three sources', () => {
+  it('lists the four levels and the four sources', () => {
     expect(LEVELS).toEqual(['error', 'warn', 'info', 'debug'])
-    expect(SOURCES).toEqual(['app', 'console', 'window'])
+    // 'server' is the pipeline stream's relayed events; it joined the list when
+    // the run store started forwarding them.
+    expect(SOURCES).toEqual(['app', 'server', 'console', 'window'])
   })
 })
 
@@ -193,6 +195,20 @@ describe('extension noise', () => {
     const { entries } = await settled()
     expect(entries).toHaveLength(2)
     for (const entry of entries) expect(entry.ext).toBe(false)
+  })
+
+  it('never flags a relayed pipeline event, which the page did not write either', async () => {
+    record({
+      src: 'server',
+      level: 'info',
+      event: 'pipeline.run.error',
+      msg: 'run failed (502): fetching chrome-extension://a/b.js is not a datasheet url',
+      data: { event: 'run.error', error: 'moz-extension://a/b.js' },
+    })
+
+    const [entry] = (await settled()).entries
+    expect(entry.src).toBe('server')
+    expect(entry.ext).toBe(false)
   })
 
   it('leaves an ordinary capture unflagged', async () => {
