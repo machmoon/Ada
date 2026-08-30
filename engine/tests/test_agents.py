@@ -296,3 +296,133 @@ def test_transport_failure_is_not_a_proposal_failure():
 
     with pytest.raises(ModelError, match="503"):
         propose_circuit(Dead(), "a motor driver")
+
+
+# ---------------------------------------------------------------- events
+
+
+def _scripted_pipeline_model():
+    """The full-pipeline scripted model, reused by the event tests."""
+    review_json = json.dumps({"findings": [
+        {"severity": "blocker", "title": "Output cap is ceramic, not tantalum",
+         "detail": "The AMS1117 loop needs ESR the ceramic does not provide.",
+         "parts": ["c_out"], "citation": "AMS1117 p.9",
+         "suggested_fix": "Use a 22uF tantalum"},
+    ]})
+    return ScriptedModel(by_marker={
+        "reading an electronic component datasheet": json.dumps(DATASHEET_JSON),
+        "designing a printed circuit board": json.dumps(GOOD_CIRCUIT),
+        "reviewing a circuit someone else designed": review_json,
+    })
+
+
+def test_events_trace_every_stage_and_model_call(tmp_path):
+    """The stream is a progress signal: one event per boundary, no payload."""
+    model = _scripted_pipeline_model()
+    events = []
+
+    generate_pcb(
+        model,
+        "a 3.3V motor driver board",
+        datasheets={"AMS1117-3.3": "https://x/ams1117.pdf"},
+        output=tmp_path / "board.kicad_pcb",
+        time_limit_s=15.0,
+        on_event=events.append,
+    )
+
+    assert [e["event"] for e in events] == [
+        "stage.start", "read.part", "model.call", "stage.done",
+        "stage.start", "model.call", "stage.done",
+        "stage.start", "stage.done",
+        "stage.start", "model.call", "stage.done",
+    ]
+    assert [e["stage"] for e in events if e["event"].startswith("stage.")] == [
+        "read", "read", "propose", "propose", "place", "place", "review", "review",
+    ]
+    assert all(isinstance(e["t_s"], (int, float)) for e in events)
+    assert len([e for e in events if e["event"] == "model.call"]) == len(model.calls)
+
+    # No event may carry board text, model output or datasheet text.
+    for event in events:
+        assert "kicad_pcb" not in event
+        for value in event.values():
+            assert not (isinstance(value, str) and len(value) > 500)
+
+
+def test_events_report_a_repair_round(tmp_path):
+    broken = json.loads(json.dumps(GOOD_CIRCUIT))
+    broken["nets"]["GND"] = ["AMS1117-3.3.GND", "DRV8837.GND"]
+    model = ScriptedModel(responses=[json.dumps(broken), json.dumps(GOOD_CIRCUIT),
+                                     json.dumps({"findings": []})])
+    events = []
+    generate_pcb(model, "a motor driver", output=tmp_path / "b.kicad_pcb",
+                 time_limit_s=10.0, on_event=events.append)
+
+    rounds = [e for e in events if e["event"] == "propose.round"]
+    assert len(rounds) == 1
+    assert rounds[0]["round"] == 1 and rounds[0]["errors"] > 0
+    assert isinstance(rounds[0]["first_error"], str) and rounds[0]["first_error"]
+
+    done = [e for e in events
+            if e["event"] == "stage.done" and e["stage"] == "propose"]
+    assert done[0]["repair_rounds"] == 1
+
+
+def test_events_omit_stages_that_did_not_run(tmp_path):
+    """A skipped stage emits nothing at all, rather than an empty pair."""
+    model = ScriptedModel(responses=[json.dumps(GOOD_CIRCUIT)])
+    events = []
+    generate_pcb(model, "x", output=tmp_path / "b.kicad_pcb", review=False,
+                 time_limit_s=10.0, on_event=events.append)
+
+    assert [e for e in events if e.get("stage") == "review"] == []
+    assert [e for e in events if e.get("stage") == "read"] == []
+    assert len(model.calls) == 1
+
+
+def test_pipeline_without_a_callback_behaves_identically(tmp_path):
+    model = ScriptedModel(responses=[json.dumps(GOOD_CIRCUIT)])
+    result = generate_pcb(model, "x", output=tmp_path / "b.kicad_pcb",
+                          review=False, time_limit_s=10.0, on_event=None)
+    assert result.findings == []
+    assert len(model.calls) == 1
+    assert len(result.board.parts) == 6
+
+
+def test_a_raising_callback_aborts_the_run(tmp_path):
+    """A service aborts a run whose client disconnected by raising here."""
+    model = _scripted_pipeline_model()
+
+    def hang_up(event):
+        raise RuntimeError("client gone")
+
+    with pytest.raises(RuntimeError, match="client gone"):
+        generate_pcb(model, "x", output=tmp_path / "b.kicad_pcb",
+                     time_limit_s=10.0, on_event=hang_up)
+
+
+def test_events_surface_a_provider_failover(tmp_path):
+    """A failed provider is visible even though the call itself succeeded."""
+    from silkscreen.agents.resilience import FallbackModel, Provider
+
+    class Dead:
+        def generate(self, *args, **kwargs):
+            raise ModelError("upstream 503")
+
+    model = FallbackModel(providers=[
+        Provider(name="primary", model=Dead(), attempts=1),
+        Provider(name="backup",
+                 model=ScriptedModel(responses=[json.dumps(GOOD_CIRCUIT)])),
+    ])
+    events = []
+    generate_pcb(model, "x", output=tmp_path / "b.kicad_pcb", review=False,
+                 time_limit_s=10.0, on_event=events.append)
+
+    retries = [e for e in events if e["event"] == "model.retry"]
+    assert len(retries) == 1
+    assert retries[0]["provider"] == "primary" and retries[0]["stage"] == "propose"
+    assert "ModelError" in retries[0]["error"]
+
+    calls = [e for e in events if e["event"] == "model.call"]
+    assert len(calls) == 1
+    assert calls[0]["ok"] and calls[0]["provider"] == "backup"
