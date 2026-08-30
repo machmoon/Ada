@@ -496,7 +496,13 @@ def _segments_cross(a: Seg, b: Seg) -> bool:
 
 
 def seg_rect_distance_nm(seg: Seg, rect: Rect) -> int:
-    """Separation between a track's copper edge and a pad rectangle."""
+    """Separation between a track's copper edge and a pad rectangle.
+
+    A segment that crosses the rectangle entirely has both endpoints outside
+    it and both far from the corners, so nearest-endpoint distance alone
+    reports a comfortable gap for a track running straight over the pad. The
+    crossing test is what makes this a distance rather than a near-miss.
+    """
     edges = [
         Seg(rect.x0, rect.y0, rect.x1, rect.y0),
         Seg(rect.x1, rect.y0, rect.x1, rect.y1),
@@ -504,12 +510,9 @@ def seg_rect_distance_nm(seg: Seg, rect: Rect) -> int:
         Seg(rect.x0, rect.y1, rect.x0, rect.y0),
     ]
     inside = (
-        rect.x0 <= seg.x0 <= rect.x1
-        and rect.y0 <= seg.y0 <= rect.y1
-        or rect.x0 <= seg.x1 <= rect.x1
-        and rect.y0 <= seg.y1 <= rect.y1
-    )
-    if inside:
+        rect.x0 <= seg.x0 <= rect.x1 and rect.y0 <= seg.y0 <= rect.y1
+    ) or (rect.x0 <= seg.x1 <= rect.x1 and rect.y0 <= seg.y1 <= rect.y1)
+    if inside or any(_segments_cross(seg, edge) for edge in edges):
         centre = 0.0
     else:
         centre = min(

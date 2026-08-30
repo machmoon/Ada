@@ -219,6 +219,11 @@ def _parse_findings(
         )
         if limit_refs is not None and not (set(refs) & limit_refs):
             continue
+        # A suggested finding that names nothing the board contains cannot be
+        # located, cannot be checked, and reads exactly like one that can. The
+        # prompt says such findings are discarded; this is where that happens.
+        if not refs and not nets:
+            continue
         try:
             severity = Severity(str(entry.get("severity", "note")).lower())
         except ValueError:
