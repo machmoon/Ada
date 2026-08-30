@@ -20,6 +20,8 @@ cd frontend && npm run build                         # build frontend/dist, whic
 
 The web toolchain needs **Node 22 or newer** (`node --version`); CI pins 22, and Vite 8 refuses to start on anything older.
 
+Restart the Vite dev server after heavy on-disk churn (agent edits, branch merges). A long HMR history can make it serve one module under two `?t=` stamps in the same page, splitting singletons like the run store and the log ring buffer into duplicate instances — the SPA then behaves impossibly: empty feed and debug console, or the view stuck on the intent form while a paid run completes invisibly (diagnosed 2026-08-30; check `performance.getEntriesByType('resource')` for duplicate `/src/lib/run.js` URLs). The built bundle served by the service is immune.
+
 Only the CLI reads `.env` (`cli.py:_load_dotenv`); `service/app.py` does not — export `GOOGLE_API_KEY` into the environment when launching the service (e.g. `set -a && . ./.env && set +a` in Git Bash).
 
 Pytest config lives in `pyproject.toml` (`testpaths = engine/tests, service/tests`; `pythonpath = engine, .`). CI (`.github/workflows/ci.yml`) runs install + ruff + pytest + check_docs on Linux/macOS/Windows, Python 3.11, and has two further jobs the Python commands above do not cover: `web` (Node 22, in `frontend/`: `npm ci` + `npm test` + `npm run build`) and `docker` (a `docker build .`). Do not quote test counts in prose anywhere — the number has drifted repeatedly (40, 54, 143, 160) and `check_docs.py` only guards README and DEVPOST.
