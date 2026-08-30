@@ -127,6 +127,6 @@
     padding: 8px 15px;
     border-radius: var(--radius);
   }
-  .primary { background: var(--oxblood); color: var(--surface); border: none; }
+  .primary { background: var(--accent); color: var(--accent-ink); border: none; }
   .secondary { background: transparent; color: var(--ink-mid); border: 1px solid var(--rule); font-weight: 400; }
 </style>

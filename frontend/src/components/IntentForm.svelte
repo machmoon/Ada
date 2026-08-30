@@ -212,10 +212,10 @@
     font-size: var(--fs-body);
     font-weight: 500;
     padding: 0 20px;
-    background: var(--oxblood);
-    color: var(--surface);
+    background: var(--accent);
+    color: var(--accent-ink);
     border: none;
     border-radius: var(--radius);
   }
-  .run:disabled { background: var(--rule); color: var(--surface); }
+  .run:disabled { background: var(--accent-off); color: var(--accent-off-ink); }
 </style>

@@ -9,18 +9,19 @@
 
 export const SOLVER_FRAME = 'solver-y-up'
 
-/** Every colour is lifted from design/Board.dc.html, the dark board well.
-    These are the ones applied as SVG attributes; the well's own background and
-    label colour are stylesheet values and live in styles/tokens.css. */
-export const GRID_DOT = '#848484'
+/** The board's colours, named rather than spelt: every value lives with the
+    rest of the palette in styles/tokens.css, so nothing here is a colour that
+    a theme cannot reach. These go straight into SVG paint attributes, which
+    are CSS declarations and take a var() like any other. */
+export const GRID_DOT = 'var(--board-grid-dot)'
 export const GRID_DOT_OPACITY = 0.22
-export const EDGE_CUTS = '#D0D2CD'
-export const COURTYARD = '#FF26E2'
-export const SILKSCREEN = '#F2EDA1'
+export const EDGE_CUTS = 'var(--board-edge-cuts)'
+export const COURTYARD = 'var(--board-courtyard)'
+export const SILKSCREEN = 'var(--board-silkscreen)'
 
 const LAYERS = {
-  top: { key: 'top', kicad: 'F.Cu', color: '#C83434' },
-  bottom: { key: 'bottom', kicad: 'B.Cu', color: '#4D7FC4' },
+  top: { key: 'top', kicad: 'F.Cu', color: 'var(--board-copper-top)' },
+  bottom: { key: 'bottom', kicad: 'B.Cu', color: 'var(--board-copper-bottom)' },
 }
 
 /** The contract has two layers. An unrecognised one is drawn as front copper

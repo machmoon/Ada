@@ -212,7 +212,7 @@
     height: clamp(300px, 54vh, 620px);
     background: var(--well-bg);
     border: 1px solid var(--ink-soft);
-    box-shadow: inset 0 1px 6px rgba(0, 0, 0, .5);
+    box-shadow: inset 0 1px 6px var(--shadow-inset);
     overflow: hidden;
   }
 
@@ -259,7 +259,7 @@
     min-width: 150px;
     max-width: 260px;
     pointer-events: none;
-    box-shadow: 0 2px 8px rgba(0, 0, 0, .35);
+    box-shadow: 0 2px 8px var(--shadow-pop);
     z-index: 2;
   }
   .tip.below { transform: translate(-50%, 9px); }
