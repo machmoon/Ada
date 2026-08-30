@@ -50,6 +50,8 @@ MODULES: dict[str, tuple[str, ...]] = {
     "netlist.py": ("test_netlist.py",),
     "kicad.py": ("test_kicad.py",),
     "board.py": ("test_board.py",),
+    "schematic.py": ("test_schematic.py",),
+    "routing.py": ("test_routing.py",),
     "footprints.py": ("test_footprints.py",),
     "retrieval.py": ("test_retrieval.py",),
     "resilience.py": ("test_resilience.py",),

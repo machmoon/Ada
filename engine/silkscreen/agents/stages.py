@@ -1,12 +1,12 @@
-"""The four pipeline stages, as standalone bodies.
+"""The six pipeline stages, as standalone bodies.
 
-Each function is one stage of prompt-to-PCB: read, propose, place, review. They
-hold the whole of a stage -- its model calls, its guards, and the exact events
-it emits -- so that more than one driver can run the same stages. The straight
-line in :mod:`silkscreen.agents.pipeline` and the ADK workflow in
-:mod:`silkscreen.agents.adk` both call these, and therefore emit byte-identical
-events; the service and the SPA read those event names, so a driver that grew
-its own copy of a stage would silently fork the contract.
+Each function is one stage of prompt-to-PCB: read, propose, place, schematic,
+route, review. They hold the whole of a stage -- its model calls, its guards,
+and the exact events it emits -- so that more than one driver can run the same
+stages. The straight line in :mod:`silkscreen.agents.pipeline` and the ADK
+workflow in :mod:`silkscreen.agents.adk` both call these, and therefore emit
+byte-identical events; the service and the SPA read those event names, so a
+driver that grew its own copy of a stage would silently fork the contract.
 
 ``emit`` and ``enter`` come from the driver: ``emit`` publishes one flat event
 dict, ``enter`` tells the model wrapper which stage is making its calls. Nothing
@@ -16,17 +16,29 @@ here imports :mod:`silkscreen.agents.pipeline` -- that import runs the other way
 from __future__ import annotations
 
 from collections.abc import Callable
-from typing import Any
+from pathlib import Path
+from typing import Any, NamedTuple
 
-from ..board import BoardResult, build_board
+from ..board import BoardResult, build_board, route_board, write_board
 from ..netlist import CircuitSpec
+from ..routing import RouteResult
+from ..schematic import build_schematic, write_project, write_schematic
 from ..units import NM_PER_MM
 from .datasheet import PartFacts, read_datasheet
 from .model import Model
 from .propose import ProposalAttempt, propose_circuit
 from .review import Finding, Severity, review_circuit
 
-__all__ = ["read_stage", "propose_stage", "place_stage", "review_stage"]
+__all__ = [
+    "read_stage",
+    "propose_stage",
+    "place_stage",
+    "schematic_stage",
+    "route_stage",
+    "review_stage",
+    "SchematicArtifacts",
+    "NO_ARTIFACTS",
+]
 
 Emit = Callable[[dict[str, Any]], None]
 Enter = Callable[[str], None]
@@ -148,6 +160,110 @@ def place_stage(
         }
     )
     return board
+
+
+class SchematicArtifacts(NamedTuple):
+    """The files the schematic stage wrote, or three Nones when it did not run."""
+
+    schematic_path: Path | None = None
+    project_path: Path | None = None
+    placed_board_path: Path | None = None
+
+
+#: What the schematic stage returns when it does not run, and the default a
+#: driver passes when it has nothing to report. A module-level singleton
+#: because it is immutable and shared, and because a NamedTuple constructed in
+#: an argument default is the mutable-default footgun's shape even when it is
+#: not one.
+NO_ARTIFACTS = SchematicArtifacts()
+
+
+def schematic_stage(
+    spec: CircuitSpec,
+    board: BoardResult,
+    *,
+    output: str | Path | None,
+    emit_stages: bool,
+    emit: Emit,
+    enter: Enter,
+) -> SchematicArtifacts:
+    """Draw the sheet and leave every stage on disk, not just the last one.
+
+    The only stage body that writes files. The rest hand their results back and
+    let the driver's tail decide; this one cannot, because the three artifacts
+    it produces have no other owner and both drivers must produce them
+    identically. With no ``output`` there is nowhere to put them, so the stage
+    does not run and emits nothing -- the same convention ``read_stage`` follows
+    with no datasheets.
+
+    The schematic goes out before any copper exists, because it is the artifact
+    a person reads first and it does not depend on placement succeeding well.
+    """
+    out_path = Path(output) if output is not None else None
+    if out_path is None or not emit_stages:
+        return NO_ARTIFACTS
+
+    enter("schematic")
+    emit({"event": "stage.start", "stage": "schematic"})
+    stem = out_path.stem
+    sheet = build_schematic(
+        spec,
+        footprints={p.ref: f"silkscreen:{p.footprint.name}" for p in board.parts},
+    )
+    board.warnings.extend(sheet.warnings)
+    artifacts = SchematicArtifacts(
+        schematic_path=write_schematic(
+            sheet, out_path.with_name(f"{stem}.kicad_sch"), project_name=stem
+        ),
+        project_path=write_project(
+            out_path.with_name(f"{stem}.kicad_pro"), project_name=stem
+        ),
+        placed_board_path=write_board(
+            board, out_path.with_name(f"{stem}.placed.kicad_pcb")
+        ),
+    )
+    emit(
+        {
+            "event": "stage.done",
+            "stage": "schematic",
+            "symbols": len(sheet.symbols),
+            "warnings": len(sheet.warnings),
+        }
+    )
+    return artifacts
+
+
+def route_stage(
+    board: BoardResult,
+    *,
+    route: bool,
+    emit: Emit,
+    enter: Enter,
+) -> RouteResult | None:
+    """Lay copper on the placed board. Skipped -- and silent -- when off.
+
+    Mutates ``board`` in place, so the ``.kicad_pcb`` the driver's tail writes
+    carries the tracks. Nets the router could not finish are named in the
+    result and in ``board.unrouted_nets``; a caller reporting the board as
+    routed without reading them is the failure the router exists to avoid.
+    """
+    if not route:
+        return None
+    enter("route")
+    emit({"event": "stage.start", "stage": "route"})
+    result = route_board(board)
+    emit(
+        {
+            "event": "stage.done",
+            "stage": "route",
+            "tracks": len(result.tracks),
+            "vias": len(result.vias),
+            "routed_nets": len(result.routed),
+            "unrouted_nets": len(result.unrouted),
+            "copper_mm": round(result.routed_length_nm / NM_PER_MM, 3),
+        }
+    )
+    return result
 
 
 def review_stage(

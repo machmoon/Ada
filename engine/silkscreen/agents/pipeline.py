@@ -1,8 +1,10 @@
 """Prompt to PCB, with the model checked at every step.
 
-    intent ──► datasheets ──► propose ──► validate/repair ──► place ──► .kicad_pcb
-                                                │                          │
-                                                └──────► review ───────────┘
+    intent ─► datasheets ─► propose ─► validate/repair ─► .kicad_sch ─► place
+                                            │                            │
+                                            │                          route
+                                            │                            │
+                                            └───────► review ──────► .kicad_pcb
 
 Two gates sit between the model and the board. The first is structural: the
 circuit IR refuses to build something malformed and hands every error back for
@@ -22,11 +24,21 @@ from typing import Any
 
 from ..board import BoardResult, write_board
 from ..netlist import CircuitSpec
+from ..routing import RouteResult
 from .datasheet import PartFacts
 from .model import Document, Model
 from .propose import ProposalAttempt
 from .review import Finding, Severity
-from .stages import place_stage, propose_stage, read_stage, review_stage
+from .stages import (
+    NO_ARTIFACTS,
+    SchematicArtifacts,
+    place_stage,
+    propose_stage,
+    read_stage,
+    review_stage,
+    route_stage,
+    schematic_stage,
+)
 
 __all__ = ["PipelineResult", "generate_pcb"]
 
@@ -48,6 +60,24 @@ class PipelineResult:
     findings: list[Finding] = field(default_factory=list)
     attempts: list[ProposalAttempt] = field(default_factory=list)
     board_path: Path | None = None
+    #: The routed copper, or None when routing was turned off.
+    route: RouteResult | None = None
+    #: The other files a run leaves behind, so every stage is inspectable in
+    #: KiCad rather than only the last one.
+    schematic_path: Path | None = None
+    project_path: Path | None = None
+    placed_board_path: Path | None = None
+
+    @property
+    def artifacts(self) -> list[Path]:
+        """Every file this run wrote, in the order the stages produced them."""
+        ordered = [
+            self.project_path,
+            self.schematic_path,
+            self.placed_board_path,
+            self.board_path,
+        ]
+        return [p for p in ordered if p is not None]
 
     @property
     def blockers(self) -> list[Finding]:
@@ -66,6 +96,8 @@ class PipelineResult:
         ]
         if self.repair_rounds:
             lines.append(f"{self.repair_rounds} repair round(s) before it validated")
+        if self.route is not None:
+            lines.append(self.route.summary())
         blockers = len(self.blockers)
         lines.append(
             f"{len(self.findings)} finding(s), {blockers} blocker(s)"
@@ -205,8 +237,16 @@ def _finish(
     findings: list[Finding],
     attempts: list[ProposalAttempt],
     output: str | Path | None,
+    route: RouteResult | None = None,
+    artifacts: SchematicArtifacts = NO_ARTIFACTS,
 ) -> PipelineResult:
-    """Write the board if asked, then assemble the result. Emits nothing."""
+    """Write the board if asked, then assemble the result. Emits nothing.
+
+    This runs after the route stage, so the board it writes carries the copper
+    the router laid. Writing it earlier would leave the headline artifact --
+    the one named after what the caller asked for -- as the only unrouted file
+    in the project.
+    """
     path = None
     if output is not None:
         path = write_board(board, output)
@@ -219,6 +259,10 @@ def _finish(
         findings=findings,
         attempts=attempts,
         board_path=path,
+        route=route,
+        schematic_path=artifacts.schematic_path,
+        project_path=artifacts.project_path,
+        placed_board_path=artifacts.placed_board_path,
     )
 
 
@@ -232,6 +276,8 @@ def _generate_pcb_sdk(
     max_repairs: int = 3,
     time_limit_s: float = 20.0,
     review: bool = True,
+    route: bool = True,
+    emit_stages: bool = True,
     on_event: Callable[[dict[str, Any]], None] | None = None,
     include_responses: bool = False,
 ) -> PipelineResult:
@@ -255,6 +301,15 @@ def _generate_pcb_sdk(
         propose_on_event=emit if on_event is not None else None,
     )
     board = place_stage(spec, time_limit_s=time_limit_s, emit=emit, enter=enter)
+    artifacts = schematic_stage(
+        spec,
+        board,
+        output=output,
+        emit_stages=emit_stages,
+        emit=emit,
+        enter=enter,
+    )
+    route_result = route_stage(board, route=route, emit=emit, enter=enter)
     findings = review_stage(
         agent_model, spec, facts=facts, review=review, emit=emit, enter=enter
     )
@@ -267,6 +322,8 @@ def _generate_pcb_sdk(
         findings=findings,
         attempts=attempts,
         output=output,
+        route=route_result,
+        artifacts=artifacts,
     )
 
 
@@ -280,6 +337,8 @@ def generate_pcb(
     max_repairs: int = 3,
     time_limit_s: float = 20.0,
     review: bool = True,
+    route: bool = True,
+    emit_stages: bool = True,
     on_event: Callable[[dict[str, Any]], None] | None = None,
     include_responses: bool = False,
     engine: str = "",
@@ -300,6 +359,15 @@ def generate_pcb(
         max_repairs: How many times the proposal may be sent back for repair.
         time_limit_s: Placement solver budget.
         review: Run the adversarial review pass.
+        route: Lay copper after placing. Off leaves a placed board whose pads
+            carry nets and whose copper is empty -- which KiCad draws as a
+            ratsnest, and which is what every run produced before routing
+            existed. Nets the router cannot finish are listed in
+            ``result.route.unrouted`` whether this is on or not.
+        emit_stages: Alongside the board, write the ``.kicad_sch``, the
+            ``.kicad_pro`` that ties the two together, and the pre-routing
+            ``.placed.kicad_pcb``, all named after ``output``. Ignored when
+            ``output`` is None, since there is nowhere to put them.
         on_event: Called with one flat dict per stage boundary and per model
             round-trip, each carrying ``event`` and ``t_s`` -- seconds since
             this call began. Events carry counts and status only, never board
@@ -336,6 +404,8 @@ def generate_pcb(
             max_repairs=max_repairs,
             time_limit_s=time_limit_s,
             review=review,
+            route=route,
+            emit_stages=emit_stages,
             on_event=on_event,
             include_responses=include_responses,
         )
@@ -357,6 +427,8 @@ def generate_pcb(
             max_repairs=max_repairs,
             time_limit_s=time_limit_s,
             review=review,
+            route=route,
+            emit_stages=emit_stages,
             on_event=on_event,
             include_responses=include_responses,
         )

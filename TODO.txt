@@ -45,16 +45,16 @@ feature is tracked under feature 12.
  3   Validation repair loop                            [DONE-SDK]    now: for-loop inside an ADK node
  ----- Batched error collection, all failures at once  [DONE]        parse_circuit_spec, netlist.py
  ----- Bounded loop, ends when the IR validates        [DONE]        propose.py
- ----- A pin on two nets rejected at validation        [OPEN]        Greptile P1 on PR #12 (verified genuine):
-                                                                     netlist.py checks endpoint shape and pin
-                                                                     existence but not that a pin joins at most
-                                                                     one net, so two nets sharing a pin validate
-                                                                     even though they are electrically one; the
-                                                                     schematic's netByPin and the board's pad-net
-                                                                     map both inherit the ambiguity last-wins.
-                                                                     Fix belongs here so the repair loop corrects
-                                                                     the model; coordinate with Pat's PR #10,
-                                                                     which also edits netlist.py.
+ ----- A pin on two nets rejected at validation        [DONE]        landed in PR #10, which also edits
+                                                                     netlist.py. Two nets sharing a pin are
+                                                                     electrically one and every consumer resolved
+                                                                     it differently. Batched with the rule below
+                                                                     so the repair loop corrects the model.
+ ----- Two pin names on one pin number rejected        [DONE]        Greptile P1 on PR #10: the number is what
+                                                                     reaches the footprint and the symbol, so the
+                                                                     second name overwrote the first and one
+                                                                     specified connection vanished from both
+                                                                     emitted files without raising.
  ----- ADK LoopAgent wrapper                           [SUPERSEDED]  the bounded loop is plain Python inside a
                                                                      node under ADK 2.0; see feature 12
  4   Adversarial reviewer                              [DONE-SDK]
@@ -144,6 +144,41 @@ feature is tracked under feature 12.
  ----- D4 CLAUDE.md seam, setup, framework claim       [DONE]        layout, dispatcher, extras, known issue 6
  ----- D5 check_docs --fix once counts settle          [OPEN]        run after the ADK tests land
 
+ 14  Schematic emission (.kicad_sch + .kicad_pro)     [DONE]        PR #10; a run leaves a KiCad project, not
+                                                                     one board file
+ ----- Generated symbols, embedded lib_symbols         [DONE]        opens where no KiCad library is installed
+ ----- Net-label stubs, one per validated pin          [DONE]        pin-level, matching netlist.py's contract
+ ----- Shared refs so C3 is C3 in both files           [DONE]        CircuitSpec.assign_refs; both emitters call it
+ ----- Verified by KiCad's own ERC                     [DONE]        kicad-cli 8.0.9: 0 errors. Found and fixed
+                                                                     four geometry bugs first, incl. every
+                                                                     passive's net label drawn on its own body
+ ----- Sheet layout beyond one A4 page                 [NOT BUILT]   overflow is reported, not paginated
+ ----- Surface the schematic in the web UI             [OPEN]        the stage only runs with an output path and
+                                                                     the service passes none, so the SPA has no
+                                                                     schematic to show and deliberately no rail
+                                                                     row for it. Needs a service-side decision
+                                                                     about returning the sheet, like kicad_pcb.
+ 15  Copper routing (two-layer grid maze router)       [PARTIAL]     PR #10
+ ----- A* over a 0.25 mm lattice, explicit via cost    [DONE]        routing.py
+ ----- Unroutable nets named, never silently dropped   [DONE]        incl. both refusal paths, so a skipped route
+                                                                     cannot report 100% complete
+ ----- Clearance enforced inside the search            [DONE]        was left to a halo that could not claim nodes
+                                                                     another net owned; KiCad DRC found the
+                                                                     resulting short. 14 DRC errors -> 2, and both
+                                                                     survivors are the footprint's own geometry
+ ----- Bounded search, in expansions not seconds       [DONE]        400k total / 150k per net, sized from
+                                                                     measurement; worst case 76s -> under 7s
+ ----- Rip-up and retry                                [NOT BUILT]   sequential and order-dependent, so it paints
+                                                                     itself into corners a real router escapes
+ ----- Fine-pitch packages                             [NOT BUILT]   the 0.25 mm grid cannot reach every pin of an
+                                                                     LQFP; measured 6/50 nets on a dense board.
+                                                                     Needs a finer grid or off-grid pad escapes
+ ----- Route the copper in the web UI's board well     [NOT BUILT]   the downloaded .kicad_pcb has tracks; the SVG
+                                                                     board well still draws placement only
+ ----- DRC in CI                                       [IDEA]        kicad-cli is a local gate today; no KiCad on
+                                                                     the runners and installing one would dominate
+                                                                     the job
+
 OPEN WORK, SUMMARISED
 ---------------------
 Everything actionable reduces to: feature 2 in full (parallel reads, now the
@@ -160,3 +195,14 @@ SILKSCREEN_ENGINE=sdk as the kill switch, and the image, CI and setup all
 install the adk extra. What remains under 12 is the queue behind the flip —
 R9 and R11, then R13 through R16, with R17 and R18 as ideas. Feature 13 is
 complete, D5 included (check_docs --fix ran once the counts settled).
+
+Features 14 and 15 landed with PR #10 and changed what a run produces: a whole
+KiCad project rather than one placed board file. What is left of them is the
+web UI catching up (the SPA shows neither the schematic nor the tracks) and the
+router's two honest limits, rip-up-and-retry and fine-pitch packages.
+
+Worth knowing for anything touching the emitters: KiCad 8.0.9 is installed
+locally and `kicad-cli sch erc` / `pcb drc` are now the strongest check the
+project has. The first DRC ever run on an emitted board found a real short that
+the whole test suite passed over. See "Verifying against real KiCad" in
+CLAUDE.md. It is a local gate, not a CI one.

@@ -29,6 +29,13 @@ from .packing import (
     Wire,
     pack,
 )
+from .routing import RoutePad, RouteResult, Track, Via, route
+from .schematic import (
+    SchematicResult,
+    build_schematic,
+    emit_kicad_sch,
+    write_schematic,
+)
 from .units import (
     DEFAULT_CLEARANCE_NM,
     DEFAULT_GRID_NM,
@@ -57,6 +64,17 @@ __all__ = [
     "Connection",
     "ValidationError",
     "parse_circuit_spec",
+    # schematic
+    "SchematicResult",
+    "build_schematic",
+    "emit_kicad_sch",
+    "write_schematic",
+    # routing
+    "RoutePad",
+    "RouteResult",
+    "Track",
+    "Via",
+    "route",
     # units
     "mm",
     "to_mm",

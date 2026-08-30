@@ -93,10 +93,29 @@ rather than `OPTIMAL` because that is what the solver proved in 20 s. The run is
 reproducible at `workers=1`.
 
 **5. Write a real file. [built]**
-Silkscreen reads and writes `.kicad_pcb` directly. No KiCad installation, no `pcbnew`
+Silkscreen reads and writes KiCad files directly. No KiCad installation, no `pcbnew`
 DLLs, no platform lock, and — emphatically — no controlling the user's mouse. It runs
 identically on macOS, Linux, and Windows, which is the difference between a demo and a
 tool.
+
+A run leaves a whole project, one file per stage: the `.kicad_pro`, the `.kicad_sch`
+schematic, the placed board before any copper, and the routed board. Symbols and
+footprints are both generated and embedded, so the project opens on a machine with no
+KiCad libraries installed and cannot silently resolve to a different part than the one
+it was drawn for. The schematic and the board number parts from one shared call, so
+`C3` on the drawing is `C3` on the board — numbered separately, the two files would each
+be self-consistent and describe different circuits.
+
+The copper is laid by a two-layer A* grid maze router. **It is not a competitive
+autorouter and the output says so:** a uniform 0.25 mm grid cannot reach every pin of a
+fine-pitch package, and a sequential router paints itself into corners a rip-up-and-retry
+router escapes. On a dense LQFP board it finishes 6 of 50 nets. Every net it cannot
+finish is named, with the reason, and left as ratsnest for a human — a router that
+silently dropped a connection would be worse than no router at all.
+
+Both emitters are checked against KiCad itself, not only against a parser: `kicad-cli
+sch erc` and `pcb drc` are run on the output. That is how we found a via shorting a
+foreign track on a board the entire test suite passed.
 
 **6. Review it, and say why. [built]**
 An adversarial reviewer re-reads the datasheets and argues against the design: this pin
@@ -157,7 +176,7 @@ free.
 - Pure-integer nanometre arithmetic end to end, because unit confusion between
   millimetres, mils, and KiCad's internal nanometres is a silent, board-destroying class
   of bug
-- 365 tests that run with no network, no API key, and no KiCad installed
+- 412 tests that run with no network, no API key, and no KiCad installed
 
 Splitting it this way is the point. The parts that must be *correct* are testable
 offline. The parts that must be *smart* are the ones talking to a model.
@@ -215,7 +234,7 @@ valuable engineering artifact we produced was an honest list of what was actuall
 What we're proud of in the new one:
 
 - **The engine has no network calls.** Every correctness-critical path is tested offline.
-- **365 tests, and the interesting ones are regressions** — each pins down a specific bug
+- **412 tests, and the interesting ones are regressions** — each pins down a specific bug
   that shipped in the previous version and can never ship again.
 - **A validation layer whose job is to say no.** The IR makes a floating capacitor and a
   hallucinated pin unrepresentable rather than merely unlikely.
@@ -252,7 +271,7 @@ meant to build. The lesson we took is that the README should be written from the
 at revision `ad58192`, MIT licensed, included unmodified with its licence file
 intact as a working reference for the guided-cursor overlay we have not built
 yet. Nothing in `engine/`, `service/`, or `scripts/` imports from it, it is
-excluded from lint and tests, and it contributes nothing to the 365 tests or to
+excluded from lint and tests, and it contributes nothing to the 412 tests or to
 any figure quoted in this document. Everything else in the repository was
 written during the submission period.
 
