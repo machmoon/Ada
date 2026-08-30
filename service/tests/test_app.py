@@ -14,6 +14,7 @@ from pathlib import Path
 import pytest
 from silkscreen.agents.model import ScriptedModel
 from silkscreen.kicad import footprint_ref, load_board
+from silkscreen.units import to_mm
 
 from service.app import Handler, make_server
 from service.cache import MemoryFactStore
@@ -134,6 +135,11 @@ def web_dist(tmp_path):
     )
     # A build output whose name collides with the health probe.
     (dist / "healthz").write_text("not the health check", encoding="utf-8")
+    # Copied verbatim from web/public: served from the bundle root, and its
+    # name carries no content hash.
+    (dist / "favicon.svg").write_text(
+        '<svg xmlns="http://www.w3.org/2000/svg"/>', encoding="utf-8"
+    )
     previous = Handler.web_root
     Handler.web_root = dist
     yield dist
@@ -348,12 +354,78 @@ def test_findings_are_returned_in_full(server):
         "title",
         "detail",
         "parts",
+        "refs",
         "citation",
         "suggested_fix",
     }
     assert first["parts"] == ["U1", "C2"]
     assert first["citation"] == "AMS1117-3.3 datasheet p.9"
     assert first["suggested_fix"].startswith("Add a 22uF")
+
+
+#: A circuit named the way PROPOSE_PROMPT actually asks for one: devices keyed
+#: by part number, passives by a descriptive id. CIRCUIT above names its parts
+#: "U1"/"C1"/"C2", which are also the designators build_board hands out -- so a
+#: client keying off finding.parts appears to work there and matches nothing on
+#: any real board. This fixture is what keeps that from passing again.
+NAMED_CIRCUIT = {
+    "devices": {"AMS1117-3.3": {"pins": {"1": "GND", "2": "VOUT", "3": "VIN"}}},
+    "passives": {
+        "c_bulk_vin": {"type": "capacitor", "value": "10uF"},
+        "c_dec_vout": {"type": "capacitor", "value": "100nF"},
+    },
+    "nets": {
+        "VIN": ["AMS1117-3.3.3", "c_bulk_vin.1"],
+        "GND": ["AMS1117-3.3.1", "c_bulk_vin.2", "c_dec_vout.2"],
+        "VOUT": ["AMS1117-3.3.2", "c_dec_vout.1"],
+    },
+}
+NAMED_REVIEW = {
+    "findings": [
+        {
+            "severity": "blocker",
+            "title": "VOUT has no bulk capacitor",
+            "detail": "The loop oscillates without output bulk capacitance.",
+            "parts": ["AMS1117-3.3", "c_dec_vout"],
+            "citation": "",
+            "suggested_fix": "Add a 22uF tantalum from VOUT to GND.",
+        }
+    ]
+}
+
+
+def scripted_named():
+    return ScriptedModel(
+        by_marker={
+            "designing a printed circuit board": json.dumps(NAMED_CIRCUIT),
+            "reviewing a circuit someone else designed": json.dumps(NAMED_REVIEW),
+        }
+    )
+
+
+def test_findings_carry_board_refs_not_only_spec_names(server):
+    """A finding has to be pointable at the board it is about.
+
+    The reviewer speaks the spec's vocabulary and the board speaks in
+    designators; the response has to carry both, or highlighting a finding on
+    the board is a lookup that can only fail.
+    """
+    Handler.model_factory = staticmethod(scripted_named)
+    try:
+        status, body = post(server, {"intent": "a 3.3V regulator", "time_limit_s": 5})
+    finally:
+        Handler.model_factory = staticmethod(scripted)
+    assert status == 200
+
+    finding = body["findings"][0]
+    assert finding["parts"] == ["AMS1117-3.3", "c_dec_vout"]
+    assert finding["refs"] == ["U1", "C2"]
+
+    on_board = {p["ref"] for p in body["placements"]["parts"]}
+    assert set(finding["refs"]) <= on_board, "a ref must name a part on the board"
+    assert not set(finding["parts"]) & on_board, (
+        "the fixture is pointless unless the spec names really do differ"
+    )
 
 
 def test_blockers_stay_flattened_strings(server):
@@ -507,6 +579,19 @@ def test_cache_headers(server, web_dist):
     assert headers["Cache-Control"] == "public, max-age=31536000, immutable"
 
 
+def test_a_non_asset_file_is_not_cached_for_a_year(server, web_dist):
+    """Only assets/ carries a content hash, so only assets/ may be immutable.
+
+    favicon.svg is copied from web/public under a fixed name. Pinned for a
+    year it cannot be replaced at all -- the URL never changes, so there is no
+    bust path short of waiting the year out.
+    """
+    _, headers, body = get(server, "/favicon.svg")
+    assert headers["Cache-Control"] == "no-cache"
+    assert headers["Content-Type"] == "image/svg+xml"
+    assert b"<svg" in body
+
+
 # ------------------------------------------------------- request-level errors
 
 
@@ -527,19 +612,19 @@ def test_a_non_numeric_time_limit_is_400(server):
     )
 
 
-def test_a_null_time_limit_is_a_500(server):
-    """A JSON null time limit is reported as our failure, not the caller's.
+def test_a_null_time_limit_is_400(server):
+    """A JSON null time limit is the caller's error, like every other bad value.
 
     ``payload.get("time_limit_s", DEFAULT_TIME_LIMIT)`` returns the default
     only when the key is *absent*; an explicit null returns None, and
-    ``float(None)`` raises TypeError rather than ValueError, so it falls past
-    the 400 handler into the generic 500. That is a client error answered with
-    a server error. Characterized, deliberately not fixed on this branch.
+    ``float(None)`` raises TypeError rather than ValueError. This used to fall
+    past the 400 handler into the generic 500 -- a client error answered with
+    a server error, and an error_id in the log for a request nobody needs to
+    investigate.
     """
     status, body = post(server, {"intent": "a regulator", "time_limit_s": None})
-    assert status == 500
-    assert body["error"] == "internal error"
-    assert body["error_id"], "a 500 must carry the id that joins it to the log"
+    assert status == 400
+    assert "error_id" not in body, "a caller's bad value is not an incident"
 
 
 def post_without_content_length(srv, path="/generate"):
@@ -646,6 +731,257 @@ def test_the_returned_board_reparses_as_a_real_kicad_file(server, tmp_path):
     assert advertised, "the response must name at least one part"
     assert {footprint_ref(f) for f in reloaded.footprints} == advertised
     assert len(reloaded.footprints) == len(body["parts"])
+
+
+# ------------------------------------------------------------------ placements
+
+
+#: Every key a placements part must carry, exactly. Spelled out rather than
+#: checked with ``in``: a renderer that reads a key the server stopped sending
+#: draws nothing, and a key the server started sending silently goes unused.
+PART_KEYS = {
+    "ref",
+    "footprint",
+    "value",
+    "layer",
+    "rotated",
+    "x_mm",
+    "y_mm",
+    "courtyard_mm",
+    "pads",
+}
+
+
+def placements_of(srv):
+    status, body = post(srv, {"intent": "a 3.3V regulator", "time_limit_s": 5})
+    assert status == 200
+    return body
+
+
+def test_placements_carry_the_contract(server):
+    body = placements_of(server)
+    placements = body["placements"]
+    assert set(placements) == {"board_mm", "frame", "parts"}
+    assert placements["frame"] == "solver-y-up"
+    assert placements["board_mm"] == body["board_mm"], (
+        "one board size, reported once -- two copies that can disagree is a bug"
+    )
+    assert [p["ref"] for p in placements["parts"]] == [
+        p["ref"] for p in body["parts"]
+    ]
+
+    for part in placements["parts"]:
+        assert set(part) == PART_KEYS
+        assert isinstance(part["rotated"], bool)
+        assert part["layer"] in ("top", "bottom")
+        assert part["value"] is None or isinstance(part["value"], str)
+        assert len(part["courtyard_mm"]) == 4
+        assert part["pads"], f"{part['ref']} has no pads"
+        for pad in part["pads"]:
+            assert set(pad) == {"number", "net", "rect_mm"}
+            assert isinstance(pad["number"], str)
+            assert len(pad["rect_mm"]) == 4
+
+
+def test_every_rect_is_numeric_and_inside_the_board(server):
+    """A rect outside the board is a broken transform, not a loose bound.
+
+    The solver constrains every part to the board it sized, so nothing it
+    placed can legitimately hang over an edge. Anything that does got there in
+    this serializer's own arithmetic.
+    """
+    placements = placements_of(server)["placements"]
+    width, height = placements["board_mm"]
+    assert width > 0 and height > 0
+
+    def check(rect, what):
+        x, y, w, h = rect
+        for value in rect:
+            assert isinstance(value, float), f"{what}: {value!r} is not a number"
+            assert round(value, 3) == value, f"{what}: {value} is not 3dp"
+        assert w > 0 and h > 0, f"{what} has no area"
+        assert x >= 0 and y >= 0, f"{what} starts outside the board"
+        assert x + w <= width, f"{what} runs past the right edge"
+        assert y + h <= height, f"{what} runs past the top edge"
+
+    for part in placements["parts"]:
+        check(part["courtyard_mm"], f"{part['ref']} courtyard")
+        for pad in part["pads"]:
+            check(pad["rect_mm"], f"{part['ref']}.{pad['number']}")
+
+
+def test_pads_stay_inside_their_own_courtyard(server):
+    """The courtyard is what the placer keeps apart, so a pad outside it is a
+    clearance guarantee the board does not actually have."""
+    for part in placements_of(server)["placements"]["parts"]:
+        cx, cy, cw, ch = part["courtyard_mm"]
+        for pad in part["pads"]:
+            x, y, w, h = pad["rect_mm"]
+            assert cx <= x and x + w <= cx + cw, f"{part['ref']}.{pad['number']}"
+            assert cy <= y and y + h <= cy + ch, f"{part['ref']}.{pad['number']}"
+
+
+def test_served_pads_match_the_board_file_in_the_same_response(server, tmp_path):
+    """The pads drawn and the pads fabricated are the same pads.
+
+    One placement leaves in two serialisations, and a footprint's own pad
+    coordinates are KiCad's -- Y counts *down* from the anchor. Miss that flip
+    and every multi-row package comes out mirrored inside its own courtyard:
+    still on the board, still inside the courtyard, still numerically sane, so
+    the board file in the same response is the only thing that can catch it.
+    """
+    body = placements_of(server)
+    height_mm = body["placements"]["board_mm"][1]
+
+    path = tmp_path / "served.kicad_pcb"
+    path.write_text(body["kicad_pcb"], encoding="utf-8")
+    reloaded = load_board(path)
+
+    on_file: dict[tuple[str, str], tuple[float, float]] = {}
+    stacked = False
+    for fp in reloaded.footprints:
+        assert not (fp.position.angle or 0), (
+            "written for the unrotated case, which is the only one the "
+            "pipeline produces; a rotated part needs the rotation applied on "
+            "both sides before a comparison means anything"
+        )
+        local_ys = {pad.position.Y for pad in fp.pads}
+        stacked = stacked or len(local_ys) > 1
+        for pad in fp.pads:
+            on_file[(footprint_ref(fp), str(pad.number))] = (
+                round(fp.position.X + pad.position.X, 3),
+                round(height_mm - (fp.position.Y + pad.position.Y), 3),
+            )
+    assert stacked, (
+        "every footprint here has its pads in one row, which is exactly the "
+        "case a Y flip is invisible in -- this fixture proves nothing"
+    )
+
+    served = {
+        (part["ref"], pad["number"]): (
+            round(pad["rect_mm"][0] + pad["rect_mm"][2] / 2, 3),
+            round(pad["rect_mm"][1] + pad["rect_mm"][3] / 2, 3),
+        )
+        for part in body["placements"]["parts"]
+        for pad in part["pads"]
+    }
+
+    assert set(served) == set(on_file), "the two serialisations list the same pads"
+    for key, centre in sorted(served.items()):
+        assert centre == pytest.approx(on_file[key], abs=0.002), key
+
+
+def test_pad_nets_come_from_the_spec(server):
+    """Named pads carry a net the circuit actually declares.
+
+    An unconnected pad is null rather than an empty string: null is a value a
+    renderer can test, "" is one it has to remember to test for.
+    """
+    placements = placements_of(server)["placements"]
+    declared = set(CIRCUIT["nets"])
+    seen = set()
+    for part in placements["parts"]:
+        for pad in part["pads"]:
+            assert pad["net"] is None or pad["net"] in declared, pad["net"]
+            if pad["net"]:
+                seen.add(pad["net"])
+    assert seen == declared, "every net in the spec should reach at least one pad"
+
+
+def test_wirelength_is_reported_in_mm(server):
+    body = placements_of(server)
+    assert "wirelength_mm" in body
+    assert body["wirelength_mm"] is None or body["wirelength_mm"] > 0
+    assert round(body["wirelength_mm"], 3) == body["wirelength_mm"]
+
+
+def test_placements_are_additive(server):
+    """Nothing that was in the response before is gone or reshaped."""
+    body = placements_of(server)
+    for key in (
+        "intent",
+        "board_mm",
+        "status",
+        "parts",
+        "kicad_pcb",
+        "repair_rounds",
+        "blockers",
+        "findings",
+        "duration_s",
+        "warnings",
+        "nets",
+        "datasheets",
+        "cache",
+        "served_by",
+    ):
+        assert key in body, f"{key} disappeared from the response"
+    assert all(set(p) == {"ref", "footprint"} for p in body["parts"]), (
+        "the flat parts list is a separate contract; geometry belongs in "
+        "placements"
+    )
+    assert "grounding" not in body, "grounding stays opt-in"
+
+
+def test_a_rotated_part_arrives_already_transformed():
+    """Rotation is the server's arithmetic, never the client's.
+
+    Driven through the serializer directly because the pipeline never sets
+    ``allow_rotation``, so no request can produce a rotated part today -- and
+    the moment one does, a client that had quietly been ignoring the flag
+    would draw every pad in the wrong place.
+    """
+    from silkscreen.board import PlacedPart
+    from silkscreen.footprints import chip_passive
+    from silkscreen.packing import Layer
+
+    from service.app import _placements_dict
+
+    fp = chip_passive("1206", net1="VIN", net2="GND")
+    cw, ch = fp.courtyard_w_nm, fp.courtyard_h_nm
+    assert cw != ch, "a square courtyard would make the swap invisible"
+
+    class Board:
+        width_nm = 4 * cw
+        height_nm = 4 * ch
+        parts = [
+            PlacedPart(ref="R1", footprint=fp, value="10k", x_nm=0, y_nm=0),
+            PlacedPart(
+                ref="R2",
+                footprint=fp,
+                value="10k",
+                x_nm=0,
+                y_nm=2 * ch,
+                rotated=True,
+                layer=Layer.BOTTOM,
+            ),
+        ]
+
+    parts = {p["ref"]: p for p in _placements_dict(Board())["parts"]}
+    flat, turned = parts["R1"], parts["R2"]
+
+    assert flat["courtyard_mm"][2:] == [
+        round(to_mm(2 * cw), 3),
+        round(to_mm(2 * ch), 3),
+    ]
+    assert turned["courtyard_mm"][2:] == flat["courtyard_mm"][2:][::-1], (
+        "a rotated courtyard's extents swap"
+    )
+    assert turned["layer"] == "bottom" and turned["rotated"] is True
+
+    # The two pads sit side by side along X unrotated and stack along Y
+    # rotated, and each pad's own rect turns with the part.
+    flat_pads = {p["number"]: p["rect_mm"] for p in flat["pads"]}
+    turned_pads = {p["number"]: p["rect_mm"] for p in turned["pads"]}
+    assert flat_pads["1"][1] == flat_pads["2"][1], "unrotated pads share a row"
+    assert turned_pads["1"][0] == turned_pads["2"][0], "rotated pads share a column"
+    for number in ("1", "2"):
+        assert turned_pads[number][2:] == flat_pads[number][2:][::-1]
+
+    cx, cy, cw_mm, ch_mm = turned["courtyard_mm"]
+    for number, rect in turned_pads.items():
+        x, y, w, h = rect
+        assert cx <= x and x + w <= cx + cw_mm, number
+        assert cy <= y and y + h <= cy + ch_mm, number
 
 
 # ------------------------------------------------------------- cache outcomes
