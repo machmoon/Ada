@@ -23,6 +23,7 @@ dev = ["pytest>=8.0", "ruff>=0.6"]
 
 [project.scripts]
 silkscreen-mcp = "silkscreen.mcp.server:main"
+silkscreen-review = "silkscreen.audit.cli:main"
 
 [build-system]
 requires = ["setuptools>=68"]
