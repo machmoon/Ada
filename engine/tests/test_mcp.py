@@ -11,6 +11,7 @@ from silkscreen.mcp.server import (
     Server,
     handle,
 )
+from silkscreen.spice.simulators import NgspiceSimulator
 
 CIRCUIT = {
     "devices": {"U1": {"pins": {"1": "GND", "2": "VOUT", "3": "VIN"}}},
@@ -170,3 +171,168 @@ def test_stdio_round_trip():
     assert [r.get("id") for r in replies] == [1, 2, None]
     assert replies[1]["result"]["tools"]
     assert replies[2]["error"]["message"].startswith("invalid JSON")
+
+
+# --------------------------------------------------------------------------
+# simulation tools
+# --------------------------------------------------------------------------
+
+#: A resistive divider, the simplest circuit with a checkable DC answer.
+SIM_CIRCUIT = {
+    "passives": {
+        "Rtop": {"type": "resistor", "value": "10k"},
+        "Rbot": {"type": "resistor", "value": "10k"},
+        "Cbyp": {"type": "capacitor", "value": "100nF"},
+    },
+    "nets": {
+        "VIN": ["Rtop.1", "Cbyp.1"],
+        "VMID": ["Rtop.2", "Rbot.1"],
+        "GND": ["Rbot.2", "Cbyp.2"],
+    },
+}
+
+SIM_BENCH = {
+    "analysis": {"kind": "op"},
+    "sources": [
+        {"name": "V1", "positive": "VIN", "negative": "GND", "dc": 5.0}
+    ],
+}
+
+needs_ngspice = pytest.mark.skipif(
+    not NgspiceSimulator().is_available(),
+    reason="ngspice is not installed on this machine",
+)
+
+
+def test_spice_capabilities_lists_measurement_kinds():
+    body = payload(call("spice_capabilities"))
+    assert "rise_time" in body["measurement_kinds"]
+    assert "within" in body["operators"]
+    assert isinstance(body["simulators"], list)
+
+
+def test_simulate_circuit_reports_an_invalid_circuit_without_simulating():
+    body = payload(call("simulate_circuit", {"circuit": {"nets": {"N": ["U9.1"]}},
+                                             "testbench": SIM_BENCH}))
+    assert body["ok"] is False
+    assert body["stage"] == "circuit"
+    assert body["errors"]
+
+
+def test_simulate_circuit_collects_testbench_problems():
+    body = payload(
+        call(
+            "simulate_circuit",
+            {
+                "circuit": SIM_CIRCUIT,
+                "testbench": {
+                    "analysis": {"kind": "tran"},  # missing step and stop
+                    "sources": [{"name": "V1", "positive": "NOPE",
+                                 "negative": "GND", "dc": 5}],
+                },
+            },
+        )
+    )
+    assert body["ok"] is False
+    assert body["stage"] == "testbench"
+    assert len(body["errors"]) >= 2
+
+
+def test_simulate_circuit_rejects_an_unknown_measurement_kind():
+    body = payload(
+        call(
+            "simulate_circuit",
+            {
+                "circuit": SIM_CIRCUIT,
+                "testbench": SIM_BENCH,
+                "assertions": [
+                    {
+                        "name": "x",
+                        "measurement": {"kind": "vibes", "signal": "VMID"},
+                        "op": "<",
+                        "value": 1,
+                    }
+                ],
+            },
+        )
+    )
+    assert body["ok"] is False
+    assert "vibes" in str(body["errors"])
+
+
+@needs_ngspice
+def test_simulate_circuit_returns_a_verdict_with_the_measured_number():
+    body = payload(
+        call(
+            "simulate_circuit",
+            {
+                "circuit": SIM_CIRCUIT,
+                "testbench": SIM_BENCH,
+                "assertions": [
+                    {
+                        "name": "midpoint is half the supply",
+                        "measurement": {"kind": "final", "signal": "VMID"},
+                        "op": "within",
+                        "value": 2.5,
+                        "tolerance": 0.01,
+                        "unit": "V",
+                    },
+                    {
+                        "name": "midpoint is 3.3 V",
+                        "measurement": {"kind": "final", "signal": "VMID"},
+                        "op": "within",
+                        "value": 3.3,
+                        "tolerance": 0.01,
+                        "unit": "V",
+                    },
+                ],
+            },
+        )
+    )
+    assert body["ok"] is True
+    assert body["passed"] is False
+    first, second = body["assertions"]
+    assert first["passed"] is True
+    assert first["measured"] == pytest.approx(2.5, rel=1e-6)
+    assert second["passed"] is False
+    assert "midpoint is 3.3 V" in body["summary"]
+
+
+@needs_ngspice
+def test_simulate_circuit_without_assertions_returns_waveform_summary():
+    body = payload(
+        call(
+            "simulate_circuit",
+            {"circuit": SIM_CIRCUIT, "testbench": SIM_BENCH},
+        )
+    )
+    assert body["ok"] is True
+    assert body["result"]["analysis"] == "op"
+    assert "v(VMID)" in body["result"]["signals"]
+
+
+def test_simulate_circuit_refuses_a_device_with_no_model():
+    """An IC has no behaviour in the IR. Dropping it would simulate a different
+    circuit and report success, so the tool must name it and stop."""
+    body = payload(
+        call(
+            "simulate_circuit",
+            {
+                "circuit": {
+                    "devices": {"U1": {"pins": {"A": "1", "B": "2"}}},
+                    "passives": {"R1": {"type": "resistor", "value": "1k"}},
+                    "nets": {"NA": ["U1.A", "R1.1"], "GND": ["U1.B", "R1.2"]},
+                },
+                "testbench": {
+                    "analysis": {"kind": "op"},
+                    "sources": [
+                        {"name": "V1", "positive": "NA",
+                         "negative": "GND", "dc": 5.0}
+                    ],
+                },
+            },
+        )
+    )
+    assert body["ok"] is False
+    assert body["stage"] == "testbench"
+    assert "U1" in str(body["errors"])

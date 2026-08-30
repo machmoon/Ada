@@ -235,10 +235,15 @@ def _settling_time(result: SimulationResult, m: Measurement) -> float:
         if abs(values[index] - final) > band:
             settled_index = index + 1
             break
-    if settled_index >= len(values):
+    # Every signal is trivially "within band of its final value" at the final
+    # sample, so a settling point at the very last point means the signal was
+    # still moving when the window ended. Reporting the window length as a
+    # settling time there would be a number with no meaning.
+    if settled_index >= len(values) - 1:
         raise MeasurementError(
             f"{m.signal!r} is still outside ±{band:g} of its final value "
-            f"{final:g} at the end of the window; it has not settled"
+            f"{final:g} one sample before the window ends; it has not settled. "
+            f"Simulate for longer, or widen the tolerance."
         )
     return sweep[settled_index] - sweep[0]
 

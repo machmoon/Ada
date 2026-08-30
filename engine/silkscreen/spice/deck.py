@@ -344,6 +344,10 @@ class Testbench:
     design.
     """
 
+    #: Not a pytest test class, despite the name -- pytest collects anything
+    #: called ``Test*`` that a test module imports, and warns when it cannot.
+    __test__ = False
+
     analysis: Analysis
     sources: list[Source] = field(default_factory=list)
     models: dict[str, PrimitiveModel | SubcircuitModel] = field(default_factory=dict)

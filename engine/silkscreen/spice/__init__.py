@@ -89,6 +89,11 @@ from .simulators import (
     available_simulators,
     find_simulator,
 )
+from .spec import (
+    REQUEST_SCHEMA,
+    assertions_from_dict,
+    testbench_from_dict,
+)
 from .values import format_value, parse_value
 
 __all__ = [
@@ -127,6 +132,10 @@ __all__ = [
     "LTspiceSimulator",
     "find_simulator",
     "available_simulators",
+    # JSON bridge, for tool callers
+    "testbench_from_dict",
+    "assertions_from_dict",
+    "REQUEST_SCHEMA",
     # values
     "parse_value",
     "format_value",

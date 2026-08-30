@@ -3,8 +3,10 @@
 The previous project shipped a directory named ``mcp/`` and called that an MCP
 integration; there was no protocol anywhere in it. This is the actual thing:
 JSON-RPC 2.0 over stdin/stdout, speaking ``initialize``, ``tools/list`` and
-``tools/call`` per the Model Context Protocol, exposing the engine's four
-useful operations to any MCP client.
+``tools/call`` per the Model Context Protocol, exposing the engine's useful
+operations to any MCP client -- validation, placement, board and footprint
+generation, and SPICE simulation. ``TOOLS`` is the list; do not restate its
+length here, since it has already drifted once.
 
 The transport is deliberately separable from the dispatch: :func:`handle` maps
 one request dict to one response dict and never touches a stream, which is why
@@ -26,6 +28,10 @@ from ..board import build_board, emit_kicad_pcb
 from ..footprints import CHIP_SIZES, UnsupportedPackage, chip_passive
 from ..netlist import ValidationError, parse_circuit_spec
 from ..packing import Part, pack
+from ..spice import MEASUREMENT_KINDS, SpiceError, build_deck, check_all, simulate_deck
+from ..spice.simulators import available_simulators
+from ..spice.spec import REQUEST_SCHEMA as SPICE_REQUEST_SCHEMA
+from ..spice.spec import assertions_from_dict, testbench_from_dict
 from ..units import to_mm
 
 __all__ = ["TOOLS", "Server", "handle", "main"]
@@ -131,6 +137,30 @@ TOOLS: list[dict[str, Any]] = [
             },
             "required": ["package"],
         },
+    },
+    {
+        "name": "simulate_circuit",
+        "description": (
+            "Simulate a circuit with SPICE and check it against a "
+            "specification. This is the behavioural verifier: DRC says whether "
+            "a board can be made, this says whether the circuit works. Give it "
+            "a circuit, a testbench (sources plus one analysis) and a list of "
+            "assertions; it returns a pass/fail verdict with the measured "
+            "number and a signed margin beside every clause. Omit assertions "
+            "to just read the waveforms back. Fails loudly: a missing device "
+            "model, a probe on a net that does not exist, or a solver that "
+            "will not converge is an error, never an empty result."
+        ),
+        "inputSchema": SPICE_REQUEST_SCHEMA,
+    },
+    {
+        "name": "spice_capabilities",
+        "description": (
+            "Which SPICE simulators this machine can run, and every "
+            "measurement kind an assertion may use. Call this before building "
+            "a simulation request."
+        ),
+        "inputSchema": {"type": "object", "properties": {}},
     },
 ]
 
@@ -266,12 +296,86 @@ def _tool_generate_footprint(args: dict[str, Any]) -> dict[str, Any]:
     )
 
 
+def _tool_simulate_circuit(args: dict[str, Any]) -> dict[str, Any]:
+    """Run one simulation and check it against a specification.
+
+    Every failure comes back as an ``isError`` result carrying the simulator's
+    own words. A tool that answered "no results" here would be read by a model
+    as "the circuit does nothing", which is the one outcome this must never
+    produce.
+    """
+    try:
+        spec = parse_circuit_spec(args.get("circuit") or {})
+    except ValidationError as exc:
+        return _text_result(
+            {"ok": False, "stage": "circuit", "errors": list(exc.errors)}
+        )
+
+    try:
+        bench = testbench_from_dict(args.get("testbench") or {})
+        assertions = assertions_from_dict(args.get("assertions"))
+        deck = build_deck(spec, bench)
+    except SpiceError as exc:
+        return _text_result(
+            {
+                "ok": False,
+                "stage": "testbench",
+                "errors": list(getattr(exc, "errors", [])) or [str(exc)],
+            }
+        )
+
+    try:
+        result = simulate_deck(
+            deck,
+            simulator=args.get("simulator"),
+            timeout_s=float(args.get("timeout_s", 60.0)),
+        )
+    except SpiceError as exc:
+        return _text_result(
+            {
+                "ok": False,
+                "stage": "simulation",
+                "error": str(exc),
+                "error_type": type(exc).__name__,
+                "deck": deck.text,
+            }
+        )
+
+    max_points = int(args.get("max_points", 0))
+    if not assertions:
+        return _text_result(
+            {"ok": True, "result": result.to_dict(max_points=max_points)}
+        )
+
+    report = check_all(result, assertions)
+    payload = report.to_dict(max_points=max_points)
+    payload["ok"] = True
+    payload["summary"] = report.summary()
+    return _text_result(payload)
+
+
+def _tool_spice_capabilities(args: dict[str, Any]) -> dict[str, Any]:
+    return _text_result(
+        {
+            "simulators": [
+                {"name": sim.name, "executable": getattr(sim, "executable", None)}
+                for sim in available_simulators()
+            ],
+            "measurement_kinds": sorted(MEASUREMENT_KINDS),
+            "analysis_kinds": ["op", "tran", "ac", "dc"],
+            "operators": ["<", "<=", ">", ">=", "==", "!=", "within"],
+        }
+    )
+
+
 DISPATCH: dict[str, Callable[[dict[str, Any]], dict[str, Any]]] = {
     "validate_circuit": _tool_validate_circuit,
     "build_board": _tool_build_board,
     "emit_kicad_pcb": _tool_emit_kicad_pcb,
     "place_parts": _tool_place_parts,
     "generate_footprint": _tool_generate_footprint,
+    "simulate_circuit": _tool_simulate_circuit,
+    "spice_capabilities": _tool_spice_capabilities,
 }
 
 

@@ -82,9 +82,15 @@ class SimulationResult:
         return True
 
     def magnitude(self, name: str) -> tuple[float, ...]:
-        """A signal as real magnitudes, taking ``abs`` of complex AC data."""
+        """A signal as real numbers.
+
+        Complex AC data becomes its magnitude; real data is returned **signed**.
+        Taking ``abs`` of a transient would turn a negative rail into a positive
+        one and make ``min`` report the wrong number -- a node sitting at -5 V
+        would measure as +5 V and pass an absolute-maximum check it violates.
+        """
         values = self.signal(name)
-        return tuple(abs(v) for v in values)
+        return tuple(abs(v) if isinstance(v, complex) else float(v) for v in values)
 
     def to_dict(self, *, max_points: int = 0) -> dict:
         """A JSON-safe summary, for handing across a tool boundary.
@@ -95,7 +101,7 @@ class SimulationResult:
         """
         summary: dict[str, dict] = {}
         for name, values in self.signals.items():
-            real = [abs(v) for v in values]
+            real = [abs(v) if isinstance(v, complex) else float(v) for v in values]
             entry: dict = {
                 "min": min(real) if real else None,
                 "max": max(real) if real else None,
