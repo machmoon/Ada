@@ -298,6 +298,7 @@ def preflight(
     *,
     spec: CircuitSpec | None = None,
     options: OrderOptions | None = None,
+    routes: object | None = None,
 ) -> OrderPreflight:
     """Decide whether ``board`` may be ordered, and say why not.
 
@@ -311,6 +312,12 @@ def preflight(
     issues: list[OrderIssue] = []
 
     open_nets = _nets_needing_copper(board, spec)
+    if routes is not None:
+        # A net the router actually connected no longer needs copper. Only
+        # nets it reports as routed are cleared: an unrouted or partially
+        # routed net keeps blocking, which is the whole point of the gate.
+        connected = set(getattr(routes, "routed_nets", ()))
+        open_nets = tuple(n for n in open_nets if n not in connected)
     if open_nets:
         issues.append(
             OrderIssue(

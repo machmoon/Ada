@@ -13,7 +13,7 @@ python -m silkscreen "a 3.3V motor driver around an STM32F103" -o board.kicad_pc
 ```
 
 ```
-419 passed — no network, no API key, no KiCad install
+452 passed — no network, no API key, no KiCad install
 ```
 
 ---
@@ -53,6 +53,7 @@ that consumes the file. Install it if you are a person who wants to see a board.
 | `agents/resilience.py` — provider failover | **Working** · 14 tests |
 | `fab.py` — Gerber, Excellon, BOM, pick-and-place | **Working** · fab package export |
 | `order.py` — order options, manufacturability preflight | **Working** · blocks an unroutable board |
+| `route.py` — demo-scale CP-SAT router | **Working** · single layer, small boards only |
 | `mcp/` — MCP server over stdio | **Working** · 23 tests |
 | `service/` — Cloud Run + Firestore cache | **Working** · 97 tests |
 | `frontend/` — Svelte review UI, served by the service | **Working** · review and board tabs, with an in-app debug console for log export |
@@ -159,7 +160,7 @@ treats the board file as the interface.
 | Requires KiCad running | Yes | **No** |
 | Headless / CI | Hard | **Native** |
 | Platform lock | KiCad's plugin loader | **None — pure Python** |
-| Testable without KiCad | No | **Yes, all 419 tests** |
+| Testable without KiCad | No | **Yes, all 452 tests** |
 
 ### What it reads
 
@@ -404,7 +405,7 @@ engine/
       propose.py    intent -> circuit, with a bounded repair loop
       review.py     adversarial design review
       pipeline.py   prompt -> PCB
-  tests/          419 tests — no network, no API keys, no KiCad
+  tests/          452 tests — no network, no API keys, no KiCad
     fixtures/     ref.kicad_pcb -- 11-footprint board fixture
 scripts/
   demo.py         end-to-end: read -> place -> write -> verify
@@ -484,10 +485,10 @@ docker build .                                      # the `docker` job
 
 ### Expected output
 
-**1. Test suite** — 419 tests, no warnings (four key-gated live-model tests skip unless `GOOGLE_API_KEY` is set):
+**1. Test suite** — 452 tests, no warnings (four key-gated live-model tests skip unless `GOOGLE_API_KEY` is set):
 
 ```
-419 passed in 190.85s
+452 passed in 190.85s
 ```
 
 The suite is dominated by the 20-second solver budget in a handful of placement

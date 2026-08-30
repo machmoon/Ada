@@ -317,8 +317,16 @@ def _flashed_layer(
 # ---------------------------------------------------------------------- layers
 
 
-def gerber_copper(board: BoardResult, *, bottom: bool = False) -> str:
-    """Copper for one side: every pad on that side, flashed.
+def gerber_copper(
+    board: BoardResult, *, bottom: bool = False, routes: object | None = None
+) -> str:
+    """Copper for one side: every pad on that side, flashed, plus any traces.
+
+    ``routes`` is an optional :class:`silkscreen.route.RouteResult`. When given,
+    its segments are stroked onto the top copper after the pads, which is what
+    turns a placed board into a connected one. It is optional because routing
+    is a separate, later step: a board with no routes still produces valid
+    copper, it just has no connections in it.
 
     ``L1``/``L2`` name the two copper layers of the stack-up that
     :func:`silkscreen.board.emit_kicad_pcb` declares (F.Cu and B.Cu, nothing
@@ -330,7 +338,21 @@ def gerber_copper(board: BoardResult, *, bottom: bool = False) -> str:
     everywhere and is universally accepted, but it is an approximation.
     """
     function = "Copper,L2,Bot" if bottom else "Copper,L1,Top"
-    return _flashed_layer(board, function, bottom=bottom)
+    gerber = _GerberFile(function)
+    for flash in _flashes(board, bottom=bottom):
+        gerber.select(gerber.rect(flash.w_nm, flash.h_nm))
+        gerber.flash(flash.x_nm, flash.y_nm)
+    # The router is single-layer, so its segments belong on the top side only.
+    if routes is not None and not bottom:
+        for seg in getattr(routes, "segments", ()):
+            gerber.select(gerber.circle(seg.width_nm))
+            gerber.line(
+                seg.x1_nm + _MARGIN_NM,
+                seg.y1_nm + _MARGIN_NM,
+                seg.x2_nm + _MARGIN_NM,
+                seg.y2_nm + _MARGIN_NM,
+            )
+    return gerber.render()
 
 
 def gerber_mask(
@@ -479,7 +501,9 @@ def cpl_csv(board: BoardResult) -> str:
     return "\n".join(rows) + "\n"
 
 
-def fab_files(board: BoardResult) -> list[FabLayer]:
+def fab_files(
+    board: BoardResult, *, routes: object | None = None
+) -> list[FabLayer]:
     """Every file a board house needs, in a fixed order.
 
     Both sides are always present. A side with no parts yields an empty but
@@ -488,7 +512,7 @@ def fab_files(board: BoardResult) -> list[FabLayer]:
     here" and passes CAM untouched.
     """
     return [
-        FabLayer("silkscreen-F_Cu.GTL", gerber_copper(board)),
+        FabLayer("silkscreen-F_Cu.GTL", gerber_copper(board, routes=routes)),
         FabLayer("silkscreen-B_Cu.GBL", gerber_copper(board, bottom=True)),
         FabLayer("silkscreen-F_Mask.GTS", gerber_mask(board)),
         FabLayer("silkscreen-B_Mask.GBS", gerber_mask(board, bottom=True)),
