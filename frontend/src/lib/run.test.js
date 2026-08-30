@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { get } from 'svelte/store'
 import { clearLog, log } from './log.js'
-import { elapsed, failRun, finishRun, resetRun, run, startRun } from './run.js'
+import { MAX_FEED, elapsed, failRun, finishRun, resetRun, run, stageEvent, startRun } from './run.js'
 
 // The store is a module singleton, so the idle value has to be captured at import
 // time, before any test mutates it. Every test then starts from this exact object.
@@ -32,6 +32,8 @@ describe('the run store', () => {
       error: null,
       startedAt: 0,
       id: '',
+      stages: {},
+      feed: [],
     })
   })
 })
@@ -512,5 +514,283 @@ describe('the elapsed ticker', () => {
 
     watcher.unsubscribe()
     expect(vi.getTimerCount()).toBe(0)
+  })
+})
+
+describe('stageEvent: the stage list', () => {
+  it('moves a stage from pending, through running, to done', () => {
+    startRun({ intent: 'x' })
+    expect(get(run).stages.place).toBeUndefined()
+
+    stageEvent({ event: 'stage.start', stage: 'place', t_s: 0.2, time_limit_s: 20 })
+    expect(get(run).stages.place).toEqual({ state: 'running', t_s: 0.2, time_limit_s: 20 })
+
+    stageEvent({
+      event: 'stage.done',
+      stage: 'place',
+      t_s: 3.1,
+      solver_status: 'FEASIBLE',
+      board_mm: [24, 18],
+      wirelength_mm: 312.5,
+      warnings: ['one'],
+    })
+    expect(get(run).stages.place).toEqual({
+      state: 'done',
+      t_s: 3.1,
+      solver_status: 'FEASIBLE',
+      board_mm: [24, 18],
+      wirelength_mm: 312.5,
+      warnings: 1,
+    })
+  })
+
+  it('leaves a stage the pipeline skipped with no entry at all', () => {
+    startRun({ intent: 'x' })
+
+    stageEvent({ event: 'stage.start', stage: 'propose', t_s: 0.1 })
+    stageEvent({ event: 'stage.done', stage: 'propose', t_s: 2 })
+
+    // No datasheets were sent, so no read stage ever ran; nothing may tick it.
+    expect(get(run).stages.read).toBeUndefined()
+    expect(get(run).stages.review).toBeUndefined()
+  })
+
+  it('summarises a finished read as counts, whether it sent lists or numbers', () => {
+    startRun({ intent: 'x' })
+
+    stageEvent({
+      event: 'stage.done',
+      stage: 'read',
+      t_s: 4,
+      parts: ['STM32F103'],
+      pins: 48,
+      requirements: ['a 100n decoupling cap per rail'],
+    })
+
+    expect(get(run).stages.read).toEqual({
+      state: 'done',
+      t_s: 4,
+      parts: 1,
+      pins: 48,
+      requirements: 1,
+    })
+  })
+
+  it('summarises a finished review as counts', () => {
+    startRun({ intent: 'x' })
+
+    stageEvent({ event: 'stage.done', stage: 'review', t_s: 9, findings: [1, 2, 3], blockers: [1] })
+
+    expect(get(run).stages.review).toEqual({ state: 'done', t_s: 9, findings: 3, blockers: 1 })
+  })
+
+  it('reports an absent time as nothing rather than as zero', () => {
+    startRun({ intent: 'x' })
+
+    stageEvent({ event: 'stage.start', stage: 'propose' })
+
+    expect(get(run).stages.propose.t_s).toBeNull()
+  })
+
+  it('ignores a stage event that names no stage', () => {
+    startRun({ intent: 'x' })
+
+    stageEvent({ event: 'stage.start', t_s: 1 })
+
+    expect(get(run).stages).toEqual({})
+  })
+})
+
+describe('stageEvent: the synthetic validate row', () => {
+  it('starts running on the first rejected proposal and counts the rounds', () => {
+    startRun({ intent: 'x' })
+
+    stageEvent({ event: 'propose.round', round: 1, errors: 2, first_error: 'C1.1 is not a pin' })
+    expect(get(run).stages.validate).toEqual({ state: 'running', t_s: null, rounds: 1 })
+
+    stageEvent({ event: 'propose.round', round: 2, errors: 1, t_s: 6 })
+    expect(get(run).stages.validate).toEqual({ state: 'running', t_s: 6, rounds: 2 })
+  })
+
+  it('finishes when propose finishes, keeping the rounds it counted', () => {
+    startRun({ intent: 'x' })
+    stageEvent({ event: 'propose.round', round: 1, errors: 2 })
+
+    stageEvent({ event: 'stage.done', stage: 'propose', t_s: 8, parts: [1, 2], nets: [1] })
+
+    expect(get(run).stages.validate).toEqual({ state: 'done', t_s: 8, rounds: 1 })
+    expect(get(run).stages.propose).toMatchObject({ state: 'done', parts: 2, nets: 1 })
+  })
+
+  it('finishes even when no proposal was ever rejected, because it still validated', () => {
+    startRun({ intent: 'x' })
+
+    stageEvent({ event: 'stage.done', stage: 'propose', t_s: 5, parts: [1], nets: [] })
+
+    expect(get(run).stages.validate).toEqual({ state: 'done', t_s: 5, rounds: 0 })
+  })
+
+  it('is untouched by a propose stage that has only started', () => {
+    startRun({ intent: 'x' })
+
+    stageEvent({ event: 'stage.start', stage: 'propose', t_s: 0.1 })
+
+    expect(get(run).stages.validate).toBeUndefined()
+  })
+})
+
+describe('stageEvent: the feed', () => {
+  it('appends the sentence, the time and the event name', () => {
+    startRun({ intent: 'x' })
+
+    stageEvent({ event: 'run.accepted', t_s: 0 })
+    stageEvent({ event: 'stage.start', stage: 'place', t_s: 0.4, time_limit_s: 20 })
+
+    const feed = get(run).feed
+    expect(feed).toHaveLength(2)
+    expect(feed[0]).toMatchObject({ t_s: 0, text: 'request accepted, pipeline starting', event: 'run.accepted' })
+    expect(feed[1].text).toContain('placing with CP-SAT')
+    expect(feed[1].event).toBe('stage.start')
+  })
+
+  it('gives every row an id of its own, since the list is keyed by it', () => {
+    startRun({ intent: 'x' })
+
+    stageEvent({ event: 'run.accepted', t_s: 0 })
+    stageEvent({ event: 'run.accepted', t_s: 0 })
+
+    const ids = get(run).feed.map((row) => row.id)
+    expect(new Set(ids).size).toBe(2)
+  })
+
+  it('keeps a row for an event nothing else understands', () => {
+    startRun({ intent: 'x' })
+
+    stageEvent({ event: 'ground.part', part: 'STM32F103', cached: true, t_s: 2 })
+
+    expect(get(run).feed[0].text).toBe('grounding STM32F103 (cached pages)')
+  })
+
+  it('keeps the raw answer on the row that carried it, and only on that row', () => {
+    startRun({ intent: 'x' })
+
+    stageEvent({ event: 'model.call', stage: 'propose', provider: 'gemini', ok: true })
+    stageEvent({
+      event: 'model.response',
+      stage: 'propose',
+      chars: 15,
+      truncated: false,
+      text: '{"devices": {}}',
+      t_s: 4,
+    })
+
+    const [call, response] = get(run).feed
+    expect(call.detail).toBeUndefined()
+    expect(response).toMatchObject({ event: 'model.response', detail: '{"devices": {}}' })
+    expect(response.text).toBe('response (propose): 15 chars')
+  })
+
+  it('carries an empty detail rather than nothing for a response with no text', () => {
+    startRun({ intent: 'x' })
+
+    stageEvent({ event: 'model.response', stage: 'propose', chars: 0 })
+
+    expect(get(run).feed[0].detail).toBe('')
+  })
+
+  it('keeps only the last MAX_FEED rows', () => {
+    startRun({ intent: 'x' })
+
+    for (let i = 0; i < MAX_FEED + 5; i += 1) {
+      stageEvent({ event: 'model.call', stage: 'propose', provider: `p${i}`, ok: true })
+    }
+
+    const feed = get(run).feed
+    expect(feed).toHaveLength(MAX_FEED)
+    expect(feed[feed.length - 1].text).toContain(`p${MAX_FEED + 4}`)
+    expect(feed[0].text).toContain('p5')
+  })
+
+  it('bounds a debug feed too, where every row carries a raw answer', () => {
+    startRun({ intent: 'x' })
+
+    for (let i = 0; i < MAX_FEED + 5; i += 1) {
+      stageEvent({ event: 'model.response', stage: 'propose', chars: i, text: `answer ${i}` })
+    }
+
+    const feed = get(run).feed
+    expect(feed).toHaveLength(MAX_FEED)
+    expect(feed[feed.length - 1].detail).toBe(`answer ${MAX_FEED + 4}`)
+    expect(feed[0].detail).toBe('answer 5')
+  })
+})
+
+describe('stageEvent: what it writes to the debug log', () => {
+  it('records one server-sourced line per event, under a pipeline name', async () => {
+    startRun({ intent: 'x' })
+
+    stageEvent({ event: 'stage.done', stage: 'review', t_s: 9, findings: [], blockers: [] })
+
+    const entry = lastEvent(await flushed(), 'pipeline.stage.done')
+    expect(entry).toMatchObject({ level: 'info', src: 'server', msg: 'review: no findings' })
+    expect(entry.data).toMatchObject({ event: 'stage.done', stage: 'review', t_s: 9 })
+  })
+
+  it('records a failed run at error level and a provider retry at warn', async () => {
+    startRun({ intent: 'x' })
+
+    stageEvent({ event: 'model.retry', provider: 'gemini', error: '429', elapsed_s: 1.2 })
+    stageEvent({ event: 'run.error', status: 502, error: 'gemini returned 429' })
+
+    const entries = await flushed()
+    expect(lastEvent(entries, 'pipeline.model.retry').level).toBe('warn')
+    expect(lastEvent(entries, 'pipeline.run.error').level).toBe('error')
+  })
+
+  it('names an event carrying no name rather than writing a bare prefix', async () => {
+    startRun({ intent: 'x' })
+
+    stageEvent({})
+
+    expect(lastEvent(await flushed(), 'pipeline.unknown')).toBeTruthy()
+  })
+
+  it('survives an event that is not an object at all', () => {
+    startRun({ intent: 'x' })
+
+    expect(() => stageEvent(null)).not.toThrow()
+    expect(get(run).feed).toHaveLength(1)
+  })
+})
+
+describe('stageEvent: what clears it', () => {
+  it('starts every run with an empty stage list and feed', () => {
+    startRun({ intent: 'first' })
+    stageEvent({ event: 'stage.done', stage: 'place', t_s: 1 })
+
+    startRun({ intent: 'second' })
+
+    expect(get(run).stages).toEqual({})
+    expect(get(run).feed).toEqual([])
+  })
+
+  it('clears both on reset', () => {
+    startRun({ intent: 'x' })
+    stageEvent({ event: 'stage.start', stage: 'place', t_s: 1 })
+    finishRun({ status: 'feasible' })
+
+    resetRun()
+
+    expect(get(run).stages).toEqual({})
+    expect(get(run).feed).toEqual([])
+  })
+
+  it('never writes through to the idle holder, so the next run starts empty', () => {
+    startRun({ intent: 'x' })
+    stageEvent({ event: 'stage.start', stage: 'place', t_s: 1 })
+    resetRun()
+
+    expect(IDLE.stages).toEqual({})
+    expect(IDLE.feed).toEqual([])
   })
 })

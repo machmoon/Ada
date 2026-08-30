@@ -3,6 +3,7 @@
 import http.client
 import json
 import os
+import re
 import socket
 import subprocess
 import sys
@@ -1437,3 +1438,308 @@ def test_grounding_payload_is_json_safe(ground_server):
             assert isinstance(evidence["score"], float)
             assert isinstance(evidence["quote"], str)
             assert len(evidence["quote"]) <= 300
+
+
+# ------------------------------------------------------------ /generate/stream
+
+
+def _request_bytes(srv, path, body, content_length):
+    """One raw POST, with the framing headers written by hand.
+
+    Written on a socket for the same reason post_without_content_length is:
+    the streaming response carries no Content-Length, so a client that waits
+    for one -- urllib does -- would hang or buffer the whole run and prove
+    nothing about when each frame arrived.
+    """
+    lines = [
+        f"POST {path} HTTP/1.1",
+        f"Host: 127.0.0.1:{srv.server_port}",
+        "Content-Type: application/json",
+        "Connection: close",
+    ]
+    if content_length is not None:
+        lines.append(f"Content-Length: {content_length}")
+    return ("\r\n".join(lines) + "\r\n\r\n").encode() + body
+
+
+def _split_head(buffer):
+    head, _, rest = buffer.partition(b"\r\n\r\n")
+    first, _, header_text = head.partition(b"\r\n")
+    status = int(first.decode().split()[1])
+    headers = {}
+    for line in header_text.split(b"\r\n"):
+        if not line:
+            continue
+        name, _, value = line.decode().partition(":")
+        headers[name.strip().lower()] = value.strip()
+    return status, headers, rest
+
+
+def post_raw(srv, path, body=b"", content_length=None):
+    """POST exactly these bytes and read the whole response until close."""
+    request = _request_bytes(srv, path, body, content_length)
+    with socket.create_connection(("127.0.0.1", srv.server_port), timeout=30) as sock:
+        sock.sendall(request)
+        chunks = []
+        while True:
+            chunk = sock.recv(65536)
+            if not chunk:
+                break
+            chunks.append(chunk)
+    return _split_head(b"".join(chunks))
+
+
+def post_stream(srv, payload, path="/generate/stream", content_length="auto"):
+    """POST and collect NDJSON frames until the server closes the connection.
+
+    Frames are split as they arrive rather than after the read finishes, so a
+    handler that forgot to flush would show up here as a stalled read instead
+    of passing on the buffer the socket happened to deliver at the end.
+
+    ``content_length=None`` omits the header, and then sends no body with it:
+    bytes the handler never reads would still be sitting in the socket when it
+    closes, and an unread request is what turns a clean close into a reset.
+    """
+    body = b"" if content_length is None else json.dumps(payload).encode()
+    if content_length == "auto":
+        content_length = len(body)
+    request = _request_bytes(srv, path, body, content_length)
+    frames = []
+    with socket.create_connection(("127.0.0.1", srv.server_port), timeout=60) as sock:
+        sock.sendall(request)
+        buffer = b""
+        while b"\r\n\r\n" not in buffer:
+            chunk = sock.recv(65536)
+            if not chunk:
+                pytest.fail("the server closed before sending any headers")
+            buffer += chunk
+        status, headers, rest = _split_head(buffer)
+        while True:
+            while b"\n" in rest:
+                line, _, rest = rest.partition(b"\n")
+                if line.strip():
+                    frames.append(json.loads(line))
+            chunk = sock.recv(65536)
+            if not chunk:
+                break
+            rest += chunk
+    assert not rest.strip(), "a frame arrived without its terminating newline"
+    return status, headers, frames
+
+
+def test_a_stream_reports_the_run_and_ends_with_the_one_shot_body(server):
+    """The stream is the same answer, delivered as it is worked out.
+
+    The last frame carries the one-shot response object unchanged -- no
+    reshaping, no subset -- so a client that streams gets everything a client
+    that waits gets, and the two code paths cannot drift apart silently.
+    """
+    request = {"intent": "a 3.3V regulator", "time_limit_s": 5}
+    status, headers, frames = post_stream(server, request)
+
+    assert status == 200
+    assert headers["content-type"] == "application/x-ndjson"
+    assert headers["cache-control"] == "no-cache"
+    assert "content-length" not in headers, "the connection close delimits the body"
+
+    assert len(frames) >= 3
+    assert all(isinstance(frame, dict) for frame in frames)
+    assert frames[0] == {"event": "run.accepted", "t_s": 0.0}
+    assert frames[-1]["event"] == "run.done"
+
+    events = [frame["event"] for frame in frames]
+    assert "stage.start" in events, "the pipeline's stages must reach the wire"
+    assert "model.call" in events, "so must its model round-trips"
+
+    once_status, once_body = post(server, request)
+    assert once_status == 200
+    streamed = frames[-1]["result"]
+    # Wall clock is the one field that cannot match: the two runs are two runs.
+    del streamed["duration_s"]
+    del once_body["duration_s"]
+    assert streamed == once_body
+
+
+#: Any valid request; these tests are about what comes back, not what goes in.
+REQUEST = {"intent": "a regulator", "time_limit_s": 5}
+
+
+def _pipeline_that_raises(exc):
+    """A generate_pcb that reports two events, then fails.
+
+    The events matter as much as the failure: a run that dies must still have
+    told the client what it managed to do first.
+    """
+
+    def fake(model, intent, **kw):
+        on_event = kw["on_event"]
+        on_event({"event": "stage.start", "stage": "propose"})
+        on_event({"event": "stage.done", "stage": "propose"})
+        raise exc
+
+    return fake
+
+
+def _reported_events(frames):
+    return [frame["event"] for frame in frames[1:-1]]
+
+
+def test_a_streamed_value_error_is_a_400_run_error(monkeypatch, server):
+    """The caller's error, with its message, exactly as the one-shot route sends it."""
+    import service.app as app
+
+    boom = _pipeline_that_raises(ValueError("'nets' must be an object"))
+    monkeypatch.setattr(app, "generate_pcb", boom)
+    status, _, frames = post_stream(server, REQUEST)
+
+    assert status == 200, "the headers are already sent; failure lives in the frames"
+    assert _reported_events(frames) == ["stage.start", "stage.done"]
+    assert frames[-1] == {
+        "event": "run.error",
+        "status": 400,
+        "error": "'nets' must be an object",
+    }
+
+
+def test_a_streamed_model_outage_is_a_502_run_error(monkeypatch, server):
+    """An upstream outage is not the caller's fault here either."""
+    from silkscreen.agents.model import ModelError
+
+    import service.app as app
+
+    monkeypatch.setattr(
+        app, "generate_pcb", _pipeline_that_raises(ModelError("gemini 503"))
+    )
+    _, _, frames = post_stream(server, REQUEST)
+
+    assert _reported_events(frames) == ["stage.start", "stage.done"]
+    assert frames[-1]["event"] == "run.error"
+    assert frames[-1]["status"] == 502
+    assert "503" in frames[-1]["error"]
+
+
+def test_a_streamed_internal_error_keeps_its_error_id_and_hides_the_detail(
+    monkeypatch, server
+):
+    """Our bug, reported the way the one-shot route reports it.
+
+    The id is the only thing joining this frame to the logged traceback, and
+    the internal message must not travel with it.
+    """
+    import service.app as app
+
+    monkeypatch.setattr(
+        app,
+        "generate_pcb",
+        _pipeline_that_raises(RuntimeError("a detail from deep inside the pipeline")),
+    )
+    _, _, frames = post_stream(server, REQUEST)
+
+    assert _reported_events(frames) == ["stage.start", "stage.done"], (
+        "the events before the failure still belong to the client"
+    )
+    assert frames[-1]["event"] == "run.error"
+    assert frames[-1]["status"] == 500
+    assert frames[-1]["error"] == "internal error"
+    assert re.fullmatch(r"[0-9a-f]{12}", frames[-1]["error_id"])
+    assert "deep inside" not in json.dumps(frames)
+
+
+def test_a_malformed_content_length_on_the_stream_route_is_a_plain_400(server):
+    """A request rejected before the run starts is answered as an ordinary error.
+
+    Nothing has been written at that point, so there is no stream to put the
+    error in -- and a client that gets a stream back for a request that never
+    ran would have to parse frames to learn its header was garbage.
+    """
+    status, headers, body = post_raw(
+        server, "/generate/stream", b"", content_length="abc"
+    )
+    assert status == 400
+    assert headers["content-type"] == "application/json"
+    assert json.loads(body) == {"error": "invalid Content-Length"}
+
+
+def test_malformed_json_on_the_stream_route_is_a_plain_400(server):
+    status, headers, body = post_raw(
+        server, "/generate/stream", b"{not json", content_length=9
+    )
+    assert status == 400
+    assert headers["content-type"] == "application/json"
+    assert "invalid JSON" in json.loads(body)["error"]
+
+
+def test_a_non_object_body_on_the_stream_route_is_a_plain_400(server):
+    body_bytes = b"[1, 2, 3]"
+    status, _, body = post_raw(
+        server, "/generate/stream", body_bytes, content_length=len(body_bytes)
+    )
+    assert status == 400
+    assert json.loads(body) == {"error": "body must be a JSON object"}
+
+
+def test_a_missing_content_length_reaches_the_stream_as_an_empty_body(server):
+    """The boundary between the two error styles, stated as a test.
+
+    A missing Content-Length is not a malformed one: the handler reads it as
+    an empty body, which is a valid ``{}`` request that then fails validation
+    inside the run. So this one is a stream carrying a 400, not a plain 400 --
+    the same substitution the one-shot route makes, with the stream's framing.
+    """
+    status, headers, frames = post_stream(server, {}, content_length=None)
+    assert status == 200
+    assert headers["content-type"] == "application/x-ndjson"
+    assert frames[0]["event"] == "run.accepted"
+    assert frames[-1]["event"] == "run.error"
+    assert frames[-1]["status"] == 400
+    assert "intent" in frames[-1]["error"]
+
+
+def test_a_debug_stream_carries_the_raw_model_responses(server):
+    """The one request field that puts model output on the wire.
+
+    Reading a bad board means reading what the model was told and what it
+    said back; without this the stream reports only that a call happened.
+    """
+    status, _, frames = post_stream(server, {**REQUEST, "debug": True})
+
+    assert status == 200
+    responses = [frame for frame in frames if frame["event"] == "model.response"]
+    assert responses, "a debug run must report what the model answered"
+    for frame in responses:
+        assert isinstance(frame["text"], str) and frame["text"]
+    assert frames[-1]["event"] == "run.done"
+
+
+def test_a_stream_without_the_debug_flag_carries_no_model_responses(server):
+    """The default stream stays a progress signal, exactly as it was."""
+    status, _, frames = post_stream(server, REQUEST)
+
+    assert status == 200
+    assert [frame for frame in frames if frame["event"] == "model.response"] == []
+    assert "model.call" in [frame["event"] for frame in frames]
+
+
+def test_a_streamed_grounded_run_reports_each_part(ground_server):
+    """The events the service owns, for the stage the pipeline cannot see.
+
+    Grounding runs after generate_pcb has returned, so no pipeline event can
+    describe it. Without these frames the stream would fall silent through the
+    slowest part of a grounded request, which is exactly when a client is
+    still waiting to hear something.
+    """
+    ground_server.store.put("AMS1117-3.3", _cached_facts())
+    seed_pages(ground_server)
+
+    status, _, frames = post_stream(ground_server, GROUND_REQUEST)
+    assert status == 200
+
+    grounded = [frame for frame in frames if frame["event"] == "ground.part"]
+    assert len(grounded) == 1
+    assert grounded[0]["part"] == "AMS1117-3.3"
+    assert grounded[0]["cached"] is True
+    assert isinstance(grounded[0]["t_s"], float)
+
+    assert frames[-1]["event"] == "run.done"
+    pages = frames[-1]["result"]["grounding"]["pages"]
+    assert pages == {"cached": ["AMS1117-3.3"], "read": []}

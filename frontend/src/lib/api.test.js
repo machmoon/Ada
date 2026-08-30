@@ -7,6 +7,7 @@ import {
   MIN_TIME_LIMIT_S,
   REQUEST_TIMEOUT_MS,
   generate,
+  generateStream,
   normalizeRequest,
   requestBytes,
 } from './api.js'
@@ -43,6 +44,54 @@ function stubFetchRejecting(error) {
   })
   vi.stubGlobal('fetch', fetch)
   return fetch
+}
+
+/** Answers per path, which is the only way to watch a fallback: the stream
+    endpoint and the one-shot endpoint have to reply differently in one test. */
+function stubFetchByPath(responses) {
+  const fetch = vi.fn(async (url) => {
+    const response = responses[url]
+    if (!response) throw new TypeError(`no stub for ${url}`)
+    return response
+  })
+  vi.stubGlobal('fetch', fetch)
+  return fetch
+}
+
+const ENCODER = new TextEncoder()
+
+/** A duck-typed streaming Response. `cut` makes the reader throw once the
+    chunks run out, which is a connection dying mid-run. */
+function streamResponse(chunks, { status = 200, type = 'application/x-ndjson', cut = false } = {}) {
+  const queue = chunks.map((chunk) => ENCODER.encode(chunk))
+  let sent = 0
+  return {
+    ok: status >= 200 && status < 300,
+    status,
+    headers: { get: (name) => (String(name).toLowerCase() === 'content-type' ? type : null) },
+    json: async () => ({}),
+    body: {
+      getReader: () => ({
+        read: async () => {
+          if (sent < queue.length) return { value: queue[sent++], done: false }
+          if (cut) throw new TypeError('network error')
+          return { value: undefined, done: true }
+        },
+        cancel: async () => {},
+      }),
+    },
+  }
+}
+
+/** The frames a plain successful run sends, with one object deliberately split
+    across two chunks — a reader loop that reassembles nothing would fail here. */
+function happyFrames(result = OK_BODY) {
+  return [
+    '{"event":"run.accepted","t_s":0.0}\n{"event":"stage.start","stage":"pl',
+    'ace","t_s":0.2,"time_limit_s":20}\n',
+    '{"event":"stage.done","stage":"place","t_s":3.1,"solver_status":"FEASIBLE"}\n',
+    `{"event":"run.done","result":${JSON.stringify(result)}}\n`,
+  ]
 }
 
 /** The minimum a successful response needs; every field is optional to the normalizer. */
@@ -693,5 +742,332 @@ describe('generate: what it writes to the debug log', () => {
     expect(entry.data).toEqual({ bytes: requestBytes(request), limit: MAX_REQUEST_BYTES })
     expect(fetch).not.toHaveBeenCalled()
     expect(await recorded('api.response')).toEqual([])
+  })
+})
+
+describe('generateStream: the happy stream', () => {
+  it('posts to the streaming endpoint under the same budget and shaping', async () => {
+    const fetch = stubFetch(streamResponse(happyFrames()))
+    const request = { intent: 'a 3v3 regulator', time_limit_s: 20 }
+
+    await generateStream(request, () => {})
+
+    expect(fetch).toHaveBeenCalledTimes(1)
+    const [url, init] = fetch.mock.calls[0]
+    expect(url).toBe('/generate/stream')
+    expect(init.method).toBe('POST')
+    expect(init.headers['content-type']).toBe('application/json')
+    expect(init.body).toBe(JSON.stringify({ ...request, debug: true }))
+    expect(init.signal).toBeInstanceOf(AbortSignal)
+  })
+
+  it('asks the service for the raw model responses, which only this route gets', async () => {
+    const fetch = stubFetch(streamResponse(happyFrames()))
+
+    await generateStream({ intent: 'x' }, () => {})
+
+    expect(JSON.parse(fetch.mock.calls[0][1].body)).toEqual({ intent: 'x', debug: true })
+  })
+
+  it('leaves the one-shot body alone, since nothing there could show the text', async () => {
+    const fetch = stubFetch(jsonResponse(200, OK_BODY))
+
+    await generate({ intent: 'x' })
+
+    const body = JSON.parse(fetch.mock.calls[0][1].body)
+    expect(body).toEqual({ intent: 'x' })
+    expect(body.debug).toBeUndefined()
+  })
+
+  it('hands every event to the listener, in order, reassembling a split frame', async () => {
+    stubFetch(streamResponse(happyFrames()))
+    const seen = []
+
+    await generateStream({ intent: 'x' }, (evt) => seen.push(evt))
+
+    expect(seen.map((evt) => evt.event)).toEqual([
+      'run.accepted',
+      'stage.start',
+      'stage.done',
+      'run.done',
+    ])
+    expect(seen[1]).toEqual({ event: 'stage.start', stage: 'place', t_s: 0.2, time_limit_s: 20 })
+  })
+
+  it('resolves with exactly what the one-shot path would have returned', async () => {
+    stubFetch(jsonResponse(200, OK_BODY))
+    const oneShot = await generate({ intent: 'x' })
+
+    stubFetch(streamResponse(happyFrames()))
+    const streamed = await generateStream({ intent: 'x' }, () => {})
+
+    expect(streamed).toEqual(oneShot)
+  })
+
+  it('reads a last frame that arrives without a trailing newline', async () => {
+    stubFetch(streamResponse(['{"event":"run.done","result":{"status":"feasible"}}']))
+
+    expect(await generateStream({ intent: 'x' }, () => {})).toMatchObject({ status: 'feasible' })
+  })
+
+  it('keeps reading when a listener throws, since the run is still arriving', async () => {
+    stubFetch(streamResponse(happyFrames()))
+    const seen = []
+
+    const result = await generateStream({ intent: 'x' }, (evt) => {
+      seen.push(evt.event)
+      if (evt.event === 'run.accepted') throw new Error('a bug in the feed')
+    })
+
+    expect(seen).toHaveLength(4)
+    expect(result).toMatchObject({ status: 'feasible' })
+  })
+
+  it('clears the budget timer once the stream finishes', async () => {
+    vi.useFakeTimers()
+    stubFetch(streamResponse(happyFrames()))
+
+    await generateStream({ intent: 'x' }, () => {})
+
+    expect(vi.getTimerCount()).toBe(0)
+  })
+
+  it('refuses an oversized request before the network, exactly as generate does', async () => {
+    const fetch = stubFetch(streamResponse(happyFrames()))
+    const request = { intent: 'x'.repeat(MAX_REQUEST_BYTES) }
+
+    await expect(generateStream(request, () => {})).rejects.toMatchObject({
+      name: 'ApiError',
+      kind: 'too-large',
+    })
+    expect(fetch).not.toHaveBeenCalled()
+  })
+})
+
+describe('generateStream: falling back to the one-shot endpoint', () => {
+  it('delegates on a 404, which is a service built before the endpoint existed', async () => {
+    const fetch = stubFetchByPath({
+      '/generate/stream': jsonResponse(404, { error: 'not found' }),
+      '/generate': jsonResponse(200, OK_BODY),
+    })
+
+    const result = await generateStream({ intent: 'x' }, () => {})
+
+    expect(result).toMatchObject({ status: 'feasible' })
+    expect(fetch.mock.calls.map((call) => call[0])).toEqual(['/generate/stream', '/generate'])
+    const [entry] = await recorded('api.stream-fallback')
+    expect(entry).toMatchObject({ level: 'info', src: 'app' })
+    expect(entry.data).toMatchObject({ status: 404 })
+  })
+
+  it('delegates when a 200 arrives as something other than NDJSON', async () => {
+    const fetch = stubFetchByPath({
+      '/generate/stream': streamResponse(happyFrames(), { type: 'text/html' }),
+      '/generate': jsonResponse(200, OK_BODY),
+    })
+
+    const result = await generateStream({ intent: 'x' }, () => {})
+
+    expect(result).toMatchObject({ status: 'feasible' })
+    expect(fetch).toHaveBeenCalledTimes(2)
+    expect((await recorded('api.stream-fallback'))[0].data).toMatchObject({
+      content_type: 'text/html',
+    })
+  })
+
+  it('delegates when the response carries no readable body', async () => {
+    const noBody = { ...streamResponse([]), body: null }
+    const fetch = stubFetchByPath({
+      '/generate/stream': noBody,
+      '/generate': jsonResponse(200, OK_BODY),
+    })
+
+    expect(await generateStream({ intent: 'x' }, () => {})).toMatchObject({ status: 'feasible' })
+    expect(fetch).toHaveBeenCalledTimes(2)
+    expect(await recorded('api.stream-fallback')).toHaveLength(1)
+  })
+
+  it('does not fall back on a pre-stream 400, which is an answer about this request', async () => {
+    const fetch = stubFetchByPath({
+      '/generate/stream': jsonResponse(400, { error: 'intent must be a non-empty string' }),
+      '/generate': jsonResponse(200, OK_BODY),
+    })
+
+    await expect(generateStream({ intent: '' }, () => {})).rejects.toMatchObject({
+      name: 'ApiError',
+      kind: 'validation',
+      status: 400,
+      message: 'intent must be a non-empty string',
+    })
+    expect(fetch).toHaveBeenCalledTimes(1)
+    expect(await recorded('api.stream-fallback')).toHaveLength(0)
+  })
+
+  it('classifies a pre-stream 413 the way the one-shot path does', async () => {
+    stubFetch(jsonResponse(413, { error: 'request body too large' }))
+
+    await expect(generateStream({ intent: 'x' }, () => {})).rejects.toMatchObject({
+      kind: 'too-large',
+      status: 413,
+    })
+  })
+})
+
+describe('generateStream: a run that fails inside the stream', () => {
+  it('throws the same error a 502 naming GOOGLE_API_KEY would have thrown', async () => {
+    const fetch = stubFetchByPath({
+      '/generate/stream': streamResponse([
+        '{"event":"run.accepted","t_s":0.0}\n',
+        '{"event":"run.error","status":502,"error":"GOOGLE_API_KEY is not set"}\n',
+      ]),
+      '/generate': jsonResponse(200, OK_BODY),
+    })
+
+    await expect(generateStream({ intent: 'x' }, () => {})).rejects.toMatchObject({
+      name: 'ApiError',
+      kind: 'no-api-key',
+      status: 502,
+      message: 'GOOGLE_API_KEY is not set',
+    })
+    // The pipeline already ran and failed; running it again would cost a second
+    // set of model calls to reach the same answer.
+    expect(fetch).toHaveBeenCalledTimes(1)
+  })
+
+  it('carries the error id off a 500 frame, the way the error panel needs it', async () => {
+    stubFetch(
+      streamResponse([
+        '{"event":"run.error","status":500,"error":"unhandled","error_id":"a1b2c3d4"}\n',
+      ]),
+    )
+
+    await expect(generateStream({ intent: 'x' }, () => {})).rejects.toMatchObject({
+      kind: 'internal',
+      status: 500,
+      errorId: 'a1b2c3d4',
+    })
+  })
+
+  it('shows the failure to the listener before throwing it', async () => {
+    stubFetch(streamResponse(['{"event":"run.error","status":400,"error":"bad intent"}\n']))
+    const seen = []
+
+    await expect(generateStream({ intent: 'x' }, (evt) => seen.push(evt.event))).rejects.toThrow()
+
+    expect(seen).toEqual(['run.error'])
+  })
+})
+
+describe('generateStream: a stream that stops mid-run', () => {
+  it('reports a connection that died after frames as a network failure, and never reruns', async () => {
+    const fetch = stubFetchByPath({
+      '/generate/stream': streamResponse(['{"event":"run.accepted","t_s":0.0}\n'], { cut: true }),
+      '/generate': jsonResponse(200, OK_BODY),
+    })
+    const seen = []
+
+    await expect(generateStream({ intent: 'x' }, (evt) => seen.push(evt.event))).rejects.toMatchObject({
+      name: 'ApiError',
+      kind: 'network',
+      message: 'network error',
+    })
+    expect(fetch).toHaveBeenCalledTimes(1)
+    expect(seen).toEqual(['run.accepted'])
+  })
+
+  it('reports a clean close that never said how the run ended', async () => {
+    const fetch = stubFetchByPath({
+      '/generate/stream': streamResponse([
+        '{"event":"run.accepted","t_s":0.0}\n{"event":"stage.start","stage":"place","t_s":0.1}\n',
+      ]),
+      '/generate': jsonResponse(200, OK_BODY),
+    })
+
+    await expect(generateStream({ intent: 'x' }, () => {})).rejects.toMatchObject({
+      kind: 'network',
+      message: 'The stream closed before the run finished.',
+    })
+    expect(fetch).toHaveBeenCalledTimes(1)
+  })
+
+  it('classifies a stream its own budget timer aborted as a timeout', async () => {
+    vi.useFakeTimers()
+    let signal = null
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (_url, init) => {
+        signal = init.signal
+        return {
+          ok: true,
+          status: 200,
+          headers: { get: () => 'application/x-ndjson' },
+          body: {
+            getReader: () => ({
+              read: () =>
+                new Promise((_resolve, reject) => {
+                  signal.addEventListener('abort', () => reject(new Error('aborted')))
+                }),
+              cancel: async () => {},
+            }),
+          },
+        }
+      }),
+    )
+
+    const settled = generateStream({ intent: 'x' }, () => {})
+    await Promise.resolve()
+    vi.advanceTimersByTime(REQUEST_TIMEOUT_MS)
+
+    await expect(settled).rejects.toMatchObject({ kind: 'timeout' })
+  })
+})
+
+describe('generateStream: what it writes to the debug log', () => {
+  it('records the stream opening', async () => {
+    stubFetch(streamResponse(happyFrames()))
+
+    await generateStream({ intent: 'x' }, () => {})
+
+    const [entry] = await recorded('api.stream')
+    expect(entry).toMatchObject({ level: 'info', src: 'app' })
+    expect(entry.data).toMatchObject({ status: 200, content_type: 'application/x-ndjson' })
+  })
+
+  it('records the same api.response line the one-shot path leaves behind', async () => {
+    stubFetch(streamResponse(happyFrames()))
+
+    await generateStream({ intent: 'x' }, () => {})
+
+    const [entry] = await recorded('api.response')
+    expect(entry.level).toBe('info')
+    expect(entry.data).toMatchObject({
+      status: 200,
+      ok: true,
+      parsed: true,
+      stream: true,
+      events: 4,
+    })
+  })
+
+  it('records a run that failed inside the stream under the status it carried', async () => {
+    stubFetch(
+      streamResponse(['{"event":"run.error","status":502,"error":"gemini returned 429"}\n']),
+    )
+
+    await expect(generateStream({ intent: 'x' }, () => {})).rejects.toThrow()
+
+    const [entry] = await recorded('api.response')
+    expect(entry.level).toBe('warn')
+    expect(entry.data).toMatchObject({ status: 502, ok: false, stream: true, events: 1 })
+  })
+
+  it('records a stream that stopped, with how many events had arrived', async () => {
+    stubFetch(streamResponse(['{"event":"run.accepted","t_s":0.0}\n'], { cut: true }))
+
+    await expect(generateStream({ intent: 'x' }, () => {})).rejects.toThrow()
+
+    const [entry] = await recorded('api.failed')
+    expect(entry.level).toBe('error')
+    expect(entry.data).toMatchObject({ events: 1, aborted: false })
   })
 })

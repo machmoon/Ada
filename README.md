@@ -13,7 +13,7 @@ python -m silkscreen "a 3.3V motor driver around an STM32F103" -o board.kicad_pc
 ```
 
 ```
-326 passed — no network, no API key, no KiCad install
+345 passed — no network, no API key, no KiCad install
 ```
 
 ---
@@ -48,11 +48,11 @@ that consumes the file. Install it if you are a person who wants to see a board.
 | `packing.py` — CP-SAT placer | **Working** · 43 tests |
 | `netlist.py` — validated circuit IR | **Working** · 15 tests |
 | `footprints.py` + `board.py` — land patterns, board emission | **Working** · 20 tests |
-| `agents/` — datasheet, propose, review, pipeline | **Working** · 22 tests |
+| `agents/` — datasheet, propose, review, pipeline | **Working** · 30 tests |
 | `agents/retrieval.py` — page-cited datasheet retrieval | **Working** · 15 tests |
 | `agents/resilience.py` — provider failover | **Working** · 14 tests |
 | `mcp/` — MCP server over stdio | **Working** · 23 tests |
-| `service/` — Cloud Run + Firestore cache | **Working** · 70 tests |
+| `service/` — Cloud Run + Firestore cache | **Working** · 81 tests |
 | `frontend/` — Svelte review UI, served by the service | **Working** · review and board tabs, with an in-app debug console for log export |
 | Overlay UI, guided cursor | Not built (mockups only) |
 
@@ -157,7 +157,7 @@ treats the board file as the interface.
 | Requires KiCad running | Yes | **No** |
 | Headless / CI | Hard | **Native** |
 | Platform lock | KiCad's plugin loader | **None — pure Python** |
-| Testable without KiCad | No | **Yes, all 326 tests** |
+| Testable without KiCad | No | **Yes, all 345 tests** |
 
 ### What it reads
 
@@ -402,7 +402,7 @@ engine/
       propose.py    intent -> circuit, with a bounded repair loop
       review.py     adversarial design review
       pipeline.py   prompt -> PCB
-  tests/          326 tests — no network, no API keys, no KiCad
+  tests/          345 tests — no network, no API keys, no KiCad
     fixtures/     ref.kicad_pcb -- 11-footprint board fixture
 scripts/
   demo.py         end-to-end: read -> place -> write -> verify
@@ -482,10 +482,10 @@ docker build .                                      # the `docker` job
 
 ### Expected output
 
-**1. Test suite** — 326 tests, no warnings (four key-gated live-model tests skip unless `GOOGLE_API_KEY` is set):
+**1. Test suite** — 345 tests, no warnings (four key-gated live-model tests skip unless `GOOGLE_API_KEY` is set):
 
 ```
-326 passed in 190.85s
+345 passed in 190.85s
 ```
 
 The suite is dominated by the 20-second solver budget in a handful of placement

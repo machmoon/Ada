@@ -13,17 +13,29 @@ its netlists were confidently wrong.
 
 from __future__ import annotations
 
+import time
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any
 
 from ..board import BoardResult, build_board, write_board
 from ..netlist import CircuitSpec
+from ..units import NM_PER_MM
 from .datasheet import PartFacts, read_datasheet
-from .model import Model
+from .model import Document, Model
 from .propose import ProposalAttempt, propose_circuit
 from .review import Finding, Severity, review_circuit
 
 __all__ = ["PipelineResult", "generate_pcb"]
+
+#: Event strings are capped so a stream stays a progress signal, never a
+#: payload. No event may carry board text or datasheet text, and none carries
+#: model output unless the caller asked for it.
+MAX_EVENT_TEXT = 160
+#: The single opt-in exception: a ``model.response`` event carries the model's
+#: own answer verbatim, clipped here, for a client debugging what it was told.
+MAX_RESPONSE_TEXT = 16_000
 
 
 @dataclass
@@ -62,6 +74,96 @@ class PipelineResult:
         return " · ".join(lines)
 
 
+class _EventingModel:
+    """A :class:`Model` that reports every round-trip it makes.
+
+    Delegates to the wrapped model unchanged. ``stage`` is set by the pipeline
+    before each stage, so a call can be attributed to the stage that made it.
+    """
+
+    def __init__(
+        self,
+        model: Model,
+        emit: Callable[[dict[str, Any]], None],
+        include_responses: bool = False,
+    ):
+        self._model = model
+        self._emit = emit
+        self.stage = ""
+        self.include_responses = include_responses
+
+    def generate(
+        self,
+        prompt: str,
+        *,
+        documents: list[Document] | None = None,
+        system: str | None = None,
+        temperature: float = 0.0,
+        max_output_tokens: int = 8192,
+    ) -> str:
+        # A failover model keeps an append-only attempt log. Anything appended
+        # during this call is a provider that failed on the way to an answer;
+        # a model without such a log simply produces no retry events.
+        log = getattr(self._model, "log", None)
+        seen = len(log) if isinstance(log, list) else 0
+        started = time.monotonic()
+        try:
+            text = self._model.generate(
+                prompt,
+                documents=documents,
+                system=system,
+                temperature=temperature,
+                max_output_tokens=max_output_tokens,
+            )
+        except Exception:
+            self._emit_retries(log, seen)
+            self._emit_call(started, ok=False, chars=0)
+            raise
+        self._emit_retries(log, seen)
+        self._emit_call(started, ok=True, chars=len(text))
+        if self.include_responses:
+            self._emit(
+                {
+                    "event": "model.response",
+                    "stage": self.stage,
+                    "provider": getattr(self._model, "last_provider", None),
+                    "chars": len(text),
+                    "truncated": len(text) > MAX_RESPONSE_TEXT,
+                    "text": text[:MAX_RESPONSE_TEXT],
+                }
+            )
+        return text
+
+    def _emit_call(self, started: float, *, ok: bool, chars: int) -> None:
+        self._emit(
+            {
+                "event": "model.call",
+                "stage": self.stage,
+                "provider": getattr(self._model, "last_provider", None),
+                "model": getattr(self._model, "model", None),
+                "elapsed_s": round(time.monotonic() - started, 3),
+                "ok": ok,
+                "chars": chars,
+            }
+        )
+
+    def _emit_retries(self, log: object, seen: int) -> None:
+        if not isinstance(log, list):
+            return
+        for attempt in log[seen:]:
+            if getattr(attempt, "ok", True):
+                continue
+            self._emit(
+                {
+                    "event": "model.retry",
+                    "stage": self.stage,
+                    "provider": getattr(attempt, "provider", None),
+                    "error": str(getattr(attempt, "error", "") or "")[:MAX_EVENT_TEXT],
+                    "elapsed_s": round(float(getattr(attempt, "elapsed_s", 0.0)), 3),
+                }
+            )
+
+
 def generate_pcb(
     model: Model,
     intent: str,
@@ -72,6 +174,8 @@ def generate_pcb(
     max_repairs: int = 3,
     time_limit_s: float = 20.0,
     review: bool = True,
+    on_event: Callable[[dict[str, Any]], None] | None = None,
+    include_responses: bool = False,
 ) -> PipelineResult:
     """Generate a placed board from a natural-language intent.
 
@@ -89,29 +193,127 @@ def generate_pcb(
         max_repairs: How many times the proposal may be sent back for repair.
         time_limit_s: Placement solver budget.
         review: Run the adversarial review pass.
+        on_event: Called with one flat dict per stage boundary and per model
+            round-trip, each carrying ``event`` and ``t_s`` -- seconds since
+            this call began. Events carry counts and status only, never board
+            text or datasheet text; raw model output appears only in
+            ``model.response`` events, only when ``include_responses`` is set,
+            truncated to ``MAX_RESPONSE_TEXT``. An exception raised by the
+            callback deliberately propagates and abandons the run, which is how
+            a service cancels work for a client that has disconnected. The
+            event shape mirrors Google ADK's callback and event model, so this
+            seam can be driven by an ADK runner without changing its callers.
 
     Raises:
         ProposalError: no valid circuit emerged within the repair budget.
         UnsupportedPackage: a part's pin count has no footprint rule.
     """
+    t0 = time.monotonic()
+
+    def emit(evt: dict[str, Any]) -> None:
+        if on_event is None:
+            return
+        evt["t_s"] = round(time.monotonic() - t0, 3)
+        on_event(evt)
+
+    tap: _EventingModel | None = None
+    agent_model: Model = model
+    if on_event is not None:
+        tap = _EventingModel(model, emit, include_responses)
+        agent_model = tap
+
+    def enter(stage: str) -> None:
+        if tap is not None:
+            tap.stage = stage
+
     facts: list[PartFacts] = list(preloaded_facts or ())
     already = {f.part_number.strip().lower() for f in facts}
-    for part_number, url in (datasheets or {}).items():
+    sheets = datasheets or {}
+    if sheets:
+        enter("read")
+        emit({"event": "stage.start", "stage": "read"})
+    for index, (part_number, url) in enumerate(sheets.items(), start=1):
         # A part supplied both ways is read once; the cached copy wins, since
         # re-reading it is the cost the caller was trying to avoid.
-        if part_number.strip().lower() in already:
+        cached = part_number.strip().lower() in already
+        emit(
+            {
+                "event": "read.part",
+                "part": part_number,
+                "index": index,
+                "total": len(sheets),
+                "cached": cached,
+            }
+        )
+        if cached:
             continue
-        facts.append(read_datasheet(model, part_number, pdf_url=url))
+        facts.append(read_datasheet(agent_model, part_number, pdf_url=url))
+    if sheets:
+        emit(
+            {
+                "event": "stage.done",
+                "stage": "read",
+                "parts": len(facts),
+                "pins": sum(len(f.pins) for f in facts),
+                "requirements": sum(len(f.requirements) for f in facts),
+            }
+        )
 
+    enter("propose")
+    emit({"event": "stage.start", "stage": "propose"})
     spec, attempts = propose_circuit(
-        model, intent, facts=facts, max_repairs=max_repairs
+        agent_model,
+        intent,
+        facts=facts,
+        max_repairs=max_repairs,
+        on_event=emit if on_event is not None else None,
+    )
+    emit(
+        {
+            "event": "stage.done",
+            "stage": "propose",
+            "parts": spec.part_count(),
+            "nets": spec.net_count(),
+            "repair_rounds": max(0, len(attempts) - 1),
+        }
     )
 
+    enter("place")
+    emit(
+        {
+            "event": "stage.start",
+            "stage": "place",
+            "time_limit_s": float(time_limit_s),
+        }
+    )
     board = build_board(spec, time_limit_s=time_limit_s)
+    width_mm, height_mm = board.size_mm
+    emit(
+        {
+            "event": "stage.done",
+            "stage": "place",
+            "solver_status": board.solver_status,
+            "board_mm": [width_mm, height_mm],
+            "wirelength_mm": (
+                None if board.wirelength_nm is None else board.wirelength_nm / NM_PER_MM
+            ),
+            "warnings": len(board.warnings),
+        }
+    )
 
     findings: list[Finding] = []
     if review:
-        findings = review_circuit(model, spec, facts=facts)
+        enter("review")
+        emit({"event": "stage.start", "stage": "review"})
+        findings = review_circuit(agent_model, spec, facts=facts)
+        emit(
+            {
+                "event": "stage.done",
+                "stage": "review",
+                "findings": len(findings),
+                "blockers": sum(1 for f in findings if f.severity is Severity.BLOCKER),
+            }
+        )
 
     path = None
     if output is not None:

@@ -10,7 +10,9 @@ model text inside a worker thread with no handler and let the thread die.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass, field
+from typing import Any
 
 from ..netlist import CircuitSpec, ValidationError, parse_circuit_spec
 from .datasheet import PartFacts
@@ -105,11 +107,16 @@ def propose_circuit(
     *,
     facts: list[PartFacts] | None = None,
     max_repairs: int = 3,
+    on_event: Callable[[dict[str, Any]], None] | None = None,
 ) -> tuple[CircuitSpec, list[ProposalAttempt]]:
     """Ask for a circuit and repair it until it validates.
 
     Returns the accepted spec and the full attempt history, so a caller can show
     how many rounds it took -- which is a genuinely useful quality signal.
+
+    ``on_event`` receives one ``propose.round`` event per rejected round, so a
+    caller can watch the repair loop while it runs; see
+    :func:`silkscreen.agents.pipeline.generate_pcb` for the event contract.
 
     Raises:
         ProposalError: the model answered, but never with a valid circuit.
@@ -141,6 +148,17 @@ def propose_circuit(
             spec = parse_circuit_spec(raw)
         except ValidationError as exc:
             attempt.errors = list(exc.errors)
+            if on_event is not None:
+                # Validation errors are engine-generated, not model text, so
+                # they are safe to put on the wire -- truncated all the same.
+                on_event(
+                    {
+                        "event": "propose.round",
+                        "round": round_no + 1,
+                        "errors": len(exc.errors),
+                        "first_error": str(exc.errors[0])[:160] if exc.errors else "",
+                    }
+                )
             if round_no == max_repairs:
                 break
             # Feed every problem back at once so one round fixes all of them.

@@ -6,6 +6,10 @@ adoption idea is ARCHIVED — the behaviour its wrappers would have wrapped
 already runs (analysis in docs/agent-framework.md). ADK sub-items below are
 kept for the record, marked [ARCHIVED]; do not pick them up.
 
+2026-08-30: the pipeline now emits typed stage and model-call events through
+generate_pcb(on_event=...) — an ADK-shaped seam mirroring ADK's callback/event
+model without the dependency. If adoption is ever revisited, it attaches there.
+
 RAG / retrieval is Leo's lane and is tracked separately — retrieval.py
 (GeminiEmbedder, page-level citations) is the starting point; do not pick up
 retrieval work from this file.
@@ -44,6 +48,9 @@ FEATURES
  ----- FallbackModel chain w/ response validation      [DONE]        resilience.py
  ----- 3.7-flash primary, 3.5-flash-lite second        [DONE]        service/app.py
  ----- Per-task routing beyond failover                [IDEA]        vision/reasoning vs mechanical passes
+ ----- Request timeout so a hung primary fails over    [OPEN]        GeminiModel sets no deadline; observed 2026-08-30
+                                                                     via the event stream: 3.7-flash 504-degraded, the
+                                                                     propose call hangs, fallback is never reached
  6   Confirmation gates on file writes                 [NOT BUILT]
  ----- Inventory write points, define the gate         [NOT BUILT]   save_board, CLI output, service response
  ----- CLI confirmation prompt before board write      [NOT BUILT]   with a --yes bypass
@@ -72,6 +79,14 @@ FEATURES
                                                                      Fix is a dedicated RequestError type raised only
                                                                      for field validation; do_POST catches that alone
                                                                      and lets ValueError fall to the 500 path.
+                                                                     The fix must cover /generate/stream's run.error
+                                                                     frames too — both routes share _error_response.
+
+ 11  Live pipeline events                              [DONE]
+ ----- Engine on_event callback, stage+model events   [DONE]        pipeline.py; the ADK-shaped seam (note above)
+ ----- POST /generate/stream, NDJSON frames           [DONE]        service/app.py; run.done carries the one-shot body
+ ----- Chat feed + live stage ticks + console mirror  [DONE]        PipelineFeed.svelte; src 'server' log entries
+ ----- Raw model responses behind a "debug" flag      [DONE]        model.response frames, clipped at 16 kB
 
 OPEN WORK, SUMMARISED
 ---------------------
