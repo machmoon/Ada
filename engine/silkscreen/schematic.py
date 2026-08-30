@@ -24,9 +24,12 @@ them ambiguously. The netlist KiCad extracts from this file is the netlist the
 board was built from.
 
 **Coordinate frames.** KiCad symbol libraries are Y-up; the schematic sheet is
-Y-down. This module owns that flip in exactly one place, :func:`_pin_on_sheet`,
+Y-down. Everything that crosses that boundary goes through :func:`_pin_on_sheet`
+and :func:`_stub_on_sheet`, which sit next to each other for that reason,
 mirroring the rule :mod:`silkscreen.kicad` follows for the board. Nothing else
-here may flip a sign.
+here may flip a sign -- the emitter reaching for ``SymbolPin.stub`` directly and
+adding its symbol-local ``dy`` to a sheet coordinate is exactly how every
+passive's net label ended up drawn on top of its own body.
 """
 
 from __future__ import annotations
@@ -67,6 +70,11 @@ _LABEL_GUTTER_NM = mm(25.4)
 
 _PIN_PITCH_NM = mm(2.54)
 _PIN_LEN_NM = mm(2.54)
+
+#: Passives get a shorter pin. Their connection point is 3.81 mm out and the
+#: body half-height is 2.54 mm, so a 2.54 mm pin ends 1.27 mm *inside* the
+#: rectangle it is supposed to touch. KiCad's own R symbol uses 1.27 here.
+_PASSIVE_PIN_LEN_NM = mm(1.27)
 
 #: Half-extents of the standard two-terminal passive body.
 _PASSIVE_BODY_W_NM = mm(1.016)
@@ -110,7 +118,13 @@ class SymbolPin:
 
     @property
     def stub(self) -> tuple[int, int]:
-        """Unit direction a wire leaves this pin, away from the body."""
+        """Unit direction a wire leaves this pin, away from the body.
+
+        **Symbol-local, so Y-up like the rest of this class.** Consuming it in
+        sheet coordinates without the flip sent every vertical stub back along
+        its own pin and parked the net label on top of the body. Use
+        :func:`_stub_on_sheet`, which owns the conversion.
+        """
         return {0: (-1, 0), 90: (0, -1), 180: (1, 0), 270: (0, 1)}[self.angle]
 
 
@@ -126,6 +140,8 @@ class SymbolShape:
     pins: list[SymbolPin]
     graphics: list[str]
     hide_pin_numbers: bool = False
+    #: Drawn length of every pin on this symbol.
+    pin_len_nm: int = _PIN_LEN_NM
     #: Half-extents used only for sheet layout, wide enough for the pins.
     extent_w_nm: int = 0
     extent_h_nm: int = 0
@@ -265,6 +281,7 @@ def _passive_shape(ptype: PassiveType) -> SymbolShape:
         ],
         graphics=graphics,
         hide_pin_numbers=True,
+        pin_len_nm=_PASSIVE_PIN_LEN_NM,
         extent_w_nm=mm(2.54),
         extent_h_nm=y + _STUB_NM,
     )
@@ -289,7 +306,9 @@ def _device_shape(name: str, pins: dict[str, str]) -> SymbolShape:
         if pin_name.lower().lstrip("+-/~").startswith(_LEFT_TOKENS)
     ]
     rest = [item for item in items if item not in left_names]
-    half = (len(rest) + 1) // 2
+    # Top the left side up to half of *everything*, not half of the remainder:
+    # adding to a side that is already over its share empties the other one.
+    half = max(0, (len(items) + 1) // 2 - len(left_names))
     left = left_names + rest[:half]
     right = rest[half:]
 
@@ -445,6 +464,30 @@ def _pin_on_sheet(sym: PlacedSymbol, pin: SymbolPin) -> tuple[int, int]:
     return (sym.x_nm + pin.x_nm, sym.y_nm - pin.y_nm)
 
 
+def _stub_on_sheet(sym: PlacedSymbol, pin: SymbolPin) -> tuple[int, int, int, int]:
+    """Where a pin's wire stub ends, and which way the label reads there.
+
+    Shares the Y flip with :func:`_pin_on_sheet` rather than repeating it.
+    ``SymbolPin.stub`` is symbol-local and therefore Y-up; adding its ``dy``
+    straight to a sheet coordinate pointed every vertical stub *into* the body,
+    so the wire retraced its own pin and the net label landed on the symbol.
+
+    Returns ``(x, y, angle, justify_left)``. A vertical label is rotated 90
+    degrees, which KiCad reads bottom-up, so the justification that puts the
+    text outside the symbol depends on which way the stub went.
+    """
+    px, py = _pin_on_sheet(sym, pin)
+    dx, dy_up = pin.stub
+    dy = -dy_up  # the one place the stub crosses into the sheet's Y-down frame
+    x, y = px + dx * _STUB_NM, py + dy * _STUB_NM
+    if dx:
+        # Horizontal: text reads left-to-right and must run away from the body.
+        return x, y, 0, dx > 0
+    # Vertical: rotated text runs upward from a left-justified anchor, so a
+    # stub heading down the sheet needs the opposite justification.
+    return x, y, 90, dy < 0
+
+
 # --------------------------------------------------------------------------
 # Emission
 # --------------------------------------------------------------------------
@@ -481,7 +524,7 @@ def _lib_symbol(shape: SymbolShape, *, ref_prefix: str) -> list[str]:
         out.append(
             f"        (pin passive line "
             f"(at {_f(pin.x_nm)} {_f(pin.y_nm)} {pin.angle}) "
-            f"(length {_f(_PIN_LEN_NM)})"
+            f"(length {_f(shape.pin_len_nm)})"
         )
         out.append(f'          (name "{_esc(pin.name)}" {_FONT})')
         out.append(f'          (number "{_esc(pin.number)}" {_FONT})')
@@ -563,17 +606,13 @@ def emit_kicad_sch(
             if not net:
                 continue
             px, py = _pin_on_sheet(sym, pin)
-            dx, dy = pin.stub
-            ex, ey = px + dx * _STUB_NM, py + dy * _STUB_NM
+            ex, ey, angle, justify_left = _stub_on_sheet(sym, pin)
             wires.append(
                 f"  (wire (pts (xy {_f(px)} {_f(py)}) (xy {_f(ex)} {_f(ey)})) "
                 f'(stroke (width 0) (type default)) '
                 f'(uuid "{stable_uuid(f"w:{sym.ref}:{pin.number}")}"))'
             )
-            # A label on a vertical stub is rotated so it reads bottom-up,
-            # which is how KiCad orients its own vertical labels.
-            angle = 0 if dy == 0 else 90
-            justify = "left" if dx >= 0 else "right"
+            justify = "left" if justify_left else "right"
             labels.append(
                 f'  (label "{_esc(net)}" (at {_f(ex)} {_f(ey)} {angle}) '
                 f"(effects (font (size 1.27 1.27)) (justify {justify} bottom)) "

@@ -18,18 +18,25 @@ other circuit.
 from __future__ import annotations
 
 import json
+import math
 
 import pytest
 from kiutils.schematic import Schematic
 from silkscreen.board import build_board
 from silkscreen.netlist import PassiveType, parse_circuit_spec
 from silkscreen.schematic import (
+    _PASSIVE_BODY_H_NM,
+    _PASSIVE_BODY_W_NM,
+    _STUB_NM,
+    _pin_on_sheet,
+    _stub_on_sheet,
     build_schematic,
     emit_kicad_pro,
     emit_kicad_sch,
     write_project,
     write_schematic,
 )
+from silkscreen.units import NM_PER_MM
 
 REGULATOR = {
     "devices": {"AMS1117-3.3": {"pins": {"GND": "1", "VOUT": "2", "VIN": "3"}}},
@@ -272,3 +279,110 @@ def test_a_circuit_too_big_for_one_sheet_says_so(spec):
     assert "A4" in sheet.warnings[0] or "paper size" in sheet.warnings[0]
 
     assert not build_schematic(spec).warnings
+
+
+# ------------------------------------------------------- stub and pin geometry
+#
+# The expected direction below is derived from KiCad's pin-angle convention with
+# trigonometry, never from SymbolPin.stub. A check written in terms of that
+# lookup table would agree with it whichever way it pointed, which is exactly
+# how a stub that ran backwards into every passive shipped in the first place.
+
+
+def _away_from_body(angle_deg: int) -> tuple[int, int]:
+    """Unit step a wire takes leaving a pin, in **sheet** coordinates.
+
+    A KiCad pin's ``at`` is its connection point and its angle is the direction
+    it extends toward the body, measured in the symbol's Y-up frame. A wire
+    goes the other way, and the sheet's Y runs the other way again.
+    """
+    rad = math.radians(angle_deg)
+    toward_body_sheet = (round(math.cos(rad)), -round(math.sin(rad)))
+    return (-toward_body_sheet[0], -toward_body_sheet[1])
+
+
+def test_every_wire_stub_leaves_its_pin_away_from_the_body(sheet):
+    """Vertical pins are the ones this catches: x never needed the Y flip.
+
+    Every passive has exactly two vertical pins, so getting this wrong drew the
+    stub back along the pin and left the net label sitting on the symbol.
+    """
+    for sym in sheet.symbols:
+        for pin in sym.shape.pins:
+            px, py = _pin_on_sheet(sym, pin)
+            ex, ey, _, _ = _stub_on_sheet(sym, pin)
+            dx, dy = _away_from_body(pin.angle)
+            assert (ex - px, ey - py) == (dx * _STUB_NM, dy * _STUB_NM), (
+                f"{sym.ref} pin {pin.number} at {pin.angle} deg"
+            )
+
+
+def test_no_label_is_drawn_on_top_of_its_own_symbol(sheet, reparsed):
+    """The file-level version of the check above, blind to how it was computed.
+
+    Whatever the pin-angle convention turns out to be, a net label inside the
+    body of the part it belongs to is wrong and unreadable.
+    """
+    # The box every pin's connection point sits on: the drawn part plus its
+    # pins. A label may sit exactly on that boundary -- that is a zero-length
+    # stub, not an overlap -- so the test is for strictly inside, in whole
+    # nanometres to keep KiCad's four-decimal millimetres off the fence.
+    boxes = {}
+    for sym in sheet.symbols:
+        # Inflated to the passive body in each axis: a two-terminal symbol's
+        # pins are collinear, so the box spanned by them alone has no width and
+        # could never contain anything.
+        half_w = max(
+            max(abs(p.x_nm) for p in sym.shape.pins), _PASSIVE_BODY_W_NM
+        )
+        half_h = max(
+            max(abs(p.y_nm) for p in sym.shape.pins), _PASSIVE_BODY_H_NM
+        )
+        boxes[sym.ref] = (
+            sym.x_nm - half_w, sym.y_nm - half_h,
+            sym.x_nm + half_w, sym.y_nm + half_h,
+        )
+
+    for label in reparsed.labels:
+        x = round(label.position.X * NM_PER_MM)
+        y = round(label.position.Y * NM_PER_MM)
+        for ref, (x0, y0, x1, y1) in boxes.items():
+            inside = x0 < x < x1 and y0 < y < y1
+            assert not inside, (
+                f"label {label.text} at ({label.position.X}, {label.position.Y}) "
+                f"is drawn over {ref}"
+            )
+
+
+def test_a_passives_pin_stops_at_its_body_instead_of_crossing_it(sheet):
+    """A 2.54 mm pin on a 2.54 mm half-height body overshoots by half its length.
+
+    KiCad's own R draws 1.27 mm here. The pin is not just cosmetic: a pin drawn
+    through the body reads as a short across the part.
+    """
+    for sym in sheet.symbols:
+        if sym.ref[0] not in "CRLDY":
+            continue
+        for pin in sym.shape.pins:
+            reach = abs(pin.y_nm) - sym.shape.pin_len_nm
+            assert reach >= _PASSIVE_BODY_H_NM, (
+                f"{sym.ref} pin {pin.number} ends {reach} nm from the anchor, "
+                f"inside a body half-height of {_PASSIVE_BODY_H_NM} nm"
+            )
+
+
+def test_an_ic_uses_both_sides_of_its_body(spec):
+    """A three-pin regulator with VOUT on the left reads as a different part.
+
+    Topping the left side up to half of what was *left over* after the power
+    tokens, rather than half of everything, emptied the right side entirely.
+    """
+    sheet = build_schematic(spec)
+    ic = next(s for s in sheet.symbols if s.ref.startswith("U"))
+    left = [p for p in ic.shape.pins if p.x_nm < 0]
+    right = [p for p in ic.shape.pins if p.x_nm > 0]
+    assert left and right, f"all {len(ic.shape.pins)} pins on one side"
+    assert abs(len(left) - len(right)) <= 1 + sum(
+        1 for p in ic.shape.pins if p.name.lower().startswith(("gnd", "vin"))
+    )
+    assert "VOUT" in {p.name for p in right}
