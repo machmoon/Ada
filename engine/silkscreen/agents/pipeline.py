@@ -1,8 +1,10 @@
 """Prompt to PCB, with the model checked at every step.
 
-    intent ──► datasheets ──► propose ──► validate/repair ──► place ──► .kicad_pcb
-                                                │                          │
-                                                └──────► review ───────────┘
+    intent ─► datasheets ─► propose ─► validate/repair ─► .kicad_sch ─► place
+                                            │                            │
+                                            │                          route
+                                            │                            │
+                                            └───────► review ──────► .kicad_pcb
 
 Two gates sit between the model and the board. The first is structural: the
 circuit IR refuses to build something malformed and hands every error back for
@@ -27,7 +29,16 @@ from .datasheet import PartFacts
 from .model import Document, Model
 from .propose import ProposalAttempt
 from .review import Finding, Severity
-from .stages import place_stage, propose_stage, read_stage, review_stage
+from .stages import (
+    NO_ARTIFACTS,
+    SchematicArtifacts,
+    place_stage,
+    propose_stage,
+    read_stage,
+    review_stage,
+    route_stage,
+    schematic_stage,
+)
 
 __all__ = ["PipelineResult", "generate_pcb"]
 
@@ -226,8 +237,16 @@ def _finish(
     findings: list[Finding],
     attempts: list[ProposalAttempt],
     output: str | Path | None,
+    route: RouteResult | None = None,
+    artifacts: SchematicArtifacts = NO_ARTIFACTS,
 ) -> PipelineResult:
-    """Write the board if asked, then assemble the result. Emits nothing."""
+    """Write the board if asked, then assemble the result. Emits nothing.
+
+    This runs after the route stage, so the board it writes carries the copper
+    the router laid. Writing it earlier would leave the headline artifact --
+    the one named after what the caller asked for -- as the only unrouted file
+    in the project.
+    """
     path = None
     if output is not None:
         path = write_board(board, output)
@@ -240,6 +259,10 @@ def _finish(
         findings=findings,
         attempts=attempts,
         board_path=path,
+        route=route,
+        schematic_path=artifacts.schematic_path,
+        project_path=artifacts.project_path,
+        placed_board_path=artifacts.placed_board_path,
     )
 
 
@@ -253,6 +276,8 @@ def _generate_pcb_sdk(
     max_repairs: int = 3,
     time_limit_s: float = 20.0,
     review: bool = True,
+    route: bool = True,
+    emit_stages: bool = True,
     on_event: Callable[[dict[str, Any]], None] | None = None,
     include_responses: bool = False,
 ) -> PipelineResult:
@@ -276,6 +301,15 @@ def _generate_pcb_sdk(
         propose_on_event=emit if on_event is not None else None,
     )
     board = place_stage(spec, time_limit_s=time_limit_s, emit=emit, enter=enter)
+    artifacts = schematic_stage(
+        spec,
+        board,
+        output=output,
+        emit_stages=emit_stages,
+        emit=emit,
+        enter=enter,
+    )
+    route_result = route_stage(board, route=route, emit=emit, enter=enter)
     findings = review_stage(
         agent_model, spec, facts=facts, review=review, emit=emit, enter=enter
     )
@@ -288,6 +322,8 @@ def _generate_pcb_sdk(
         findings=findings,
         attempts=attempts,
         output=output,
+        route=route_result,
+        artifacts=artifacts,
     )
 
 
@@ -368,6 +404,8 @@ def generate_pcb(
             max_repairs=max_repairs,
             time_limit_s=time_limit_s,
             review=review,
+            route=route,
+            emit_stages=emit_stages,
             on_event=on_event,
             include_responses=include_responses,
         )
@@ -389,6 +427,8 @@ def generate_pcb(
             max_repairs=max_repairs,
             time_limit_s=time_limit_s,
             review=review,
+            route=route,
+            emit_stages=emit_stages,
             on_event=on_event,
             include_responses=include_responses,
         )
