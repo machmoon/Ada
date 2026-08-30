@@ -1,7 +1,7 @@
 // Which palette tokens.css resolves to. Everything here is a decision about a
 // value, never a write: the storage and the media query are passed in, so
 // vitest can run this in node, and the one line that touches the document
-// lives with the toggle in StatusBar and the boot in main.js.
+// lives with the toggle in TitleBar and the boot in main.js.
 //
 // A stored theme is an explicit choice and outranks the OS. No stored theme is
 // not "light" — it is the absence of a choice, and it must stay absent so the

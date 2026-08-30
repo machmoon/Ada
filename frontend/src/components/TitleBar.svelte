@@ -1,6 +1,7 @@
 <script>
   import Icon from './Icon.svelte'
   import { formatCount, formatDuration, joinDot } from '../lib/format.js'
+  import { prefersDark, readStored, resolveTheme, toggleTheme, writeStored } from '../lib/theme.js'
 
   let { intent = '', result = null } = $props()
 
@@ -14,6 +15,17 @@
         ])
       : '',
   )
+
+  // The stored choice, not the theme: no choice yet has to stay no choice so
+  // the stylesheet keeps following the OS until somebody says otherwise.
+  let choice = $state(readStored(globalThis.localStorage))
+  const theme = $derived(resolveTheme(choice, prefersDark(globalThis)))
+
+  function flipTheme() {
+    choice = toggleTheme(theme)
+    writeStored(globalThis.localStorage, choice)
+    document.documentElement.dataset.theme = choice
+  }
 </script>
 
 <header class="bar" data-testid="title-bar">
@@ -24,6 +36,15 @@
   {#if intent}<span class="intent" data-testid="title-bar-intent">{intent}</span>{/if}
   <div class="spacer"></div>
   {#if meta}<span class="mono meta" data-testid="title-bar-meta">{meta}</span>{/if}
+  <button
+    type="button"
+    class="lbl theme"
+    aria-pressed={theme === 'dark'}
+    aria-label="Night mode"
+    onclick={flipTheme}
+    data-testid="title-bar-theme"
+    data-theme-choice={theme}
+  >Night</button>
 </header>
 
 <style>
@@ -58,4 +79,21 @@
 
   .spacer { flex-grow: 1; }
   .meta { font-size: var(--fs-mono-sm); color: var(--ink-soft); padding: 0 16px; }
+
+  /* The brand rule, hung off the other edge of the bar. */
+  .theme {
+    display: flex;
+    align-items: center;
+    height: 100%;
+    padding: 0 16px;
+    border: none;
+    border-left: 1px solid var(--rule-soft);
+    background: transparent;
+    color: var(--ink-faint);
+  }
+  .theme:hover { color: var(--ink); }
+  /* Lit like a current tab, because pressed here means the app is dark. */
+  .theme[aria-pressed='true'] { color: var(--ink); }
+  /* The global ring sits 1 px outside the element, which the bar clips. */
+  .theme:focus-visible { outline-offset: -2px; }
 </style>

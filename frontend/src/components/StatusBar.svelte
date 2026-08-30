@@ -2,7 +2,6 @@
   import { countBySeverity } from '../lib/severity.js'
   import { formatCount, joinDot } from '../lib/format.js'
   import { log } from '../lib/log.js'
-  import { prefersDark, readStored, resolveTheme, toggleTheme, writeStored } from '../lib/theme.js'
 
   let {
     findings = null,
@@ -25,17 +24,6 @@
   const reviewTab = $derived(
     findings ? (reviewed ? `Review · ${count}` : 'Review · not run') : 'Review',
   )
-
-  // The stored choice, not the theme: no choice yet has to stay no choice so
-  // the stylesheet keeps following the OS until somebody says otherwise.
-  let choice = $state(readStored(globalThis.localStorage))
-  const theme = $derived(resolveTheme(choice, prefersDark(globalThis)))
-
-  function flipTheme() {
-    choice = toggleTheme(theme)
-    writeStored(globalThis.localStorage, choice)
-    document.documentElement.dataset.theme = choice
-  }
 
   const breakdown = $derived(
     findings && findings.length
@@ -92,15 +80,6 @@
       {/if}
     </button>
   {/if}
-  <button
-    type="button"
-    class="lbl tab theme"
-    aria-pressed={theme === 'dark'}
-    aria-label="Night mode"
-    onclick={flipTheme}
-    data-testid="status-bar-theme"
-    data-theme-choice={theme}
-  >Night</button>
 </footer>
 
 <style>
@@ -130,17 +109,15 @@
   .breakdown { font-size: var(--fs-lbl); color: var(--ink-soft); padding: 0 16px 0 0; }
 
   /* The tab rule, hung off the other edge of the bar. */
-  .debug, .theme {
+  .debug {
     gap: 6px;
     border: none;
     border-left: 1px solid var(--rule-soft);
     background: transparent;
   }
   /* The global ring sits 1 px outside the element, which a 28 px bar clips. */
-  .debug:focus-visible, .theme:focus-visible { outline-offset: -2px; }
-  .debug:hover, .theme:hover { color: var(--ink); }
-  /* Lit like the current tab, because pressed here means the app is dark. */
-  .theme[aria-pressed='true'] { color: var(--ink); }
+  .debug:focus-visible { outline-offset: -2px; }
+  .debug:hover { color: var(--ink); }
   .count { color: var(--ink-soft); }
   .count.alert { color: var(--sev-blocker-fg); }
 </style>
