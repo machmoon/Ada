@@ -4,7 +4,7 @@
   const LABEL = 'Voice input — not yet built'
 </script>
 
-<button type="button" class="mic" disabled title={LABEL} aria-label={LABEL}>
+<button type="button" class="mic" data-testid="mic-button" disabled title={LABEL} aria-label={LABEL}>
   <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
     <rect x="5.5" y="1.5" width="5" height="8" rx="2.5" stroke="var(--ink-faint)" stroke-width="1.3" />
     <path d="M3 7.5v.5a5 5 0 0 0 10 0v-.5M8 13v2M5.5 15h5" stroke="var(--ink-faint)" stroke-width="1.3" stroke-linecap="round" />

@@ -88,18 +88,19 @@
   }
 </script>
 
-<figure class="board">
+<figure class="board" data-testid="board-well">
   <div class="frame">
-    <div class="lbl well-label">{layerCaption(placements.parts)}</div>
+    <div class="lbl well-label" data-testid="board-well-label">{layerCaption(placements.parts)}</div>
 
-    <div class="scroll" bind:clientWidth={availableW} bind:clientHeight={availableH}>
-      <div class="stage" style="width:{stage.width}px; height:{stage.height}px;">
+    <div class="scroll" data-testid="board-well-scroll" bind:clientWidth={availableW} bind:clientHeight={availableH}>
+      <div class="stage" data-testid="board-well-stage" style="width:{stage.width}px; height:{stage.height}px;">
         <svg
           width={stage.width}
           height={stage.height}
           viewBox={viewBoxString(box)}
           role="img"
           aria-label="Placed board, {placements.parts.length} parts"
+          data-testid="board-well-svg"
         >
           <defs>
             <pattern id="board-grid" width={gridMm} height={gridMm} patternUnits="userSpaceOnUse">
@@ -125,12 +126,13 @@
               stroke={EDGE_CUTS}
               stroke-width="1.5"
               vector-effect="non-scaling-stroke"
+              data-testid="board-well-outline"
             />
 
             {#each placements.parts as part, i (i)}
               {@const courtyard = rectAttrs(part.courtyard_mm)}
               {@const on = selected.has(String(part.ref))}
-              <g class="part" class:dim={anySelected && !on}>
+              <g class="part" data-testid="board-well-part" data-ref={part.ref} data-highlighted={on} class:dim={anySelected && !on}>
                 <rect
                   {...courtyard}
                   fill="none"
@@ -139,7 +141,7 @@
                   vector-effect="non-scaling-stroke"
                 />
                 {#each padRects(part) as pad, p (p)}
-                  <rect x={pad.x} y={pad.y} width={pad.width} height={pad.height} fill={pad.color} />
+                  <rect data-testid="board-well-pad" x={pad.x} y={pad.y} width={pad.width} height={pad.height} fill={pad.color} />
                 {/each}
                 <text
                   class="ref"
@@ -148,6 +150,7 @@
                   fill={SILKSCREEN}
                   text-anchor="middle"
                   dominant-baseline="central"
+                  data-testid="board-well-ref"
                 >{part.ref}</text>
                 <!-- Last, and the only thing in the group that takes a
                      pointer: an unpainted rect hit-tests nothing by default,
@@ -161,20 +164,22 @@
                   pointer-events="all"
                   onpointerenter={() => show(part)}
                   onpointerleave={hide}
+                  data-testid="board-well-part-hit"
+                  data-ref={part.ref}
                 />
               </g>
             {/each}
           </g>
         </svg>
 
-        <ul class="roster">
+        <ul class="roster" data-testid="board-well-roster">
           {#each roster as entry, i (i)}
             <li>{entry.text}</li>
           {/each}
         </ul>
 
         {#if tip}
-          <div class="tip" class:below={tip.below} style="left:{tip.left}px; top:{tip.top}px;">
+          <div class="tip" data-testid="board-well-tip" class:below={tip.below} style="left:{tip.left}px; top:{tip.top}px;">
             <div class="mono tip-ref">{tip.part.ref}</div>
             <dl class="tip-rows">
               {#each tip.rows as row (row.label)}
@@ -189,10 +194,10 @@
   </div>
 
   <figcaption class="caption">
-    <span class="mono">{caption}</span>
+    <span class="mono" data-testid="board-well-caption">{caption}</span>
     <span class="spacer"></span>
     {#if pcb}
-      <button type="button" class="download" onclick={() => downloadPcb(pcb)}>
+      <button type="button" class="download" data-testid="board-well-download" onclick={() => downloadPcb(pcb)}>
         Download .kicad_pcb
       </button>
     {/if}

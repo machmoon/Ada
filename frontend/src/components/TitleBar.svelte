@@ -16,14 +16,14 @@
   )
 </script>
 
-<header class="bar">
-  <div class="brand">
+<header class="bar" data-testid="title-bar">
+  <div class="brand" data-testid="title-bar-brand">
     <Icon name="brand" size={17} />
     <span class="wordmark">silkscreen</span>
   </div>
-  {#if intent}<span class="intent">{intent}</span>{/if}
+  {#if intent}<span class="intent" data-testid="title-bar-intent">{intent}</span>{/if}
   <div class="spacer"></div>
-  {#if meta}<span class="mono meta">{meta}</span>{/if}
+  {#if meta}<span class="mono meta" data-testid="title-bar-meta">{meta}</span>{/if}
 </header>
 
 <style>

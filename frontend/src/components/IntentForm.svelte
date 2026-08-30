@@ -63,7 +63,7 @@
   }
 </script>
 
-<form class="form" onsubmit={submit}>
+<form class="form" data-testid="intent-form" onsubmit={submit}>
   <label class="lbl" for="intent">What do you want on the board</label>
   <textarea
     id="intent"
@@ -71,9 +71,10 @@
     bind:value={intent}
     rows="3"
     placeholder="an STM32F030 board with a 3.3 V regulator and a motor driver"
+    data-testid="intent-form-intent"
   ></textarea>
 
-  <div class="counter" class:over={tooLarge}>
+  <div class="counter" class:over={tooLarge} data-testid="intent-form-counter">
     {#if tooLarge}
       {bytes.toLocaleString()} bytes — over the {MAX_REQUEST_BYTES.toLocaleString()} byte limit
     {:else}
@@ -81,16 +82,16 @@
     {/if}
   </div>
 
-  <details class="sheets" bind:open={showDatasheets}>
-    <summary class="lbl">with datasheets</summary>
+  <details class="sheets" bind:open={showDatasheets} data-testid="intent-form-datasheets">
+    <summary class="lbl" data-testid="intent-form-datasheets-summary">with datasheets</summary>
     <div class="sheet-rows">
       {#each rows as row, i (i)}
-        <div class="sheet-row">
-          <input class="mono part" bind:value={row.part} placeholder="U1" aria-label="Part reference" />
-          <input class="mono url" bind:value={row.url} placeholder="https://…/STM32F030C8.pdf" aria-label="Datasheet URL" />
+        <div class="sheet-row" data-testid="intent-form-datasheet-row">
+          <input class="mono part" bind:value={row.part} placeholder="U1" aria-label="Part reference" data-testid="intent-form-datasheet-part" />
+          <input class="mono url" bind:value={row.url} placeholder="https://…/STM32F030C8.pdf" aria-label="Datasheet URL" data-testid="intent-form-datasheet-url" />
         </div>
       {/each}
-      <button type="button" class="add" onclick={addRow}>Add another datasheet</button>
+      <button type="button" class="add" data-testid="intent-form-add-datasheet" onclick={addRow}>Add another datasheet</button>
     </div>
   </details>
 
@@ -104,12 +105,13 @@
         min={MIN_TIME_LIMIT_S}
         max={MAX_TIME_LIMIT_S}
         step="1"
+        data-testid="intent-form-budget"
       />
       <span class="unit">seconds</span>
     </label>
 
     <label class="control checkbox">
-      <input type="checkbox" bind:checked={review} />
+      <input type="checkbox" bind:checked={review} data-testid="intent-form-review" />
       <span>Run the adversarial design review</span>
     </label>
 
@@ -120,13 +122,13 @@
         ? 'Findings are retrieved against the pages of the datasheets above'
         : 'Add a datasheet above — there is nothing to ground findings against'}
     >
-      <input type="checkbox" bind:checked={ground} disabled={!hasDatasheets} />
+      <input type="checkbox" bind:checked={ground} disabled={!hasDatasheets} data-testid="intent-form-ground" />
       <span>Ground findings against datasheet pages</span>
     </label>
 
     <div class="spacer"></div>
     <MicButton />
-    <button type="submit" class="run" disabled={!canSubmit}>
+    <button type="submit" class="run" data-testid="intent-form-submit" disabled={!canSubmit}>
       {review ? 'Run review' : 'Place board'}
     </button>
   </div>

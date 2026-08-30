@@ -33,37 +33,37 @@
   )
 </script>
 
-<aside class="rail">
+<aside class="rail" data-testid="side-rail">
   <!-- A skipped review checked nothing, so the heading and the net row have to
        say what actually ran instead. -->
-  <div class="lbl heading">{reviewed ? 'What was checked' : 'What ran'}</div>
+  <div class="lbl heading" data-testid="side-rail-heading">{reviewed ? 'What was checked' : 'What ran'}</div>
 
   {#if rows.length}
-    <div class="rows">
+    <div class="rows" data-testid="side-rail-rows">
       {#each rows as row (row.label)}
-        <div class="row">
+        <div class="row" data-testid="side-rail-row" data-label={row.label}>
           <Icon name="check" size={13} />
           <span class="row-label">{row.label}</span>
-          <span class="mono row-value">{row.value}</span>
+          <span class="mono row-value" data-testid="side-rail-row-value">{row.value}</span>
         </div>
       {/each}
     </div>
   {:else}
-    <p class="empty">Nothing yet. Describe a board and run a review.</p>
+    <p class="empty" data-testid="side-rail-empty">Nothing yet. Describe a board and run a review.</p>
   {/if}
 
-  <div class="lbl heading ruled">Not checked</div>
-  <p class="prose">
+  <div class="lbl heading ruled" data-testid="side-rail-not-checked-heading">Not checked</div>
+  <p class="prose" data-testid="side-rail-not-checked-body">
     Signal integrity, EMC, thermal margins, and manufacturability at your fab. A clean review
     here is not a substitute for a human sign-off before you order boards.
   </p>
 
   {#if sheets.length}
-    <div class="section">
+    <div class="section" data-testid="side-rail-datasheets">
       <div class="lbl heading tight">Datasheets read</div>
       <div class="sheets">
         {#each sheets as sheet, i (i)}
-          <div class="mono sheet">{sheet}</div>
+          <div class="mono sheet" data-testid="side-rail-datasheet">{sheet}</div>
         {/each}
       </div>
     </div>

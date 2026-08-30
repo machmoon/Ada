@@ -28,12 +28,12 @@
   )
 </script>
 
-<section class="results">
+<section class="results" data-testid="review-results">
   <div class="summary">
-    <span class="mono">{summary}</span>
+    <span class="mono" data-testid="review-results-summary">{summary}</span>
     <span class="spacer"></span>
     {#if pcb}
-      <button type="button" class="download" onclick={() => downloadPcb(pcb)}>
+      <button type="button" class="download" data-testid="review-results-download" onclick={() => downloadPcb(pcb)}>
         Download .kicad_pcb
       </button>
     {/if}
@@ -42,21 +42,21 @@
   <!-- Gated on the list, not on the status: the placer attaches a warning to
        every FEASIBLE solve, which is the ordinary outcome on a real board. -->
   {#if result.warnings.length}
-    <ul class="warnings" class:fallback={result.status === 'fallback'}>
+    <ul class="warnings" data-testid="review-results-warnings" class:fallback={result.status === 'fallback'}>
       {#each result.warnings as warning, i (i)}
-        <li>{warning}</li>
+        <li data-testid="review-results-warning">{warning}</li>
       {/each}
     </ul>
   {/if}
 
   <div class="head">
-    <h1 class="title">Design review</h1>
-    <span class="mono count">
+    <h1 class="title" data-testid="review-results-title">Design review</h1>
+    <span class="mono count" data-testid="review-results-count">
       {skipped ? 'not run' : formatCount(findings.length, 'finding')}
     </span>
   </div>
 
-  <p class="lead">
+  <p class="lead" data-testid="review-results-lead">
     {#if skipped}
       Nothing was checked against the datasheets on this run. The board below was placed from
       the netlist alone.
@@ -71,17 +71,17 @@
   <div class="rule last"></div>
 
   {#if skipped}
-    <div class="state">
-      <div class="state-title">Review was skipped</div>
-      <p class="state-body">
+    <div class="state" data-testid="review-results-state" data-state="skipped">
+      <div class="state-title" data-testid="review-results-state-title">Review was skipped</div>
+      <p class="state-body" data-testid="review-results-state-body">
         This run was submitted with the review turned off, so the board was placed but nothing
         checked it against the datasheets. Run it again with the review on to get findings.
       </p>
     </div>
   {:else if findings.length === 0}
-    <div class="state">
-      <div class="state-title">Nothing to flag</div>
-      <p class="state-body">
+    <div class="state" data-testid="review-results-state" data-state="clean">
+      <div class="state-title" data-testid="review-results-state-title">Nothing to flag</div>
+      <p class="state-body" data-testid="review-results-state-body">
         The reviewer found no blockers, marginal choices, or notes worth raising against the
         datasheets it read. That covers pin function and passive values in context — not signal
         integrity, EMC, thermal margins, or manufacturability at your fab. A clean review here
@@ -89,7 +89,7 @@
       </p>
     </div>
   {:else}
-    <div class="cards">
+    <div class="cards" data-testid="review-results-cards">
       {#each findings as finding, i (i)}
         <FindingCard
           {finding}
@@ -102,7 +102,7 @@
     </div>
   {/if}
 
-  <button type="button" class="again" onclick={onnew}>Start another board</button>
+  <button type="button" class="again" data-testid="review-results-new-board" onclick={onnew}>Start another board</button>
 </section>
 
 <style>

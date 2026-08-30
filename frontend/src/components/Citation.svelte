@@ -8,5 +8,5 @@
 </script>
 
 {#if text}
-  <span class="cite"><Icon name="document" size={13} />{text}</span>
+  <span class="cite" data-testid="citation"><Icon name="document" size={13} />{text}</span>
 {/if}
