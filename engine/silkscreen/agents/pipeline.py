@@ -13,21 +13,21 @@ its netlists were confidently wrong.
 
 from __future__ import annotations
 
+import os
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from ..board import BoardResult, build_board, route_board, write_board
+from ..board import BoardResult, write_board
 from ..netlist import CircuitSpec
 from ..routing import RouteResult
-from ..schematic import build_schematic, write_project, write_schematic
-from ..units import NM_PER_MM
-from .datasheet import PartFacts, read_datasheet
+from .datasheet import PartFacts
 from .model import Document, Model
-from .propose import ProposalAttempt, propose_circuit
-from .review import Finding, Severity, review_circuit
+from .propose import ProposalAttempt
+from .review import Finding, Severity
+from .stages import place_stage, propose_stage, read_stage, review_stage
 
 __all__ = ["PipelineResult", "generate_pcb"]
 
@@ -186,6 +186,111 @@ class _EventingModel:
             )
 
 
+def _wire_events(
+    model: Model,
+    on_event: Callable[[dict[str, Any]], None] | None,
+    include_responses: bool,
+) -> tuple[Callable[[dict[str, Any]], None], Model, Callable[[str], None]]:
+    """Build the ``(emit, agent_model, enter)`` trio every driver hands the stages.
+
+    With no callback the model is passed through unwrapped and ``emit`` does
+    nothing, so an unwatched run pays nothing for the seam.
+    """
+    t0 = time.monotonic()
+
+    def emit(evt: dict[str, Any]) -> None:
+        if on_event is None:
+            return
+        evt["t_s"] = round(time.monotonic() - t0, 3)
+        on_event(evt)
+
+    tap: _EventingModel | None = None
+    agent_model: Model = model
+    if on_event is not None:
+        tap = _EventingModel(model, emit, include_responses)
+        agent_model = tap
+
+    def enter(stage: str) -> None:
+        if tap is not None:
+            tap.stage = stage
+
+    return emit, agent_model, enter
+
+
+def _finish(
+    *,
+    intent: str,
+    spec: CircuitSpec,
+    board: BoardResult,
+    facts: list[PartFacts],
+    findings: list[Finding],
+    attempts: list[ProposalAttempt],
+    output: str | Path | None,
+) -> PipelineResult:
+    """Write the board if asked, then assemble the result. Emits nothing."""
+    path = None
+    if output is not None:
+        path = write_board(board, output)
+
+    return PipelineResult(
+        intent=intent,
+        spec=spec,
+        board=board,
+        facts=facts,
+        findings=findings,
+        attempts=attempts,
+        board_path=path,
+    )
+
+
+def _generate_pcb_sdk(
+    model: Model,
+    intent: str,
+    *,
+    datasheets: dict[str, str] | None = None,
+    preloaded_facts: list[PartFacts] | None = None,
+    output: str | Path | None = None,
+    max_repairs: int = 3,
+    time_limit_s: float = 20.0,
+    review: bool = True,
+    on_event: Callable[[dict[str, Any]], None] | None = None,
+    include_responses: bool = False,
+) -> PipelineResult:
+    """Run the stages as a straight line. See :func:`generate_pcb`."""
+    emit, agent_model, enter = _wire_events(model, on_event, include_responses)
+
+    facts = read_stage(
+        agent_model,
+        sheets=datasheets,
+        preloaded_facts=preloaded_facts,
+        emit=emit,
+        enter=enter,
+    )
+    spec, attempts = propose_stage(
+        agent_model,
+        intent=intent,
+        facts=facts,
+        max_repairs=max_repairs,
+        emit=emit,
+        enter=enter,
+        propose_on_event=emit if on_event is not None else None,
+    )
+    board = place_stage(spec, time_limit_s=time_limit_s, emit=emit, enter=enter)
+    findings = review_stage(
+        agent_model, spec, facts=facts, review=review, emit=emit, enter=enter
+    )
+
+    return _finish(
+        intent=intent,
+        spec=spec,
+        board=board,
+        facts=facts,
+        findings=findings,
+        attempts=attempts,
+        output=output,
+    )
+
+
 def generate_pcb(
     model: Model,
     intent: str,
@@ -200,6 +305,7 @@ def generate_pcb(
     emit_stages: bool = True,
     on_event: Callable[[dict[str, Any]], None] | None = None,
     include_responses: bool = False,
+    engine: str = "",
 ) -> PipelineResult:
     """Generate a placed board from a natural-language intent.
 
@@ -236,183 +342,56 @@ def generate_pcb(
             a service cancels work for a client that has disconnected. The
             event shape mirrors Google ADK's callback and event model, so this
             seam can be driven by an ADK runner without changing its callers.
+        engine: Which driver runs the stages -- ``"sdk"`` for the straight line
+            in this module, ``"adk"`` for the Google ADK workflow in
+            :mod:`silkscreen.agents.adk`. Both call the same stage bodies and
+            emit the same events. Empty means read ``SILKSCREEN_ENGINE`` from
+            the environment, falling back to ``"adk"`` -- the default since
+            the 2026-08-30 live-run gate passed; an explicit argument always
+            wins over the variable, and ``SILKSCREEN_ENGINE=sdk`` is the kill
+            switch back to the straight line.
 
     Raises:
         ProposalError: no valid circuit emerged within the repair budget.
         UnsupportedPackage: a part's pin count has no footprint rule.
+        RuntimeError: the engine name is unknown, or ``"adk"`` was asked for
+            without the ``adk`` extra installed.
     """
-    t0 = time.monotonic()
-
-    def emit(evt: dict[str, Any]) -> None:
-        if on_event is None:
-            return
-        evt["t_s"] = round(time.monotonic() - t0, 3)
-        on_event(evt)
-
-    tap: _EventingModel | None = None
-    agent_model: Model = model
-    if on_event is not None:
-        tap = _EventingModel(model, emit, include_responses)
-        agent_model = tap
-
-    def enter(stage: str) -> None:
-        if tap is not None:
-            tap.stage = stage
-
-    facts: list[PartFacts] = list(preloaded_facts or ())
-    already = {f.part_number.strip().lower() for f in facts}
-    sheets = datasheets or {}
-    if sheets:
-        enter("read")
-        emit({"event": "stage.start", "stage": "read"})
-    for index, (part_number, url) in enumerate(sheets.items(), start=1):
-        # A part supplied both ways is read once; the cached copy wins, since
-        # re-reading it is the cost the caller was trying to avoid.
-        cached = part_number.strip().lower() in already
-        emit(
-            {
-                "event": "read.part",
-                "part": part_number,
-                "index": index,
-                "total": len(sheets),
-                "cached": cached,
-            }
+    chosen = engine or os.environ.get("SILKSCREEN_ENGINE", "") or "adk"
+    if chosen == "sdk":
+        return _generate_pcb_sdk(
+            model,
+            intent,
+            datasheets=datasheets,
+            preloaded_facts=preloaded_facts,
+            output=output,
+            max_repairs=max_repairs,
+            time_limit_s=time_limit_s,
+            review=review,
+            on_event=on_event,
+            include_responses=include_responses,
         )
-        if cached:
-            continue
-        facts.append(read_datasheet(agent_model, part_number, pdf_url=url))
-    if sheets:
-        emit(
-            {
-                "event": "stage.done",
-                "stage": "read",
-                "parts": len(facts),
-                "pins": sum(len(f.pins) for f in facts),
-                "requirements": sum(len(f.requirements) for f in facts),
-            }
+    if chosen == "adk":
+        # Imported here, never at module scope: a base install has no google.adk,
+        # and silkscreen.agents is imported by the service on every request path.
+        try:
+            from .adk.runner import generate_pcb_adk
+        except ImportError as exc:
+            raise RuntimeError(
+                "the 'adk' engine needs the adk extra: pip install 'silkscreen[adk]'"
+            ) from exc
+        return generate_pcb_adk(
+            model,
+            intent,
+            datasheets=datasheets,
+            preloaded_facts=preloaded_facts,
+            output=output,
+            max_repairs=max_repairs,
+            time_limit_s=time_limit_s,
+            review=review,
+            on_event=on_event,
+            include_responses=include_responses,
         )
-
-    enter("propose")
-    emit({"event": "stage.start", "stage": "propose"})
-    spec, attempts = propose_circuit(
-        agent_model,
-        intent,
-        facts=facts,
-        max_repairs=max_repairs,
-        on_event=emit if on_event is not None else None,
-    )
-    emit(
-        {
-            "event": "stage.done",
-            "stage": "propose",
-            "parts": spec.part_count(),
-            "nets": spec.net_count(),
-            "repair_rounds": max(0, len(attempts) - 1),
-        }
-    )
-
-    enter("place")
-    emit(
-        {
-            "event": "stage.start",
-            "stage": "place",
-            "time_limit_s": float(time_limit_s),
-        }
-    )
-    board = build_board(spec, time_limit_s=time_limit_s)
-    width_mm, height_mm = board.size_mm
-    emit(
-        {
-            "event": "stage.done",
-            "stage": "place",
-            "solver_status": board.solver_status,
-            "board_mm": [width_mm, height_mm],
-            "wirelength_mm": (
-                None if board.wirelength_nm is None else board.wirelength_nm / NM_PER_MM
-            ),
-            "warnings": len(board.warnings),
-        }
-    )
-
-    # Every stage leaves a file KiCad can open, not just the last one. The
-    # schematic goes out before any copper exists, because it is the artifact
-    # a person reads first and it does not depend on placement succeeding well.
-    schematic_path: Path | None = None
-    project_path: Path | None = None
-    placed_board_path: Path | None = None
-    out_path = Path(output) if output is not None else None
-    if out_path is not None and emit_stages:
-        enter("schematic")
-        emit({"event": "stage.start", "stage": "schematic"})
-        stem = out_path.name[: -len("".join(out_path.suffixes))] or out_path.stem
-        sheet = build_schematic(
-            spec,
-            footprints={p.ref: f"silkscreen:{p.footprint.name}" for p in board.parts},
-        )
-        board.warnings.extend(sheet.warnings)
-        schematic_path = write_schematic(
-            sheet, out_path.with_name(f"{stem}.kicad_sch"), project_name=stem
-        )
-        project_path = write_project(
-            out_path.with_name(f"{stem}.kicad_pro"), project_name=stem
-        )
-        placed_board_path = write_board(
-            board, out_path.with_name(f"{stem}.placed.kicad_pcb")
-        )
-        emit(
-            {
-                "event": "stage.done",
-                "stage": "schematic",
-                "symbols": len(sheet.symbols),
-                "warnings": len(sheet.warnings),
-            }
-        )
-
-    route_result: RouteResult | None = None
-    if route:
-        enter("route")
-        emit({"event": "stage.start", "stage": "route"})
-        route_result = route_board(board)
-        emit(
-            {
-                "event": "stage.done",
-                "stage": "route",
-                "tracks": len(route_result.tracks),
-                "vias": len(route_result.vias),
-                "routed_nets": len(route_result.routed),
-                "unrouted_nets": len(route_result.unrouted),
-                "copper_mm": round(route_result.routed_length_nm / NM_PER_MM, 3),
-            }
-        )
-
-    findings: list[Finding] = []
-    if review:
-        enter("review")
-        emit({"event": "stage.start", "stage": "review"})
-        findings = review_circuit(agent_model, spec, facts=facts)
-        emit(
-            {
-                "event": "stage.done",
-                "stage": "review",
-                "findings": len(findings),
-                "blockers": sum(1 for f in findings if f.severity is Severity.BLOCKER),
-            }
-        )
-
-    path = None
-    if output is not None:
-        path = write_board(board, output)
-
-    return PipelineResult(
-        intent=intent,
-        spec=spec,
-        board=board,
-        facts=facts,
-        findings=findings,
-        attempts=attempts,
-        board_path=path,
-        route=route_result,
-        schematic_path=schematic_path,
-        project_path=project_path,
-        placed_board_path=placed_board_path,
-    )
+    # RuntimeError, not ValueError: the service answers a pipeline ValueError as
+    # a 400 with the raw message, and a bad engine name is not a client's fault.
+    raise RuntimeError(f"unknown engine {chosen!r}: expected 'sdk' or 'adk'")

@@ -98,10 +98,13 @@ DLLs, no platform lock, and — emphatically — no controlling the user's mouse
 identically on macOS, Linux, and Windows, which is the difference between a demo and a
 tool.
 
-**6. Review it, and say why. [not yet built]**
+**6. Review it, and say why. [built]**
 An adversarial reviewer re-reads the datasheets and argues against the design: this pin
 is an input, you drove it; this cap is on the wrong side of the regulator; this part is
-end-of-life. Findings cite the datasheet page. Nothing is applied without approval.
+end-of-life. Findings cite the datasheet page, and each one is checked against the spec
+before it is shown. **[not yet built]** The approval gate that would let you accept a
+suggested fix and have it applied: the fix buttons in the review UI are deliberately
+inert until that exists.
 
 **7. Show, don't tell. [not yet built]**
 Professional EDA tools are dense — KiCad has dozens of panels, and knowing *where to
@@ -114,20 +117,38 @@ the difference between automating a beginner out of the loop and bringing them i
 
 ## How we built it
 
-**[not yet built]** The agent layer is Google's Agent Development Kit. The topology is
-deliberate rather than a flat pile of prompts:
+**STATUS:** the ADK driver is the default engine; `SILKSCREEN_ENGINE=sdk` keeps the
+straight-line driver one environment variable away.
 
-- a **SequentialAgent** for the main pipeline — read → propose → validate → place → review
-- a **ParallelAgent** fanning out one datasheet reader per component, since parts are
-  independent
-- a **LoopAgent** on validation repair, bounded, terminating when the IR validates
-- a dedicated **adversarial reviewer** prompted to *refute* the design rather than
-  confirm it, because an agent asked "is this correct?" will say yes
+The agent layer is Google's Agent Development Kit. The pipeline — read → propose →
+validate → place → review — is an ADK dynamic **Workflow** in
+`engine/silkscreen/agents/adk/`, where each stage is a node that calls the same stage
+body the plain SDK path calls. `generate_pcb(engine=...)` chooses the driver, and both
+drivers emit the same events from inside those shared bodies, so which one ran is not
+something a client can observe. The topology is deliberate rather than a flat pile of
+prompts:
 
-Model tiering by task: `gemini-3.7-flash` for datasheet vision and reasoning, dropping to
-`gemini-3.5-flash-lite` for high-volume mechanical passes. Tool confirmation gates any
-step that writes a file. Deployment is Cloud Run; extracted datasheet facts persist to
-Firestore so the second run on a part is free.
+- an **orchestrator node** for the main pipeline, running the stages as successive
+  `await ctx.run_node(...)` calls, so the order is ordinary program text and a stage
+  that fails comes back out of the run as the original exception
+- a **bounded repair cycle** inside the propose node: every IR failure in a batch goes
+  back to the model as one repair prompt, and the loop ends when the IR validates
+- a dedicated **adversarial reviewer** node, prompted to *refute* the design rather than
+  confirm it, because an agent asked "is this correct?" will say yes — and its findings
+  are filtered against the spec, so a part reference the circuit does not contain is
+  stripped out of the finding that named it, while the finding itself is still shown
+- **[not yet built]** a **parallel fan-out** over datasheets, one reader per component,
+  since parts are independent: an `asyncio.gather` inside the read node. Today parts are
+  read one after another.
+
+Model tiering: `gemini-3.7-flash` for datasheet vision and reasoning, dropping to
+`gemini-3.5-flash-lite` behind it. It is a failover chain rather than per-task routing,
+and every provider's output is checked for usable text before it is accepted, because a
+fallback path nobody has exercised is a second bug and not a backup. Deployment is
+Cloud Run; extracted datasheet facts persist to Firestore so the second run on a part is
+free.
+
+**[not yet built]** Tool confirmation gates any step that writes a file.
 
 **[built]** The engine underneath is deliberately boring and has no network in it at all:
 

@@ -7,6 +7,7 @@
     findings = null,
     reviewed = true,
     tab = 'review',
+    schematicEnabled = false,
     boardEnabled = false,
     debugOpen = false,
     ondebug = null,
@@ -37,9 +38,26 @@
 </script>
 
 <footer class="bar" data-testid="status-bar">
-  <!-- Tabs are hash fragments, so a switch never reaches the server. Schematic
-       is not built; Board wakes up only once a run carries placements. -->
-  <span class="lbl tab" aria-disabled="true" data-testid="status-bar-tab-schematic">Schematic</span>
+  <!-- Tabs are hash fragments, so a switch never reaches the server. Each
+       drawing wakes up only when the current run carries its data contract. -->
+  {#if schematicEnabled}
+    <a
+      class="lbl tab"
+      class:current={tab === 'schematic'}
+      href="#schematic"
+      aria-current={tab === 'schematic' ? 'page' : undefined}
+      data-testid="status-bar-tab-schematic"
+      data-enabled="true"
+    >Schematic</a>
+  {:else}
+    <span
+      class="lbl tab"
+      aria-disabled="true"
+      title="Run a board to see its schematic"
+      data-testid="status-bar-tab-schematic"
+      data-enabled="false"
+    >Schematic</span>
+  {/if}
   {#if boardEnabled}
     <a
       class="lbl tab"

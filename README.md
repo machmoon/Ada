@@ -86,12 +86,13 @@ that consumes the file. Install it if you are a person who wants to see a board.
 | `schematic.py` — `.kicad_sch` + `.kicad_pro` emission | **Working** |
 | `routing.py` — two-layer grid autorouter | **Working, partial by design** — see below |
 | `footprints.py` + `board.py` — land patterns, board emission | **Working** · 20 tests |
-| `agents/` — datasheet, propose, review, pipeline | **Working** · 30 tests |
+| `agents/` — datasheet, propose, review, pipeline | **Working** · 31 tests |
+| `agents/adk/` — ADK dynamic-workflow driver for the pipeline | **Working** · 17 tests |
 | `agents/retrieval.py` — page-cited datasheet retrieval | **Working** · 15 tests |
 | `agents/resilience.py` — provider failover | **Working** · 14 tests |
 | `mcp/` — MCP server over stdio | **Working** · 23 tests |
-| `service/` — Cloud Run + Firestore cache | **Working** · 81 tests |
-| `frontend/` — Svelte review UI, served by the service | **Working** · review and board tabs, with an in-app debug console for log export |
+| `service/` — Cloud Run + Firestore cache | **Working** · 83 tests |
+| `frontend/` — Svelte review UI, served by the service | **Working** · review, schematic and board tabs, with an in-app debug console for log export |
 | Overlay UI, guided cursor | Not built (mockups only) |
 
 ---
@@ -103,7 +104,7 @@ that consumes the file. Install it if you are a person who wants to see a board.
 ```bash
 git clone https://github.com/machmoon/silkscreen && cd silkscreen
 python3 -m venv .venv
-./.venv/bin/pip install -e ".[dev,agents]"
+./.venv/bin/pip install -e ".[dev,agents,adk]"
 ```
 
 **2. A Gemini key**, for the prompt-to-PCB path. The engine and the whole test suite
@@ -167,8 +168,9 @@ bounded and `result.repair_rounds` reports how many corrections it took.
 
 **Semantic.** A reviewer re-reads the datasheets and is prompted to *refute* the
 design — an agent asked "is this correct?" says yes. Findings are graded
-blocker / marginal / note and cite the datasheet page. Findings naming parts that
-aren't on the board are dropped rather than surfaced.
+blocker / marginal / note and cite the datasheet page. A part reference the circuit
+does not contain is stripped out of the finding that named it; the finding itself
+is still shown.
 
 Everything below `agents/` is model-free and network-free, so the whole pipeline —
 including its failure paths — is tested against a scripted model with no API key.
@@ -355,8 +357,9 @@ gcloud run deploy silkscreen --source . --region us-central1 \
 ```
 
 `POST /generate` with `{"intent": "...", "datasheets": {"PART": "url"}}` returns
-the board plus the emitted `.kicad_pcb`. Extracted datasheet facts persist to
-Firestore, so the second request for a part skips the most expensive stage.
+the board, the emitted `.kicad_pcb`, and a versioned `schematic` topology block
+with stable part ids, board refs, pins and structured net endpoints. Extracted
+datasheet facts persist to Firestore, so the second request for a part skips the most expensive stage.
 `GET /healthz` is the readiness probe. The container also serves the built review
 UI at `/`, same origin as `/generate`, so there is no CORS anywhere.
 
@@ -384,11 +387,14 @@ The UI has its own suite, which CI runs before the build:
 cd frontend && npm test  # Vitest over frontend/src/lib
 ```
 
-A run lands on the review, and the **Board** tab draws the board the placer
+A run lands on the review. The **Schematic** tab draws the validated circuit as
+generic IC and passive symbols with physical pin numbers and net-labelled
+connections; it deliberately does not claim to be a native `.kicad_sch` or a
+library-accurate symbol sheet. The **Board** tab draws the board the placer
 actually produced — courtyard outlines, copper pads, and part refs, straight
 from the `placements` the service returns. Selecting a finding highlights the
-parts it names on that board, and either pane will hand you the emitted
-`.kicad_pcb` as a download.
+parts it names in either drawing, and the board and review panes will hand you
+the emitted `.kicad_pcb` as a download.
 
 ### As an MCP server
 
@@ -495,6 +501,7 @@ engine/
       propose.py    intent -> circuit, with a bounded repair loop
       review.py     adversarial design review
       pipeline.py   prompt -> PCB
+      adk/          ADK dynamic workflow over the same stage bodies
   tests/          374 tests — no network, no API keys, no KiCad
     fixtures/     ref.kicad_pcb -- 11-footprint board fixture
 scripts/
@@ -548,7 +555,7 @@ the test suite and the demo both run fully offline.
 git clone https://github.com/machmoon/silkscreen.git
 cd silkscreen
 python3 -m venv .venv
-./.venv/bin/pip install -e ".[dev,agents,cloud]"
+./.venv/bin/pip install -e ".[dev,agents,cloud,adk]"
 ```
 
 Then run the same four Python checks CI runs, in the same order:
@@ -586,17 +593,20 @@ tests; the rest run in milliseconds.
 
 | File | Tests | Covers |
 |---|---:|---|
+| `test_app.py` | 76 | Cloud Run HTTP surface, the NDJSON stream, and the served UI bundle, over a real socket |
+| `test_grounding.py` | 73 | Datasheet grounding — SSRF-guarded PDF fetch, page extraction, page-cache sharding, citation corroboration |
 | `test_packing.py` | 43 | CP-SAT model: no-overlap, clearance, edge pinning, rotation, symmetry breaking, keepouts, pinned parts, fallback, determinism |
-| `test_app.py` | 31 | Cloud Run HTTP surface and the served UI bundle, over a real socket |
+| `test_agents.py` | 31 | Datasheet extraction, proposal repair loop, review — against a scripted model |
+| `test_kicad.py` | 28 | Board read/write, coordinate conversion, round-trip |
 | `test_mcp.py` | 23 | MCP protocol — initialize, tools/list, tools/call, stdio transport, every tool |
-| `test_agents.py` | 22 | Datasheet extraction, proposal repair loop, review — against a scripted model |
 | `test_board.py` | 20 | Footprint generation and emitting a `.kicad_pcb` from a circuit spec |
+| `test_adk.py` | 17 | Parity between the SDK and ADK drivers — same events, same result, same exceptions |
 | `test_netlist.py` | 15 | Circuit IR validation — every rejection rule |
 | `test_retrieval.py` | 15 | Datasheet chunking, embedding, cosine ranking, page citations |
 | `test_resilience.py` | 14 | Provider failover — every fallback path, forced |
-| `test_kicad.py` | 13 | Board read/write, coordinate conversion, round-trip |
 | `test_cache.py` | 7 | Firestore fact cache, via a fake client |
-| **Total** | **203** | |
+| `test_live_model.py` | 3 | The live Gemini path, behind an API-key gate that skips it by default |
+| **Total** | **365** | |
 
 **2. Lint:**
 

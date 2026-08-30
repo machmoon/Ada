@@ -25,6 +25,13 @@ from silkscreen.netlist import parse_circuit_spec
 
 # ---------------------------------------------------------------- fixtures
 
+
+# This file is the SDK driver's suite; the ADK driver's is test_adk.py.
+@pytest.fixture(autouse=True)
+def _pin_sdk_engine(monkeypatch):
+    monkeypatch.setenv("SILKSCREEN_ENGINE", "sdk")
+
+
 GOOD_CIRCUIT = {
     "devices": {
         "AMS1117-3.3": {"pins": {"GND": "1", "VOUT": "2", "VIN": "3"}},
@@ -356,6 +363,33 @@ def test_events_trace_every_stage_and_model_call(tmp_path):
         assert "kicad_pcb" not in event
         for value in event.values():
             assert not (isinstance(value, str) and len(value) > 500)
+
+
+def test_the_event_name_set_is_frozen(tmp_path):
+    """Every event name a client can be sent, in one assertion.
+
+    ``frontend/src/lib/stream.js`` switches on these strings to turn a frame
+    into a sentence, so a renamed or added event is a silent regression over
+    there rather than a failure here -- unless this set is what has to change.
+    """
+    broken = json.loads(json.dumps(GOOD_CIRCUIT))
+    broken["nets"]["GND"] = ["AMS1117-3.3.GND", "DRV8837.GND"]
+    # One datasheet and one repair round, so every unconditional event fires.
+    model = ScriptedModel(responses=[
+        json.dumps(DATASHEET_JSON), json.dumps(broken), json.dumps(GOOD_CIRCUIT),
+        json.dumps({"findings": []}),
+    ])
+    events = []
+    generate_pcb(model, "a 3.3V motor driver board",
+                 datasheets={"AMS1117-3.3": "https://x/ams1117.pdf"},
+                 output=tmp_path / "b.kicad_pcb",
+                 time_limit_s=10.0, on_event=events.append)
+
+    assert {e["event"] for e in events} == {
+        "stage.start", "stage.done", "read.part", "propose.round", "model.call",
+    }
+    # The two conditional names have their own tests here: model.response fires
+    # only under include_responses, model.retry only behind a failover model.
 
 
 def test_response_events_carry_each_answer_verbatim(tmp_path):
