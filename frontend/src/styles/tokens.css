@@ -43,6 +43,12 @@
   --green: light-dark(#009600, #4FB870);
   --navy: light-dark(#000084, #7FA8E0);
 
+  /* schematic sheet: KiCad's symbol fill and net-label ink, adapted for the
+     same topology in both paper themes */
+  --schematic-symbol-fill: light-dark(#FFFFC2, #302E1E);
+  --schematic-net-label: light-dark(#725600, #D5B85A);
+  --schematic-grid-dot: light-dark(rgba(0, 0, 132, .12), rgba(127, 168, 224, .14));
+
   /* the one filled button, and the text that sits on it. Separate from
      --oxblood because a fill and a word on the ground cannot be one colour in
      both themes: at night the fill stays deep and the ink on it goes pale. */

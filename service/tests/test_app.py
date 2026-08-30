@@ -429,6 +429,61 @@ def test_findings_carry_board_refs_not_only_spec_names(server):
     )
 
 
+def test_schematic_carries_validated_parts_pins_and_nets(server):
+    """The browser gets topology, not a CircuitSpec serialization accident."""
+    Handler.model_factory = staticmethod(scripted_named)
+    try:
+        status, body = post(server, {"intent": "a 3.3V regulator", "time_limit_s": 5})
+    finally:
+        Handler.model_factory = staticmethod(scripted)
+    assert status == 200
+
+    schematic = body["schematic"]
+    assert set(schematic) == {"version", "parts", "nets"}
+    assert schematic["version"] == 1
+    assert [part["id"] for part in schematic["parts"]] == [
+        "AMS1117-3.3",
+        "c_bulk_vin",
+        "c_dec_vout",
+    ]
+    assert [part["ref"] for part in schematic["parts"]] == ["U1", "C1", "C2"]
+
+    by_id = {part["id"]: part for part in schematic["parts"]}
+    assert set(by_id["AMS1117-3.3"]) == {
+        "id",
+        "ref",
+        "kind",
+        "value",
+        "symbol",
+        "pins",
+    }
+    assert by_id["AMS1117-3.3"]["kind"] == "device"
+    assert by_id["AMS1117-3.3"]["pins"] == [
+        {"name": "1", "number": "GND"},
+        {"name": "2", "number": "VOUT"},
+        {"name": "3", "number": "VIN"},
+    ]
+    assert by_id["c_bulk_vin"]["kind"] == "capacitor"
+    assert by_id["c_bulk_vin"]["value"] == "10uF"
+    assert by_id["c_bulk_vin"]["pins"] == [
+        {"name": "1", "number": "1"},
+        {"name": "2", "number": "2"},
+    ]
+
+    declared = {net["name"] for net in schematic["nets"]}
+    assert declared == set(NAMED_CIRCUIT["nets"])
+    for net in schematic["nets"]:
+        assert set(net) == {"name", "endpoints"}
+        assert len(net["endpoints"]) >= 2
+        for endpoint in net["endpoints"]:
+            assert set(endpoint) == {"part_id", "ref", "pin", "number"}
+            part = by_id[endpoint["part_id"]]
+            assert endpoint["ref"] == part["ref"]
+            assert {"name": endpoint["pin"], "number": endpoint["number"]} in part[
+                "pins"
+            ]
+
+
 def test_blockers_stay_flattened_strings(server):
     """The old field keeps its old shape: it has readers."""
     status, body = post(server, {"intent": "a 3.3V regulator", "time_limit_s": 5})
@@ -930,6 +985,7 @@ def test_placements_are_additive(server):
         "datasheets",
         "cache",
         "served_by",
+        "schematic",
     ):
         assert key in body, f"{key} disappeared from the response"
     assert all(set(p) == {"ref", "footprint"} for p in body["parts"]), (

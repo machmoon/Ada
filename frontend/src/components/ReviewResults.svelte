@@ -8,8 +8,10 @@
     request = null,
     onnew,
     selected = -1,
+    schematicEnabled = false,
     boardEnabled = false,
     onselect = null,
+    onshowschematic = null,
     onshowboard = null,
   } = $props()
 
@@ -93,9 +95,11 @@
       {#each findings as finding, i (i)}
         <FindingCard
           {finding}
+          {schematicEnabled}
           {boardEnabled}
           selected={selected === i}
           onselect={onselect ? () => onselect(i) : null}
+          onshowschematic={onshowschematic ? () => onshowschematic(i) : null}
           onshowboard={onshowboard ? () => onshowboard(i) : null}
         />
       {/each}
