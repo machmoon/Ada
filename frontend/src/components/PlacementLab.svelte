@@ -62,26 +62,6 @@
     downloadText(JSON.stringify(result.board, null, 2), 'repaired-placement.json', 'application/json')
   }
 
-  function rewardValue(value, digits) {
-    const number = Number(value)
-    return Number.isFinite(number) ? number.toFixed(digits) : 'not scored'
-  }
-
-  function activePolicyName(run) {
-    return run.requested_policy === 'gemini' ? 'Gemini directly' : 'Verified fast policy'
-  }
-
-  function activePolicyNote(run) {
-    const notes = {
-      hybrid: 'The small policy proposes first. Gemini recovers only when it stalls.',
-      tinker: 'The promoted Qwen policy proposes. The verifier accepts only improving moves.',
-      ollama: 'Local Gemma is the stopgap proposer. The verifier accepts only improving moves.',
-      gemini: 'Gemini proposes directly. The verifier still accepts only improving moves.',
-      deterministic: 'The deterministic fallback is active because no small policy is configured.',
-    }
-    return notes[run.policy] || 'The verifier accepts only improving moves.'
-  }
-
   onMount(() => run())
 </script>
 
@@ -123,47 +103,12 @@
         <PlacementBoard board={result.board} score={result.score.after} label={`After · ${result.profile.name}`} />
       </section>
 
-      <section class="evidence">
-        <div class="metric">
-          <span class="lbl">Hard geometry H</span>
-          <strong>{Number(result.score.before.hard).toFixed(2)} → {Number(result.score.after.hard).toFixed(2)} mm</strong>
-          <p>Summed penetration depth · {result.score.before.violations.length} starting faults · {result.score.after.violations.length} remaining</p>
-        </div>
-        <div class="metric">
-          <span class="lbl">Active policy</span>
-          <strong>{activePolicyName(result)}</strong>
-          <p>{activePolicyNote(result)}</p>
-        </div>
-        <div class="metric">
-          <span class="lbl">Training reward</span>
-          <strong>{rewardValue(result.reward.outcome, 1)} outcome · {rewardValue(result.reward.progress, 2)} progress · {rewardValue(result.reward.preference, 3)} preference</strong>
-          <p>This trains a policy later. It does not decide whether an action is accepted now.</p>
-        </div>
-        <div class="metric">
-          <span class="lbl">Company memory</span>
-          <strong>{result.profile_memory === 'none' ? 'Base profile' : result.profile_memory}</strong>
-          <p>{result.profile.fixed_refs.length} fixed refs · {result.profile.groups.length} functional groups</p>
-        </div>
-      </section>
-
-      <section class="loop" aria-label="Derived placement loop">
-        <div class="loop-head">
-          <span class="lbl">Complete derived loop</span>
-          <strong>Policy proposes. Verifier measures. Gate decides.</strong>
-        </div>
-        <ol>
-          <li><b>1</b><span><strong>Intent becomes a profile</strong>Team corrections set grouping, access, compactness, thermal, keepout, and fixed-part preferences.</span></li>
-          <li><b>2</b><span><strong>Fast policy selects</strong>The configured small policy selects a short ordered batch from bounded PLACE candidates.</span></li>
-          <li><b>3</b><span><strong>Rules measure H</strong>H is summed overlap, boundary, keepout, and clearance penetration in millimetres.</span></li>
-          <li><b>4</b><span><strong>Profile measures P</strong>P is weighted grouping, edge access, compactness, and thermal cost. Lower is better.</span></li>
-          <li><b>5</b><span><strong>Verifier commits a prefix</strong>It accepts moves only while (H, P) improves. Gemini recovery runs only if the fast policy stalls.</span></li>
-        </ol>
-        <p class="formula mono">reward = legality[H = 0] + progress[(H₀ − Hₜ) / H₀] + preference[0.1 / (1 + P), legal boards only]</p>
-      </section>
-
       <section class="trace">
         <div class="trace-head">
-          <div><span class="lbl">Every measured proposal</span><h2>The verifier’s receipt</h2></div>
+          <div>
+            <span class="lbl">{result.score.before.violations.length} faults repaired · {result.score.after.violations.length} remaining</span>
+            <h2>Verified moves</h2>
+          </div>
           <div class="actions">
             {#if teachRef}
               <button type="button" onclick={teach} disabled={busy || teaching}>Reject {teachRef} move and remember</button>
@@ -209,23 +154,7 @@
   select, .run, .actions button { height: 34px; border: 1px solid var(--rule); background: var(--surface); padding: 0 11px; }
   .run, .actions .primary { color: var(--accent-ink); background: var(--accent); border-color: var(--accent); }
   .boards { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
-  .evidence { display: grid; grid-template-columns: repeat(4, 1fr); border: 1px solid var(--rule); border-top: 0; background: var(--surface); }
-  .metric { padding: 14px; border-right: 1px solid var(--rule-soft); }
-  .metric:last-child { border-right: 0; }
-  .metric strong { display: block; margin-top: 8px; font-size: 17px; font-weight: 550; }
-  .metric p { margin-top: 5px; color: var(--ink-soft); font-size: var(--fs-mono-sm); }
   .trace { margin-top: 18px; border: 1px solid var(--rule); background: var(--surface); }
-  .loop { margin-top: 18px; border: 1px solid var(--rule); background: var(--surface); }
-  .loop-head { padding: 14px; border-bottom: 1px solid var(--rule-soft); }
-  .loop-head strong { display: block; margin-top: 6px; font-size: 17px; }
-  .loop ol { display: grid; grid-template-columns: repeat(5, 1fr); }
-  .loop li { min-height: 118px; display: flex; align-items: flex-start; padding: 13px; border-right: 1px solid var(--rule-soft); border-bottom: 0; }
-  .loop li:last-child { border-right: 0; }
-  .loop li b { color: var(--oxblood); font-family: var(--font-mono); }
-  .loop li span, .loop li strong { display: block; }
-  .loop li span { color: var(--ink-mid); font-size: var(--fs-mono-sm); line-height: 1.45; }
-  .loop li strong { color: var(--ink); margin-bottom: 5px; font-size: var(--fs-ui); }
-  .formula { padding: 11px 14px; border-top: 1px solid var(--rule-soft); color: var(--ink-soft); font-size: var(--fs-mono-sm); }
   .trace-head { display: flex; align-items: center; justify-content: space-between; gap: 20px; padding: 14px; border-bottom: 1px solid var(--rule-soft); }
   h2 { margin-top: 5px; font-size: 18px; font-weight: 550; }
   .actions { display: flex; gap: 8px; }
@@ -240,11 +169,8 @@
   @media (max-width: 860px) {
     main { padding: 20px 16px 40px; }
     .controls, .hero { flex-direction: column; }
-    .boards, .evidence { grid-template-columns: 1fr; }
-    .metric { border-right: 0; border-bottom: 1px solid var(--rule-soft); }
+    .boards { grid-template-columns: 1fr; }
     .profiles { grid-template-columns: 1fr; width: 100%; }
     .trace-head { align-items: flex-start; flex-direction: column; }
-    .loop ol { grid-template-columns: 1fr; }
-    .loop li { min-height: auto; border-right: 0; border-bottom: 1px solid var(--rule-soft); }
   }
 </style>
