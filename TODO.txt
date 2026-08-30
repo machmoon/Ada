@@ -45,6 +45,16 @@ feature is tracked under feature 12.
  3   Validation repair loop                            [DONE-SDK]    now: for-loop inside an ADK node
  ----- Batched error collection, all failures at once  [DONE]        parse_circuit_spec, netlist.py
  ----- Bounded loop, ends when the IR validates        [DONE]        propose.py
+ ----- A pin on two nets rejected at validation        [OPEN]        Greptile P1 on PR #12 (verified genuine):
+                                                                     netlist.py checks endpoint shape and pin
+                                                                     existence but not that a pin joins at most
+                                                                     one net, so two nets sharing a pin validate
+                                                                     even though they are electrically one; the
+                                                                     schematic's netByPin and the board's pad-net
+                                                                     map both inherit the ambiguity last-wins.
+                                                                     Fix belongs here so the repair loop corrects
+                                                                     the model; coordinate with Pat's PR #10,
+                                                                     which also edits netlist.py.
  ----- ADK LoopAgent wrapper                           [SUPERSEDED]  the bounded loop is plain Python inside a
                                                                      node under ADK 2.0; see feature 12
  4   Adversarial reviewer                              [DONE-SDK]
