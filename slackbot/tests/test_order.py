@@ -94,7 +94,9 @@ def test_only_the_slack_client_can_reach_the_network():
     network = ("urllib.request", "http.client", "requests", "socket", "httpx")
 
     for path in sorted(package.glob("*.py")):
-        tree = ast.parse(path.read_text())
+        # encoding is explicit: this package's sources contain smart quotes,
+        # and Windows would otherwise read them as cp1252 and raise.
+        tree = ast.parse(path.read_text(encoding="utf-8"))
         imported = set()
         for node in ast.walk(tree):
             if isinstance(node, ast.Import):

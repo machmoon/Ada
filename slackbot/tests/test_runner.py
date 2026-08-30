@@ -51,7 +51,7 @@ def install_pipeline(monkeypatch, result, *, board_text: str = "(kicad_pcb v1)")
         seen.update(kwargs, intent=intent)
         output = kwargs.get("output")
         if output:
-            output.write_text(board_text)
+            output.write_text(board_text, encoding="utf-8")
             result.board_path = output
         on_event = kwargs.get("on_event")
         if on_event:
