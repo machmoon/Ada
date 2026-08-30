@@ -18,6 +18,7 @@ from silkscreen.agents import (
     read_datasheet,
     review_circuit,
 )
+from silkscreen.agents.pipeline import MAX_RESPONSE_TEXT
 from silkscreen.agents.propose import ProposalError
 from silkscreen.agents.review import Severity
 from silkscreen.netlist import parse_circuit_spec
@@ -343,10 +344,73 @@ def test_events_trace_every_stage_and_model_call(tmp_path):
     assert len([e for e in events if e["event"] == "model.call"]) == len(model.calls)
 
     # No event may carry board text, model output or datasheet text.
+    assert [e for e in events if e["event"] == "model.response"] == [], (
+        "raw model output is opt-in: a default stream carries none of it"
+    )
     for event in events:
         assert "kicad_pcb" not in event
         for value in event.values():
             assert not (isinstance(value, str) and len(value) > 500)
+
+
+def test_response_events_carry_each_answer_verbatim(tmp_path):
+    """The debug stream: what the model actually said, attributed to its stage.
+
+    A response follows its own call immediately, so a client reading the feed
+    in order never has to guess which round-trip an answer belongs to.
+    """
+    model = _scripted_pipeline_model()
+    events = []
+
+    generate_pcb(
+        model,
+        "a 3.3V motor driver board",
+        datasheets={"AMS1117-3.3": "https://x/ams1117.pdf"},
+        output=tmp_path / "board.kicad_pcb",
+        time_limit_s=15.0,
+        on_event=events.append,
+        include_responses=True,
+    )
+
+    names = [e["event"] for e in events]
+    calls = [i for i, name in enumerate(names) if name == "model.call"]
+    assert calls, "the pipeline made no model calls to report"
+    assert all(names[i + 1] == "model.response" for i in calls)
+
+    # What the scripted model returned for each prompt it was actually given,
+    # so the assertion is about the wrapper rather than about this test's copy.
+    answers = [
+        next(r for marker, r in model.by_marker.items() if marker in call["prompt"])
+        for call in model.calls
+    ]
+    responses = [e for e in events if e["event"] == "model.response"]
+    assert [e["stage"] for e in responses] == ["read", "propose", "review"]
+    assert [e["text"] for e in responses] == answers
+    assert [e["chars"] for e in responses] == [len(a) for a in answers]
+    assert all(e["truncated"] is False for e in responses)
+
+
+def test_a_long_response_is_clipped_and_says_how_long_it_really_was(tmp_path):
+    """A model that answers with a wall of text cannot flood the stream.
+
+    The count is the untruncated one: a client that only ever sees the clipped
+    text still learns that there was more of it.
+    """
+    circuit = json.dumps(GOOD_CIRCUIT)
+    # Trailing whitespace: still the same JSON, so the pipeline runs as usual.
+    padded = circuit + " " * (MAX_RESPONSE_TEXT + 500 - len(circuit))
+    model = ScriptedModel(responses=[padded])
+    events = []
+
+    generate_pcb(model, "x", output=tmp_path / "b.kicad_pcb", review=False,
+                 time_limit_s=10.0, on_event=events.append, include_responses=True)
+
+    responses = [e for e in events if e["event"] == "model.response"]
+    assert len(responses) == 1
+    assert responses[0]["truncated"] is True
+    assert responses[0]["chars"] == MAX_RESPONSE_TEXT + 500
+    assert len(responses[0]["text"]) == MAX_RESPONSE_TEXT
+    assert responses[0]["text"] == padded[:MAX_RESPONSE_TEXT]
 
 
 def test_events_report_a_repair_round(tmp_path):

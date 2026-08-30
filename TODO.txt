@@ -86,6 +86,7 @@ FEATURES
  ----- Engine on_event callback, stage+model events   [DONE]        pipeline.py; the ADK-shaped seam (note above)
  ----- POST /generate/stream, NDJSON frames           [DONE]        service/app.py; run.done carries the one-shot body
  ----- Chat feed + live stage ticks + console mirror  [DONE]        PipelineFeed.svelte; src 'server' log entries
+ ----- Raw model responses behind a "debug" flag      [DONE]        model.response frames, clipped at 16 kB
 
 OPEN WORK, SUMMARISED
 ---------------------

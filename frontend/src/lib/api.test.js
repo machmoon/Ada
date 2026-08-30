@@ -757,8 +757,26 @@ describe('generateStream: the happy stream', () => {
     expect(url).toBe('/generate/stream')
     expect(init.method).toBe('POST')
     expect(init.headers['content-type']).toBe('application/json')
-    expect(init.body).toBe(JSON.stringify(request))
+    expect(init.body).toBe(JSON.stringify({ ...request, debug: true }))
     expect(init.signal).toBeInstanceOf(AbortSignal)
+  })
+
+  it('asks the service for the raw model responses, which only this route gets', async () => {
+    const fetch = stubFetch(streamResponse(happyFrames()))
+
+    await generateStream({ intent: 'x' }, () => {})
+
+    expect(JSON.parse(fetch.mock.calls[0][1].body)).toEqual({ intent: 'x', debug: true })
+  })
+
+  it('leaves the one-shot body alone, since nothing there could show the text', async () => {
+    const fetch = stubFetch(jsonResponse(200, OK_BODY))
+
+    await generate({ intent: 'x' })
+
+    const body = JSON.parse(fetch.mock.calls[0][1].body)
+    expect(body).toEqual({ intent: 'x' })
+    expect(body.debug).toBeUndefined()
   })
 
   it('hands every event to the listener, in order, reassembling a split frame', async () => {

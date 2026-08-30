@@ -402,6 +402,41 @@ describe('describeStageEvent', () => {
     )
   })
 
+  it('reports a raw model response by its size', () => {
+    expect(
+      describeStageEvent({
+        event: 'model.response',
+        stage: 'propose',
+        provider: 'gemini',
+        chars: 1842,
+        truncated: false,
+        text: '{"devices": {}}',
+      }),
+    ).toBe('response (propose): 1,842 chars')
+  })
+
+  it('says so when the response was clipped, and still quotes its real length', () => {
+    expect(
+      describeStageEvent({
+        event: 'model.response',
+        stage: 'review',
+        chars: 16500,
+        truncated: true,
+        text: 'x'.repeat(16000),
+      }),
+    ).toBe('response (review): 16,500 chars (truncated)')
+  })
+
+  it('falls back to the length of the text it was given when no count came through', () => {
+    expect(describeStageEvent({ event: 'model.response', text: 'a dozen ch' })).toBe(
+      'response: 10 chars',
+    )
+  })
+
+  it('still reads as a sentence when the response carries nothing at all', () => {
+    expect(describeStageEvent({ event: 'model.response' })).toBe('response: 0 chars')
+  })
+
   it('reports a provider failover', () => {
     expect(
       describeStageEvent({

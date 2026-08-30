@@ -414,6 +414,9 @@ def generate(
         time_limit_s=time_limit_s,
         review=bool(payload.get("review", True)),
         on_event=on_event,
+        # Debugging a run means reading what the model actually said, so the
+        # raw answers join the stream only when the caller asks for them.
+        include_responses=bool(payload.get("debug", False)),
     )
 
     for fact in result.facts:

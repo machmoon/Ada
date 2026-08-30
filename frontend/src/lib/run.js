@@ -132,6 +132,10 @@ export function stageEvent(evt) {
       t_s: finiteOrNull(event.t_s),
       text,
       event: name,
+      // The feed is the one place a raw answer lives whole: the debug log
+      // clips every string it records, so the row keeps its own copy. Set
+      // only where there is one, so no other row carries a dead field.
+      ...(name === 'model.response' ? { detail: String(event.text ?? '') } : {}),
     }),
   }))
 }

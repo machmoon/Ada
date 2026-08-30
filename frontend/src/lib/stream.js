@@ -110,6 +110,17 @@ const DESCRIBERS = {
     return `model call${stage}: ${answered}${chars === null ? '' : `, ${group(chars)} chars`}`
   },
 
+  // Only ever present on a debug run; the text itself belongs to the feed, so
+  // the sentence reports its size and whether there was more of it.
+  'model.response': (e) => {
+    const counted = num(e.chars)
+    // The event carries the answer, so its own length stands in when the count
+    // is missing -- reporting nothing at all would read as a broken sentence.
+    const chars = counted === null ? text(e.text).length : counted
+    const clipped = e.truncated ? ' (truncated)' : ''
+    return `response${whereOf(e.stage)}: ${group(chars)} chars${clipped}`
+  },
+
   'model.retry': (e) => {
     const name = text(e.provider)
     const why = clip(text(e.error), MAX_ERROR_CHARS)

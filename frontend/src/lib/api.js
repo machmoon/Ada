@@ -270,7 +270,10 @@ function releaseReader(reader) {
     mid-stream is a network failure rather than a second attempt, because the
     pipeline it was reporting on costs real model calls. */
 export async function generateStream(request, onEvent) {
-  const body = JSON.stringify(request)
+  // Streaming is the debugging surface — the feed is where a raw answer can
+  // actually be read — so this route, and only this route, asks for the
+  // model's own text. The one-shot body stays exactly what the caller shaped.
+  const body = JSON.stringify({ ...request, debug: true })
   guardSize(body)
 
   const controller = new AbortController()

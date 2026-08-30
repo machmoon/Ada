@@ -1695,6 +1695,31 @@ def test_a_missing_content_length_reaches_the_stream_as_an_empty_body(server):
     assert "intent" in frames[-1]["error"]
 
 
+def test_a_debug_stream_carries_the_raw_model_responses(server):
+    """The one request field that puts model output on the wire.
+
+    Reading a bad board means reading what the model was told and what it
+    said back; without this the stream reports only that a call happened.
+    """
+    status, _, frames = post_stream(server, {**REQUEST, "debug": True})
+
+    assert status == 200
+    responses = [frame for frame in frames if frame["event"] == "model.response"]
+    assert responses, "a debug run must report what the model answered"
+    for frame in responses:
+        assert isinstance(frame["text"], str) and frame["text"]
+    assert frames[-1]["event"] == "run.done"
+
+
+def test_a_stream_without_the_debug_flag_carries_no_model_responses(server):
+    """The default stream stays a progress signal, exactly as it was."""
+    status, _, frames = post_stream(server, REQUEST)
+
+    assert status == 200
+    assert [frame for frame in frames if frame["event"] == "model.response"] == []
+    assert "model.call" in [frame["event"] for frame in frames]
+
+
 def test_a_streamed_grounded_run_reports_each_part(ground_server):
     """The events the service owns, for the stage the pipeline cannot see.
 

@@ -671,6 +671,33 @@ describe('stageEvent: the feed', () => {
     expect(get(run).feed[0].text).toBe('grounding STM32F103 (cached pages)')
   })
 
+  it('keeps the raw answer on the row that carried it, and only on that row', () => {
+    startRun({ intent: 'x' })
+
+    stageEvent({ event: 'model.call', stage: 'propose', provider: 'gemini', ok: true })
+    stageEvent({
+      event: 'model.response',
+      stage: 'propose',
+      chars: 15,
+      truncated: false,
+      text: '{"devices": {}}',
+      t_s: 4,
+    })
+
+    const [call, response] = get(run).feed
+    expect(call.detail).toBeUndefined()
+    expect(response).toMatchObject({ event: 'model.response', detail: '{"devices": {}}' })
+    expect(response.text).toBe('response (propose): 15 chars')
+  })
+
+  it('carries an empty detail rather than nothing for a response with no text', () => {
+    startRun({ intent: 'x' })
+
+    stageEvent({ event: 'model.response', stage: 'propose', chars: 0 })
+
+    expect(get(run).feed[0].detail).toBe('')
+  })
+
   it('keeps only the last MAX_FEED rows', () => {
     startRun({ intent: 'x' })
 
@@ -682,6 +709,19 @@ describe('stageEvent: the feed', () => {
     expect(feed).toHaveLength(MAX_FEED)
     expect(feed[feed.length - 1].text).toContain(`p${MAX_FEED + 4}`)
     expect(feed[0].text).toContain('p5')
+  })
+
+  it('bounds a debug feed too, where every row carries a raw answer', () => {
+    startRun({ intent: 'x' })
+
+    for (let i = 0; i < MAX_FEED + 5; i += 1) {
+      stageEvent({ event: 'model.response', stage: 'propose', chars: i, text: `answer ${i}` })
+    }
+
+    const feed = get(run).feed
+    expect(feed).toHaveLength(MAX_FEED)
+    expect(feed[feed.length - 1].detail).toBe(`answer ${MAX_FEED + 4}`)
+    expect(feed[0].detail).toBe('answer 5')
   })
 })
 

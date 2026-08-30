@@ -30,8 +30,12 @@ from .review import Finding, Severity, review_circuit
 __all__ = ["PipelineResult", "generate_pcb"]
 
 #: Event strings are capped so a stream stays a progress signal, never a
-#: payload. No event may carry board text, model output, or datasheet text.
+#: payload. No event may carry board text or datasheet text, and none carries
+#: model output unless the caller asked for it.
 MAX_EVENT_TEXT = 160
+#: The single opt-in exception: a ``model.response`` event carries the model's
+#: own answer verbatim, clipped here, for a client debugging what it was told.
+MAX_RESPONSE_TEXT = 16_000
 
 
 @dataclass
@@ -77,10 +81,16 @@ class _EventingModel:
     before each stage, so a call can be attributed to the stage that made it.
     """
 
-    def __init__(self, model: Model, emit: Callable[[dict[str, Any]], None]):
+    def __init__(
+        self,
+        model: Model,
+        emit: Callable[[dict[str, Any]], None],
+        include_responses: bool = False,
+    ):
         self._model = model
         self._emit = emit
         self.stage = ""
+        self.include_responses = include_responses
 
     def generate(
         self,
@@ -111,6 +121,17 @@ class _EventingModel:
             raise
         self._emit_retries(log, seen)
         self._emit_call(started, ok=True, chars=len(text))
+        if self.include_responses:
+            self._emit(
+                {
+                    "event": "model.response",
+                    "stage": self.stage,
+                    "provider": getattr(self._model, "last_provider", None),
+                    "chars": len(text),
+                    "truncated": len(text) > MAX_RESPONSE_TEXT,
+                    "text": text[:MAX_RESPONSE_TEXT],
+                }
+            )
         return text
 
     def _emit_call(self, started: float, *, ok: bool, chars: int) -> None:
@@ -154,6 +175,7 @@ def generate_pcb(
     time_limit_s: float = 20.0,
     review: bool = True,
     on_event: Callable[[dict[str, Any]], None] | None = None,
+    include_responses: bool = False,
 ) -> PipelineResult:
     """Generate a placed board from a natural-language intent.
 
@@ -174,7 +196,9 @@ def generate_pcb(
         on_event: Called with one flat dict per stage boundary and per model
             round-trip, each carrying ``event`` and ``t_s`` -- seconds since
             this call began. Events carry counts and status only, never board
-            text, model output or datasheet text. An exception raised by the
+            text or datasheet text; raw model output appears only in
+            ``model.response`` events, only when ``include_responses`` is set,
+            truncated to ``MAX_RESPONSE_TEXT``. An exception raised by the
             callback deliberately propagates and abandons the run, which is how
             a service cancels work for a client that has disconnected. The
             event shape mirrors Google ADK's callback and event model, so this
@@ -195,7 +219,7 @@ def generate_pcb(
     tap: _EventingModel | None = None
     agent_model: Model = model
     if on_event is not None:
-        tap = _EventingModel(model, emit)
+        tap = _EventingModel(model, emit, include_responses)
         agent_model = tap
 
     def enter(stage: str) -> None:
