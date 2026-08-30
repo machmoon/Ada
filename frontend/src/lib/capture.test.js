@@ -466,6 +466,44 @@ describe('through the real buffer', () => {
     }
   })
 
+  it('scrubs the signature out of a failed resource URL, everywhere it is written', async () => {
+    const { capture, logModule } = await fresh()
+    const target = fakeEventTarget()
+    capture.hookErrors(target)
+
+    const node = { tagName: 'IMG', src: 'https://cdn.example.com/ds.png?X-Amz-Signature=abc123' }
+    target.dispatch('error', { target: node }, 'capture')
+
+    const [entry] = await settled(logModule)
+    expect(entry.msg).toBe(
+      'failed to load <img> https://cdn.example.com/ds.png?X-Amz-Signature=[redacted]',
+    )
+    expect(entry.data.url).toBe('https://cdn.example.com/ds.png?X-Amz-Signature=[redacted]')
+    for (const written of [entry.msg, entry.data.url, logModule.toText(), logModule.toNdjson()]) {
+      expect(written).toContain('[redacted]')
+      expect(written).not.toContain('abc123')
+    }
+  })
+
+  it('scrubs a token out of a rejection reason, in the message and in the data', async () => {
+    const { capture, logModule } = await fresh()
+    const target = fakeEventTarget()
+    capture.hookErrors(target)
+
+    const reason = new Error('GET https://api.example.com/v1/ds?token=xyz789 failed')
+    target.dispatch('unhandledrejection', { reason })
+
+    const [entry] = await settled(logModule)
+    expect(entry.msg).toBe(
+      'unhandled rejection: Error: GET https://api.example.com/v1/ds?token=[redacted] failed',
+    )
+    expect(entry.data.reason.message).toContain('token=[redacted]')
+    for (const written of [entry.msg, logModule.toText(), logModule.toNdjson()]) {
+      expect(written).toContain('[redacted]')
+      expect(written).not.toContain('xyz789')
+    }
+  })
+
   it('lands a rejected Error in the store as name, message and stack', async () => {
     const { capture, logModule } = await fresh()
     const target = fakeEventTarget()

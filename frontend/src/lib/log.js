@@ -25,6 +25,17 @@ const MAX_ITEMS = 50
 /** Containers nested deeper than this are marked rather than walked. */
 const MAX_DEPTH = 3
 const SECRET_KEY = /key|token|secret|password/i
+/** A query parameter whose value is a credential, matched wherever it sits in a
+    string: a signed datasheet URL arrives as free text (a resource-error url, an
+    ApiError message, a rejection reason), where the key-driven redact() above
+    cannot reach it. The name only has to contain one of the words, because
+    `X-Amz-Signature`, `access_token` and `api-key` are all the same secret. The
+    value runs to the next separator, so the path and the harmless parameters
+    around it stay readable -- a scrubbed line is still worth reading. */
+const SECRET_PARAM =
+  /([?&][^?&=\s]*(?:key|token|secret|password|signature|sig|auth|credential)[^?&=\s]*=)[^&\s#"'<>]*/gi
+/** An `Authorization: Bearer …` value, wherever it was stringified from. */
+const BEARER = /\bBearer\s+[A-Za-z0-9._~+\/-]+=*/g
 const UNSERIALIZABLE = '[unserializable]'
 /** Svelte's dev build logs proxies as a doubled `%c[snapshot]` pair, and it
     always leads the line. Anchored on purpose: an app message that merely
@@ -84,6 +95,16 @@ export function redact(key, value) {
   return value
 }
 
+/** Value-driven substitution over free text, the half redact() cannot do: a
+    credential that arrives inside a string rather than under a name of its own.
+    Pure, idempotent, and applied to every string an entry carries -- `msg` and
+    every serialized value alike -- so no caller has to remember it. */
+export function scrubText(text) {
+  const value = String(text ?? '')
+  if (!value) return value
+  return value.replace(SECRET_PARAM, '$1[redacted]').replace(BEARER, 'Bearer [redacted]')
+}
+
 /** One value, reduced to something JSON can hold and a human can read. Never
     throws: an argument that resists serialization is worth less than the line. */
 export function safeArg(value, depth = 0, seen = new WeakSet()) {
@@ -101,7 +122,7 @@ function walk(value, depth, seen) {
   const type = typeof value
   if (type === 'boolean') return value
   if (type === 'number') return Number.isFinite(value) ? value : String(value)
-  if (type === 'string') return clip(value, MAX_ARG_BYTES)
+  if (type === 'string') return scrubClip(value, MAX_ARG_BYTES)
   if (type === 'bigint' || type === 'symbol') return String(value)
   if (type === 'function') return `[Function: ${value.name || 'anonymous'}]`
 
@@ -109,8 +130,8 @@ function walk(value, depth, seen) {
   if (tag === '[object Error]' || value instanceof Error) {
     return {
       name: String(value.name),
-      message: clip(String(value.message), MAX_ARG_BYTES),
-      stack: clip(String(value.stack ?? ''), MAX_ARG_BYTES),
+      message: scrubClip(String(value.message), MAX_ARG_BYTES),
+      stack: scrubClip(String(value.stack ?? ''), MAX_ARG_BYTES),
     }
   }
   if (tag === '[object Date]') {
@@ -189,6 +210,13 @@ function clip(text, limit) {
   return `${text.slice(0, end)}…[truncated ${text.length - end} chars]`
 }
 
+/** The one path every stored string takes: scrubbed first, then cut. In that
+    order on purpose -- clipping first could leave half a credential behind the
+    truncation marker, which is still half a credential. */
+function scrubClip(text, limit) {
+  return clip(scrubText(text), limit)
+}
+
 function safeStringify(value) {
   try {
     return JSON.stringify(value) ?? 'null'
@@ -200,8 +228,9 @@ function safeStringify(value) {
 // ---------------------------------------------------------------- preview
 
 /** One already-serialized argument as a line of text. It reads the redacted,
-    truncated copy rather than the caller's value: `msg` is exported verbatim
-    and nothing downstream redacts it again. */
+    truncated copy rather than the caller's value: append() scrubs `msg` for
+    credentials in free text, but only redact() can drop a secret named by its
+    key, and by here that has already happened. */
 function describeSerialized(value) {
   if (typeof value === 'string') return value
   if (value === null) return 'null'
@@ -257,7 +286,10 @@ function append(entry) {
   const given = String(entry?.msg ?? '')
   const preview =
     !given && src === 'console' && Array.isArray(data?.args) ? previewLine(data.args) : given
-  const msg = clip(preview, MAX_ARG_BYTES)
+  // Scrubbed here, not at the call sites: a caller-written `msg` (a window error
+  // message, a failed resource's URL, a rejection reason) is free text nothing
+  // else redacts, and this is the single point every one of them passes through.
+  const msg = scrubClip(preview, MAX_ARG_BYTES)
 
   let json = safeStringify(data)
   if (overBytes(json, MAX_ENTRY_BYTES)) {

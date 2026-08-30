@@ -37,10 +37,11 @@ function isBrowser() {
 
 // ---------------------------------------------------------------- preview
 
-/** A rejection reason as a short label. Deliberately not JSON: `msg` is
-    exported exactly as it is written and nothing redacts it downstream, so a
-    raw value must never be stringified into it. The reason itself reaches the
-    buffer through `data`, where record()'s serializer redacts it. */
+/** A rejection reason as a short label. Deliberately not JSON: record() scrubs
+    a credential out of free text in `msg`, but only its key-driven redact()
+    reaches a secret named by its key, and that runs over `data` alone -- so a
+    raw value must never be stringified into a message. The reason itself
+    reaches the buffer through `data`, where the serializer redacts it. */
 function describeReason(value) {
   if (typeof value === 'string') return value
   if (value === null) return 'null'

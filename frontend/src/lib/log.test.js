@@ -21,6 +21,7 @@ import {
   redact,
   runId,
   safeArg,
+  scrubText,
   suspectEngineBug,
   toNdjson,
   toText,
@@ -339,6 +340,95 @@ describe('redact', () => {
     record({ msg: 'x', data: { request: { headers: { authToken: 'abc' } } } })
 
     expect((await settled()).entries[0].data.request.headers.authToken).toBe('[redacted]')
+  })
+})
+
+describe('scrubText', () => {
+  it('hides the signature on a signed datasheet URL, keeping the URL readable', () => {
+    const url =
+      'https://bucket.s3.amazonaws.com/ds/lm317.pdf?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Signature=abc123def&X-Amz-Expires=900'
+
+    const out = scrubText(url)
+
+    expect(out).not.toContain('abc123def')
+    expect(out).toBe(
+      'https://bucket.s3.amazonaws.com/ds/lm317.pdf?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Signature=[redacted]&X-Amz-Expires=900',
+    )
+  })
+
+  it('leaves the harmless parameter beside a redacted one', () => {
+    expect(scrubText('/api/parts?token=abc&page=2')).toBe('/api/parts?token=[redacted]&page=2')
+  })
+
+  it('hides an access key, a secret, a password and a credential by name', () => {
+    expect(scrubText('?api-key=k1&client_secret=s1&password=p1&X-Amz-Credential=c1')).toBe(
+      '?api-key=[redacted]&client_secret=[redacted]&password=[redacted]&X-Amz-Credential=[redacted]',
+    )
+  })
+
+  it('hides a bearer token wherever it was stringified from', () => {
+    expect(scrubText('authorization: Bearer eyJhbGciOiJIUzI1NiJ9.payload.sig==')).toBe(
+      'authorization: Bearer [redacted]',
+    )
+  })
+
+  it('leaves a string carrying no credential exactly as it is', () => {
+    expect(scrubText('placed 11 parts, 214.5 mm of wire')).toBe('placed 11 parts, 214.5 mm of wire')
+    expect(scrubText('POST /generate?intent=a+3v3+regulator&time_limit_s=10')).toBe(
+      'POST /generate?intent=a+3v3+regulator&time_limit_s=10',
+    )
+  })
+
+  it('changes nothing on a second pass, so a doubly-scrubbed line is unharmed', () => {
+    const once = scrubText('/ds?token=abc')
+    expect(scrubText(once)).toBe(once)
+  })
+
+  it('answers a value that is not a string at all', () => {
+    expect(scrubText(null)).toBe('')
+    expect(scrubText(undefined)).toBe('')
+    expect(scrubText(42)).toBe('42')
+  })
+})
+
+describe('scrubbing on the way into the buffer', () => {
+  it('scrubs a message no key-driven redaction could reach', async () => {
+    record({ event: 'window.resource-error', msg: 'failed to load <img> /ds.png?sig=abc123' })
+
+    const [entry] = (await settled()).entries
+
+    expect(entry.msg).toBe('failed to load <img> /ds.png?sig=[redacted]')
+  })
+
+  it('scrubs every string it serializes, however deep', async () => {
+    record({
+      msg: 'x',
+      data: { req: { url: '/v1/ds?X-Amz-Signature=abc123' }, tries: ['?token=t1'] },
+    })
+
+    const { data } = (await settled()).entries[0]
+
+    expect(data.req.url).toBe('/v1/ds?X-Amz-Signature=[redacted]')
+    expect(data.tries).toEqual(['?token=[redacted]'])
+  })
+
+  it('scrubs an error message and its stack', async () => {
+    record({ msg: 'x', data: new Error('GET /ds?token=abc123 failed') })
+
+    const { data } = (await settled()).entries[0]
+
+    expect(data.message).toBe('GET /ds?token=[redacted] failed')
+    expect(data.stack).not.toContain('abc123')
+  })
+
+  it('scrubs before truncating, so no credential survives behind the cut', async () => {
+    const long = `?token=${'a'.repeat(MAX_ARG_BYTES * 2)}`
+    record({ msg: 'x', data: { long } })
+
+    const { data } = (await settled()).entries[0]
+
+    expect(data.long).not.toContain('aaaa')
+    expect(data.long).toBe('?token=[redacted]')
   })
 })
 
