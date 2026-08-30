@@ -1,8 +1,21 @@
 <script>
   import { countBySeverity } from '../lib/severity.js'
   import { formatCount, joinDot } from '../lib/format.js'
+  import { log } from '../lib/log.js'
 
-  let { findings = null, reviewed = true, tab = 'review', boardEnabled = false } = $props()
+  let {
+    findings = null,
+    reviewed = true,
+    tab = 'review',
+    boardEnabled = false,
+    debugOpen = false,
+    ondebug = null,
+  } = $props()
+
+  // Read off the store rather than passed down: the counts change on their own
+  // schedule, and App has no reason to re-render for a console line.
+  const logErrors = $derived($log.entries.filter((e) => e.level === 'error').length)
+  const logWarnings = $derived($log.entries.filter((e) => e.level === 'warn').length)
 
   const count = $derived(findings ? findings.length : 0)
   const counts = $derived(countBySeverity(findings || []))
@@ -23,28 +36,50 @@
   )
 </script>
 
-<footer class="bar">
+<footer class="bar" data-testid="status-bar">
   <!-- Tabs are hash fragments, so a switch never reaches the server. Schematic
        is not built; Board wakes up only once a run carries placements. -->
-  <span class="lbl tab" aria-disabled="true">Schematic</span>
+  <span class="lbl tab" aria-disabled="true" data-testid="status-bar-tab-schematic">Schematic</span>
   {#if boardEnabled}
     <a
       class="lbl tab"
       class:current={tab === 'board'}
       href="#board"
       aria-current={tab === 'board' ? 'page' : undefined}
+      data-testid="status-bar-tab-board"
+      data-enabled="true"
     >Board</a>
   {:else}
-    <span class="lbl tab" aria-disabled="true" title="Run a board to see it placed">Board</span>
+    <span class="lbl tab" aria-disabled="true" title="Run a board to see it placed" data-testid="status-bar-tab-board" data-enabled="false">Board</span>
   {/if}
   <a
     class="lbl tab"
     class:current={tab === 'review'}
     href="#review"
     aria-current={tab === 'review' ? 'page' : undefined}
+    data-testid="status-bar-tab-review"
   >{reviewTab}</a>
   <div class="spacer"></div>
-  {#if breakdown}<span class="mono breakdown">{breakdown}</span>{/if}
+  {#if breakdown}<span class="mono breakdown" data-testid="status-bar-breakdown">{breakdown}</span>{/if}
+  <!-- A disclosure, not a tab: it opens a drawer below this bar rather than
+       changing what the centre column shows. Absent unless App wires it up. -->
+  {#if ondebug}
+    <button
+      type="button"
+      id="debug-console-toggle"
+      class="lbl tab debug"
+      aria-expanded={debugOpen}
+      aria-controls="debug-console"
+      onclick={ondebug}
+      data-testid="status-bar-debug-toggle"
+    >
+      Console
+      <!-- A standing "· 0" would read as a count worth watching. -->
+      {#if logErrors + logWarnings > 0}
+        <span class="count" class:alert={logErrors > 0} data-testid="status-bar-debug-count">· {logErrors + logWarnings}</span>
+      {/if}
+    </button>
+  {/if}
 </footer>
 
 <style>
@@ -72,4 +107,17 @@
 
   .spacer { flex-grow: 1; }
   .breakdown { font-size: var(--fs-lbl); color: var(--ink-soft); padding: 0 16px 0 0; }
+
+  /* The tab rule, hung off the other edge of the bar. */
+  .debug {
+    gap: 6px;
+    border: none;
+    border-left: 1px solid var(--rule-soft);
+    background: transparent;
+  }
+  /* The global ring sits 1 px outside the element, which a 28 px bar clips. */
+  .debug:focus-visible { outline-offset: -2px; }
+  .debug:hover { color: var(--ink); }
+  .count { color: var(--ink-soft); }
+  .count.alert { color: var(--sev-blocker-fg); }
 </style>
