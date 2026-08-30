@@ -9,6 +9,7 @@ const ENDPOINT = '/generate'
 const STREAM_ENDPOINT = '/generate/stream'
 const CHAT_STREAM_ENDPOINT = '/chat/stream'
 const MODELS_ENDPOINT = '/models'
+const PLACEMENT_ENDPOINT = '/placement/repair'
 const NDJSON_TYPE = 'application/x-ndjson'
 const TIMEOUT_MESSAGE = 'The run passed the 300 second budget and was cancelled.'
 
@@ -55,6 +56,48 @@ export function normalizeRequest(request) {
     // is the service's default, so a stray `ground: false` would say nothing.
     ...(request.ground === true ? { ground: true } : {}),
   }
+}
+
+export function normalizePlacementRequest(request = {}) {
+  const profile =
+    request.profile && typeof request.profile === 'object'
+      ? request.profile
+      : String(request.profile || 'compact-control')
+  const normalized = {
+    profile,
+    policy: request.policy === 'gemini' ? 'gemini' : 'deterministic',
+    profile_id: String(request.profile_id || '').trim(),
+  }
+  if (request.board && typeof request.board === 'object') normalized.board = request.board
+  if (request.feedback && typeof request.feedback === 'object') {
+    normalized.feedback = request.feedback
+  }
+  return normalized
+}
+
+export async function repairPlacement(request) {
+  const body = JSON.stringify(normalizePlacementRequest(request))
+  guardSize(body)
+  let response
+  try {
+    response = await fetch(PLACEMENT_ENDPOINT, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body,
+    })
+  } catch (err) {
+    throw new ApiError('network', String(err && err.message ? err.message : err))
+  }
+  let data = {}
+  try {
+    data = await response.json()
+  } catch {
+    throw new ApiError('internal', 'The placement service returned invalid JSON.', {
+      status: response.status,
+    })
+  }
+  if (!response.ok) throw errorFor(response.status, data)
+  return data
 }
 
 export function requestBytes(request) {

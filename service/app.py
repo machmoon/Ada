@@ -34,6 +34,13 @@ from urllib.parse import urlsplit
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "engine"))
 
+from pcb_verifier.api import repair_request  # noqa: E402
+from pcb_verifier.traces import (  # noqa: E402
+    FactFailureTraceStore,
+    FailureTraceStore,
+    JsonlFailureTraceStore,
+    build_failure_traces,
+)
 from silkscreen.agents import ModelError, generate_pcb  # noqa: E402
 from silkscreen.agents.datasheet import PartFacts  # noqa: E402
 from silkscreen.agents.grounding import (  # noqa: E402
@@ -76,8 +83,13 @@ __all__ = [
     "Handler",
     "build_embedder",
     "build_model",
+    "build_ollama_model",
     "build_pages_store",
+    "build_failure_trace_store",
+    "build_profile_store",
     "build_store",
+    "build_tinker_model",
+    "placement_policy_status",
     "caused_by_model_failure",
     "generate",
     "make_server",
@@ -450,6 +462,34 @@ def build_pages_store() -> FactStore:
     return MemoryFactStore()
 
 
+def build_profile_store() -> FactStore:
+    """Firestore company memory in Cloud Run, in-memory everywhere else."""
+    if os.getenv("GOOGLE_CLOUD_PROJECT") and os.getenv("USE_FIRESTORE", "1") != "0":
+        from .cache import FirestoreFactStore
+
+        return FirestoreFactStore("placement_profiles")
+    return MemoryFactStore()
+
+
+def build_failure_trace_store() -> FailureTraceStore:
+    """Firestore in Cloud Run, append-only JSONL for local post-training."""
+    if os.getenv("GOOGLE_CLOUD_PROJECT") and os.getenv("USE_FIRESTORE", "1") != "0":
+        from .cache import FirestoreFactStore
+
+        return FactFailureTraceStore(
+            FirestoreFactStore("placement_failure_traces")
+        )
+    configured = os.getenv("PLACEMENT_FAILURE_TRACE_PATH", "").strip()
+    path = (
+        Path(configured)
+        if configured
+        else Path(__file__).resolve().parent.parent
+        / "artifacts"
+        / "placement-failure-traces.jsonl"
+    )
+    return JsonlFailureTraceStore(path)
+
+
 def build_embedder() -> BatchingEmbedder:
     return BatchingEmbedder(GeminiEmbedder())
 
@@ -506,6 +546,131 @@ def _with_request_pacing(model, before_attempt: Callable[[str], None]):
     if isinstance(model, FallbackModel):
         return replace(model, before_attempt=before_attempt)
     return _PacedModel(model, before_attempt)
+
+
+def build_tinker_model():
+    """Load the promoted small-policy checkpoint, never an untrained base model."""
+    checkpoint = os.getenv("TINKER_PLACEMENT_MODEL", "").strip()
+    if not checkpoint:
+        raise ValueError(
+            "tinker policy is not configured; set TINKER_PLACEMENT_MODEL to "
+            "the promoted tinker:// sampler checkpoint"
+        )
+    if not checkpoint.startswith("tinker://"):
+        raise ValueError("TINKER_PLACEMENT_MODEL must be a tinker:// checkpoint")
+    from pcb_verifier.tinker_policy import TinkerPlacementModel
+
+    return TinkerPlacementModel(model_path=checkpoint)
+
+
+def build_ollama_model():
+    base_url = os.getenv("OLLAMA_PLACEMENT_URL", "").strip()
+    if not base_url:
+        raise ValueError(
+            "local policy is not configured; set OLLAMA_PLACEMENT_URL to the "
+            "private Ollama endpoint"
+        )
+    from pcb_verifier.ollama_policy import OllamaPlacementModel
+
+    return OllamaPlacementModel(
+        base_url=base_url,
+        model=os.getenv("OLLAMA_PLACEMENT_MODEL", "gemma3:4b"),
+    )
+
+
+def build_fast_placement_model():
+    if os.getenv("TINKER_API_KEY") and os.getenv("TINKER_PLACEMENT_MODEL"):
+        return build_tinker_model()
+    return build_ollama_model()
+
+
+def placement_policy_status() -> dict[str, bool]:
+    gemini = bool(os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY"))
+    tinker = bool(
+        os.getenv("TINKER_API_KEY") and os.getenv("TINKER_PLACEMENT_MODEL")
+    )
+    ollama = bool(os.getenv("OLLAMA_PLACEMENT_URL"))
+    return {
+        "deterministic": True,
+        "gemini": gemini,
+        "tinker": tinker,
+        "ollama": ollama,
+        "hybrid": gemini and (tinker or ollama),
+    }
+
+
+def _placement_model_id(policy: str) -> str:
+    if policy == "ollama":
+        return os.getenv("OLLAMA_PLACEMENT_MODEL", "gemma3:4b")
+    if policy == "tinker":
+        return os.getenv("TINKER_PLACEMENT_MODEL", "Qwen/Qwen3.5-4B")
+    if policy == "hybrid":
+        if os.getenv("TINKER_PLACEMENT_MODEL"):
+            return os.getenv("TINKER_PLACEMENT_MODEL", "Qwen/Qwen3.5-4B")
+        return os.getenv("OLLAMA_PLACEMENT_MODEL", "gemma3:4b")
+    return policy
+
+
+def _trace_consent(payload: dict[str, Any]) -> tuple[bool, str]:
+    """Demo boards opt in; uploaded boards require an explicit boolean."""
+    supplied = payload.get("record_trace")
+    if "record_trace" in payload and not isinstance(supplied, bool):
+        raise ValueError("record_trace must be a boolean")
+    if "board" in payload:
+        return bool(supplied), "uploaded-board"
+    return supplied is not False, "demo-board"
+
+
+def _store_failure_traces(
+    result: dict[str, Any],
+    store: FailureTraceStore,
+    *,
+    input_origin: str,
+) -> list[str]:
+    traces = build_failure_traces(
+        result,
+        model_id=_placement_model_id(str(result.get("policy", ""))),
+        input_origin=input_origin,
+    )
+    return [store.append(trace) for trace in traces]
+
+
+def _placement_models(
+    policy: str,
+    gemini_factory: Callable[[], Any],
+) -> tuple[Any | None, Any | None]:
+    if policy == "gemini":
+        return gemini_factory(), None
+    if policy == "tinker":
+        return build_tinker_model(), None
+    if policy == "ollama":
+        return build_ollama_model(), None
+    if policy == "hybrid":
+        return build_fast_placement_model(), gemini_factory()
+    return None, None
+
+
+def _record_failure_trace_ids(
+    payload: dict[str, Any],
+    result: dict[str, Any],
+    store: FailureTraceStore,
+) -> list[str]:
+    consent, input_origin = _trace_consent(payload)
+    if not consent:
+        return []
+    try:
+        return _store_failure_traces(
+            result,
+            store,
+            input_origin=input_origin,
+        )
+    except Exception as exc:
+        # Training telemetry must never take down board repair.
+        sys.stderr.write(
+            "placement trace write failed: "
+            f"{type(exc).__name__}: {exc}\n"
+        )
+        return []
 
 
 def generate(
@@ -742,7 +907,7 @@ def generate(
 
 
 class Handler(BaseHTTPRequestHandler):
-    """Same-origin API and built web bundle for the review interface."""
+    """Same-origin chat, generation, placement repair, and built web UI."""
 
     model_factory = staticmethod(build_model)
     model_catalog_factory = staticmethod(model_catalog)
@@ -750,6 +915,8 @@ class Handler(BaseHTTPRequestHandler):
     request_pacer: RequestPacer = GEMINI_REQUEST_PACER
     store: FactStore | None = None
     pages_store: FactStore | None = None
+    profile_store: FactStore | None = None
+    failure_trace_store: FailureTraceStore | None = None
     embedder_factory = staticmethod(build_embedder)
 
     #: Root of the built bundle; None serves no static files at all.
@@ -860,6 +1027,9 @@ class Handler(BaseHTTPRequestHandler):
         self._send(404, {"error": f"no route {self.path}"})
 
     def do_POST(self) -> None:
+        if self.path == "/placement/repair":
+            self._placement_repair()
+            return
         if self.path == "/chat/stream":
             self._chat_stream()
             return
@@ -870,6 +1040,39 @@ class Handler(BaseHTTPRequestHandler):
             self._generate_once()
             return
         self._send(404, {"error": f"no route {self.path}"})
+
+    def _placement_repair(self) -> None:
+        payload = self._read_payload()
+        if payload is None:
+            return
+        try:
+            policy = str(payload.get("policy", "deterministic")).strip().lower()
+            model, fallback_model = _placement_models(
+                policy, self.model_factory
+            )
+            store = (
+                self.profile_store
+                if self.profile_store is not None
+                else build_profile_store()
+            )
+            result = repair_request(
+                payload,
+                model=model,
+                fallback_model=fallback_model,
+                profile_store=store,
+            )
+            result["available_policies"] = placement_policy_status()
+            trace_store = self.failure_trace_store or build_failure_trace_store()
+            trace_ids = _record_failure_trace_ids(
+                payload, result, trace_store
+            )
+            result["failure_trace_ids"] = trace_ids
+            result["failure_trace_count"] = len(trace_ids)
+        except Exception as exc:
+            status, body = _error_response(exc)
+            self._send(status, body)
+        else:
+            self._send(200, result)
 
     def _read_payload(self) -> dict[str, Any] | None:
         """The request body as a JSON object, or None once its error is sent.
@@ -1155,6 +1358,10 @@ class Handler(BaseHTTPRequestHandler):
 
 def make_server(port: int | None = None) -> ThreadingHTTPServer:
     port = port if port is not None else int(os.getenv("PORT", "8080"))
+    if Handler.profile_store is None:
+        Handler.profile_store = build_profile_store()
+    if Handler.failure_trace_store is None:
+        Handler.failure_trace_store = build_failure_trace_store()
     return ThreadingHTTPServer(("0.0.0.0", port), Handler)
 
 

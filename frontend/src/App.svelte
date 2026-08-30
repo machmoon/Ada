@@ -4,6 +4,7 @@
   import ConversationView from './components/ConversationView.svelte'
   import DebugConsole from './components/DebugConsole.svelte'
   import GuidePointer from './components/GuidePointer.svelte'
+  import PlacementLab from './components/PlacementLab.svelte'
   import ReviewResults from './components/ReviewResults.svelte'
   import SchematicWell from './components/SchematicWell.svelte'
   import SideRail from './components/SideRail.svelte'
@@ -31,6 +32,7 @@
   let hash = $state(window.location.hash)
   let selected = $state(-1)
   let debugOpen = $state(false)
+  const placementMode = new URLSearchParams(window.location.search).get('mode') === 'placement'
 
   $effect(() => {
     const onhash = () => {
@@ -200,6 +202,9 @@
   }
 </script>
 
+{#if placementMode}
+  <PlacementLab />
+{:else}
 <div class="app" data-testid="app-root">
   <TitleBar intent={$run.request ? $run.request.intent : ''} result={$run.result} />
 
@@ -281,6 +286,7 @@
     ondebug={() => (debugOpen = !debugOpen)}
   />
 </div>
+{/if}
 
 <style>
   .app { height: 100%; display: flex; flex-direction: column; overflow: hidden; }

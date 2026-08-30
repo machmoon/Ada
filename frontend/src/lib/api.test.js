@@ -10,6 +10,7 @@ import {
   generate,
   generateStream,
   listModels,
+  normalizePlacementRequest,
   normalizeRequest,
   requestBytes,
 } from './api.js'
@@ -251,6 +252,32 @@ describe('normalizeRequest', () => {
       'review',
       'time_limit_s',
     ])
+  })
+})
+
+describe('normalizePlacementRequest', () => {
+  it('defaults to the reproducible placement demo', () => {
+    expect(normalizePlacementRequest()).toEqual({
+      profile: 'compact-control',
+      policy: 'deterministic',
+      profile_id: '',
+    })
+  })
+
+  it('keeps structured feedback and normalizes the policy', () => {
+    expect(
+      normalizePlacementRequest({
+        profile: 'thermal-first',
+        policy: 'gemini',
+        profile_id: '  acme-v1  ',
+        feedback: { fixed_refs_add: ['C1'] },
+      }),
+    ).toEqual({
+      profile: 'thermal-first',
+      policy: 'gemini',
+      profile_id: 'acme-v1',
+      feedback: { fixed_refs_add: ['C1'] },
+    })
   })
 })
 

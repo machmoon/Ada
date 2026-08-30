@@ -13,6 +13,7 @@ import urllib.request
 from pathlib import Path
 
 import pytest
+from pcb_verifier.traces import MemoryFailureTraceStore
 from silkscreen.agents.adk.orchestrator import OrchestratorResult
 from silkscreen.agents.model import ScriptedModel
 from silkscreen.kicad import footprint_ref, load_board
@@ -108,16 +109,23 @@ def scripted():
 @pytest.fixture
 def server():
     store = MemoryFactStore()
+    profile_store = MemoryFactStore()
+    failure_trace_store = MemoryFailureTraceStore()
     Handler.model_factory = staticmethod(scripted)
     Handler.store = store
+    Handler.profile_store = profile_store
+    Handler.failure_trace_store = failure_trace_store
     srv = make_server(port=0)
     thread = threading.Thread(target=srv.serve_forever, daemon=True)
     thread.start()
     srv.store = store
+    srv.failure_trace_store = failure_trace_store
     yield srv
     srv.shutdown()
     srv.server_close()
     Handler.store = None
+    Handler.profile_store = None
+    Handler.failure_trace_store = None
 
 
 @pytest.fixture
@@ -266,6 +274,135 @@ def test_the_adk_engine_answers_with_the_same_contract(monkeypatch, server):
     assert body["board_mm"] == sdk_body["board_mm"]
     assert body["findings"] == sdk_body["findings"]
     assert body["blockers"] == sdk_body["blockers"]
+
+
+def test_placement_repair_is_model_free_and_geometry_grounded(server):
+    status, body = post(
+        server,
+        {"profile": "compact-control", "policy": "deterministic"},
+        path="/placement/repair",
+    )
+
+    assert status == 200
+    assert body["completed"] is True
+    assert body["policy"] == "deterministic"
+    assert body["score"]["before"]["hard"] > 0
+    assert body["score"]["after"]["hard"] == 0
+    assert "total" not in body["score"]["before"]
+    assert body["reward"]["outcome"] == 1
+    assert 0 < body["reward"]["preference"] <= 0.1
+    assert "quality" not in body["reward"]
+    assert body["steps"][0]["accepted"]
+
+
+def test_placement_feedback_is_saved_and_reloaded(server):
+    first_status, first = post(
+        server,
+        {
+            "profile": "compact-control",
+            "profile_id": "acme-layout-v1",
+            "feedback": {"fixed_refs_add": ["C1"]},
+        },
+        path="/placement/repair",
+    )
+    second_status, second = post(
+        server,
+        {"profile": "compact-control", "profile_id": "acme-layout-v1"},
+        path="/placement/repair",
+    )
+
+    assert first_status == second_status == 200
+    assert first["profile_memory"] == "stored"
+    assert second["profile_memory"] == "loaded"
+    assert "C1" in second["profile"]["fixed_refs"]
+    assert second["feedback_applied"] == {"fixed_refs_add": ["C1"]}
+
+
+def test_placement_rejects_unknown_profile(server):
+    status, body = post(
+        server,
+        {"profile": "anything-goes"},
+        path="/placement/repair",
+    )
+    assert status == 400
+    assert "unknown placement profile" in body["error"]
+
+
+def test_placement_tinker_policy_requires_promoted_checkpoint(server, monkeypatch):
+    monkeypatch.delenv("TINKER_API_KEY", raising=False)
+    monkeypatch.delenv("TINKER_PLACEMENT_MODEL", raising=False)
+
+    status, body = post(
+        server,
+        {"profile": "compact-control", "policy": "tinker"},
+        path="/placement/repair",
+    )
+
+    assert status == 400
+    assert "TINKER_PLACEMENT_MODEL" in body["error"]
+
+
+def test_policy_failures_are_consent_aware_training_traces(server, monkeypatch):
+    class RejectingPolicy:
+        proposer_name = "qwen-tinker"
+
+        def generate(self, prompt, **kwargs):
+            del prompt, kwargs
+            return "MOVE MADE_UP 1 1"
+
+    monkeypatch.setattr(
+        "service.app.build_tinker_model", lambda: RejectingPolicy()
+    )
+    trace_store = Handler.failure_trace_store
+    assert isinstance(trace_store, MemoryFailureTraceStore)
+
+    status, demo = post(
+        server,
+        {"profile": "compact-control", "policy": "tinker"},
+        path="/placement/repair",
+    )
+    assert status == 200
+    assert demo["failure_trace_count"] > 0
+    demo_trace_count = len(trace_store.traces)
+    assert trace_store.traces[0]["input_origin"] == "demo-board"
+
+    status, private = post(
+        server,
+        {
+            "board": demo["start"],
+            "profile": "compact-control",
+            "policy": "tinker",
+        },
+        path="/placement/repair",
+    )
+    assert status == 200
+    assert private["failure_trace_count"] == 0
+    assert len(trace_store.traces) == demo_trace_count
+
+    status, opted_in = post(
+        server,
+        {
+            "board": demo["start"],
+            "profile": "compact-control",
+            "policy": "tinker",
+            "record_trace": True,
+        },
+        path="/placement/repair",
+    )
+    assert status == 200
+    assert opted_in["failure_trace_count"] > 0
+    assert trace_store.traces[-1]["input_origin"] == "uploaded-board"
+
+
+def test_placement_rejects_non_boolean_trace_consent(server):
+    status, body = post(
+        server,
+        {"record_trace": "yes"},
+        path="/placement/repair",
+    )
+
+    assert status == 400
+    assert body["error"] == "record_trace must be a boolean"
 
 
 def test_intent_is_required(server):

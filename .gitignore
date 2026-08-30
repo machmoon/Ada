@@ -90,6 +90,9 @@ Desktop.ini
 placed.kicad_pcb
 generated.kicad_pcb
 
+# Local training traces and checkpoints
+artifacts/
+
 # Seeded design canvas — generated from design/*.dc.html, 2MB of bundled editor
 design/silkscreen-ui.html
 .gstack/

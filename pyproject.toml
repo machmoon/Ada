@@ -20,6 +20,7 @@ dependencies = [
 agents = ["google-genai>=2.19,<3", "pypdf>=4.0"]
 cloud = ["google-genai>=2.19,<3", "google-cloud-firestore>=2.16"]
 adk = ["google-adk>=2.8,<3"]
+training = ["tinker>=0.26,<0.27", "tinker-cookbook"]
 dev = ["pytest>=8.0", "ruff>=0.6"]
 
 [project.scripts]
