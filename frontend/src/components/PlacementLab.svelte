@@ -62,6 +62,11 @@
     downloadText(JSON.stringify(result.board, null, 2), 'repaired-placement.json', 'application/json')
   }
 
+  function rewardValue(value, digits) {
+    const number = Number(value)
+    return Number.isFinite(number) ? number.toFixed(digits) : 'not scored'
+  }
+
   onMount(() => run())
 </script>
 
@@ -74,7 +79,7 @@
         <h1>Repair the fault. Keep the team’s judgment.</h1>
         <p>One damaged motor-control board, two valid layouts. Every move is measured by real geometry before it is accepted.</p>
       </div>
-      <a href="/" class="back">Circuit review</a>
+      <a href="/" class="back">Build a board</a>
     </header>
 
     <section class="controls" aria-label="Placement controls">
@@ -119,7 +124,7 @@
         </div>
         <div class="metric">
           <span class="lbl">Training reward</span>
-          <strong>{Number(result.reward.outcome).toFixed(1)} outcome · {Number(result.reward.progress).toFixed(2)} progress · {Number(result.reward.preference).toFixed(3)} preference</strong>
+          <strong>{rewardValue(result.reward.outcome, 1)} outcome · {rewardValue(result.reward.progress, 2)} progress · {rewardValue(result.reward.preference, 3)} preference</strong>
           <p>This trains a policy later. It does not decide whether an action is accepted now.</p>
         </div>
         <div class="metric">

@@ -49,7 +49,10 @@
       {/each}
     </div>
   {:else}
-    <p class="empty" data-testid="side-rail-empty">Nothing yet. Describe a board and run a review.</p>
+    <div class="empty" data-testid="side-rail-empty">
+      <strong>Request → circuit → placement</strong>
+      <p>Name the chip and its job. The board, evidence, and verifier receipts appear here after the run.</p>
+    </div>
   {/if}
 
   <div class="lbl heading ruled" data-testid="side-rail-not-checked-heading">Not checked</div>
@@ -90,10 +93,16 @@
   .row-value { font-size: var(--fs-mono-sm); color: var(--ink-soft); }
 
   .empty { font-size: var(--fs-ui); color: var(--ink-faint); margin-bottom: 26px; line-height: 1.65; }
+  .empty strong { color: var(--ink-mid); font-weight: 550; }
+  .empty p { margin-top: 7px; }
 
   .prose { font-size: var(--fs-ui); color: var(--ink-soft); line-height: 1.65; }
 
   .section { margin-top: 26px; padding-top: 18px; border-top: 1px solid var(--rule-soft); }
   .sheets { display: flex; flex-direction: column; gap: 7px; }
   .sheet { font-size: 11px; color: var(--ink-mid); }
+
+  @media (max-width: 760px) {
+    .rail { display: none; }
+  }
 </style>

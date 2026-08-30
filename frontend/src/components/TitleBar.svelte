@@ -59,7 +59,7 @@
   {#if intent}<span class="intent" data-testid="title-bar-intent">{intent}</span>{/if}
   <div class="spacer"></div>
   {#if meta}<span class="mono meta" data-testid="title-bar-meta">{meta}</span>{/if}
-  <a class="lbl placement" href="/?mode=placement" data-testid="title-bar-placement">Placement agent</a>
+  <a class="lbl placement" href="/?mode=placement" data-testid="title-bar-placement">Verifier lab</a>
   <button
     type="button"
     class="lbl chip"

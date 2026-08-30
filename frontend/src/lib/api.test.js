@@ -279,6 +279,17 @@ describe('normalizePlacementRequest', () => {
       feedback: { fixed_refs_add: ['C1'] },
     })
   })
+
+  it.each(['deterministic', 'gemini', 'ollama', 'tinker', 'hybrid'])(
+    'preserves the supported %s policy',
+    (policy) => {
+      expect(normalizePlacementRequest({ policy }).policy).toBe(policy)
+    },
+  )
+
+  it('falls back when the placement policy is unknown', () => {
+    expect(normalizePlacementRequest({ policy: 'invented' }).policy).toBe('deterministic')
+  })
 })
 
 describe('requestBytes', () => {

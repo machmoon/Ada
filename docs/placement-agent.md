@@ -4,6 +4,12 @@ Silkscreen repairs PCB placement faults while following an explicit company
 profile. The same damaged board can produce two different legal layouts because
 compact-control and thermal-first teams optimize different preferences.
 
+The end-user entry point is simpler than the verifier lab: name a chip and the
+job the board should do. Silkscreen turns that request into a circuit proposal,
+retrieves any supplied manufacturer evidence, validates the circuit, places the
+parts, runs the independent review, and returns a placed KiCad board. The
+placement lab remains the inspectable proof surface underneath that flow.
+
 ## What runs today
 
 The default path is a deterministic repair oracle. The private-GPU path runs
