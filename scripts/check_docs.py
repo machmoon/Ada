@@ -55,6 +55,7 @@ MODULES: dict[str, tuple[str, ...]] = {
     "resilience.py": ("test_resilience.py",),
     "agents/": ("test_agents.py",),
     "mcp/": ("test_mcp.py",),
+    "audit/": ("test_audit.py",),
     "service/": ("test_app.py", "test_cache.py"),
 }
 
