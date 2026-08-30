@@ -58,8 +58,13 @@ DEFAULT_TRACK_WIDTH_NM = mm(0.2)
 #: track width so the two together fit inside twice the grid pitch.
 DEFAULT_ROUTE_CLEARANCE_NM = mm(0.2)
 
-DEFAULT_VIA_DIAMETER_NM = mm(0.4)
-DEFAULT_VIA_DRILL_NM = mm(0.2)
+#: Via pad and hole. KiCad 8's own default board constraints are a 0.5 mm
+#: minimum diameter and a 0.3 mm minimum hole, and the emitted board carries
+#: no design-settings block, so a reader gets those defaults and every via
+#: we wrote at 0.4/0.2 came back as a DRC error. 0.6/0.3 clears them and is
+#: a standard low-cost fab offering rather than a fine-pitch upcharge.
+DEFAULT_VIA_DIAMETER_NM = mm(0.6)
+DEFAULT_VIA_DRILL_NM = mm(0.3)
 
 #: What a layer change costs, in grid steps. High enough that the router keeps
 #: a net on one layer when it can, low enough that it will hop to get through.
@@ -291,6 +296,24 @@ def route(
     track_disc = _disc(track_width_nm + clearance_nm, grid_nm)
     via_disc = _disc(via_diameter_nm // 2 + clearance_nm + track_width_nm // 2, grid_nm)
 
+    # Where copper actually is, as opposed to where copper may not go. The
+    # halo written into `reserved` is advisory: mark() will not overwrite a
+    # node another net already owns, and a pad keep-out owns a lot of them, so
+    # a committed track routinely fails to claim the clearance it needs and
+    # the next net is free to run one grid step away. Checking the disc around
+    # a candidate node against this map instead makes the clearance a property
+    # of the search rather than of whatever the halo happened to win.
+    copper: dict[Layer, dict[tuple[int, int], str]] = {
+        layer: {} for layer in layers
+    }
+    # Vias again, separately. A barrel is wider than a track, so the spacing a
+    # neighbour owes it is wider than track-to-track -- checking a candidate
+    # node against the track radius alone let a GND track sit 0.159 mm from a
+    # VIN via against a 0.2 mm rule, which is only visible once you ask KiCad.
+    via_nodes: dict[Layer, dict[tuple[int, int], str]] = {
+        layer: {} for layer in layers
+    }
+
     # ---- net order -------------------------------------------------------
     # Shortest and simplest first. Sequential routers are order-dependent and
     # this order is a heuristic, not an optimum -- but it is deterministic,
@@ -321,6 +344,10 @@ def route(
             ny=ny,
             layers=layers,
             reserved=reserved,
+            copper=copper,
+            via_nodes=via_nodes,
+            track_disc=track_disc,
+            via_disc=via_disc,
             via_cost=_VIA_COST_STEPS,
         )
         if failure is not None:
@@ -332,6 +359,8 @@ def route(
                 path,
                 net=net,
                 reserved=reserved,
+                copper=copper,
+                via_nodes=via_nodes,
                 track_disc=track_disc,
                 via_disc=via_disc,
                 nx=nx,
@@ -364,6 +393,10 @@ def _route_net(
     ny: int,
     layers: tuple[Layer, ...],
     reserved: dict[Layer, dict[tuple[int, int], str]],
+    copper: dict[Layer, dict[tuple[int, int], str]],
+    via_nodes: dict[Layer, dict[tuple[int, int], str]],
+    track_disc: tuple[tuple[int, int], ...],
+    via_disc: tuple[tuple[int, int], ...],
     via_cost: int,
 ) -> tuple[list[list[_Node]], str | None]:
     """Grow one net's tree, terminal by terminal.
@@ -386,6 +419,10 @@ def _route_net(
             ny=ny,
             layers=layers,
             reserved=reserved,
+            copper=copper,
+            via_nodes=via_nodes,
+            track_disc=track_disc,
+            via_disc=via_disc,
             via_cost=via_cost,
             # A path may run along copper this net already owns; that is a
             # T-junction, which is exactly what a multi-pin net wants.
@@ -410,6 +447,10 @@ def _astar(
     ny: int,
     layers: tuple[Layer, ...],
     reserved: dict[Layer, dict[tuple[int, int], str]],
+    copper: dict[Layer, dict[tuple[int, int], str]],
+    via_nodes: dict[Layer, dict[tuple[int, int], str]],
+    track_disc: tuple[tuple[int, int], ...],
+    via_disc: tuple[tuple[int, int], ...],
     via_cost: int,
     owned: set[_Node],
 ) -> list[_Node] | None:
@@ -418,8 +459,42 @@ def _astar(
     Costs are in grid steps; a layer change costs ``via_cost`` of them. The
     heuristic is Manhattan distance in steps, which never overestimates because
     every move costs at least one step and a via costs more.
+
+    Clearance is enforced here, against ``copper``, rather than by trusting the
+    halo an earlier net wrote into ``reserved``. The halo cannot claim a node
+    another net already owns -- and pad keep-outs own a great many -- so relying
+    on it let a track and a foreign via end up one grid step apart, which is a
+    short, and two tracks 0.05 mm apart against a 0.2 mm rule. Both were real:
+    KiCad's own DRC found them on a seven-part board that the suite passed.
     """
     _, gi, gj = goal
+
+    def _clear(
+        where: dict[Layer, dict[tuple[int, int], str]],
+        layer: Layer,
+        i: int,
+        j: int,
+        disc: tuple[tuple[int, int], ...],
+    ) -> bool:
+        here = where[layer]
+        if not here:
+            return True
+        for dx, dy in disc:
+            held = here.get((i + dx, j + dy))
+            if held is not None and held != net:
+                return False
+        return True
+
+    def clear_of_foreign(layer: Layer, i: int, j: int) -> bool:
+        """Enough room here for a track of ours, given everything already laid.
+
+        Two radii, because the neighbour's shape sets the spacing: track to
+        track needs the track disc, but a via barrel is wider and a track
+        beside one owes it the via disc.
+        """
+        return _clear(copper, layer, i, j, track_disc) and _clear(
+            via_nodes, layer, i, j, via_disc
+        )
 
     def passable(node: _Node) -> bool:
         layer, i, j = node
@@ -428,7 +503,21 @@ def _astar(
         if node in owned:
             return True
         held = reserved[layer].get((i, j))
-        return held is None or held == net
+        if held is not None and held != net:
+            return False
+        return clear_of_foreign(layer, i, j)
+
+    def via_fits(i: int, j: int) -> bool:
+        """A barrel is wider than a track and pierces both layers.
+
+        So it has to clear foreign copper on the side the path never touches,
+        at the via's own radius rather than the track's.
+        """
+        return all(
+            _clear(copper, layer, i, j, via_disc)
+            and _clear(via_nodes, layer, i, j, via_disc)
+            for layer in layers
+        )
 
     def h(i: int, j: int) -> int:
         return abs(i - gi) + abs(j - gj)
@@ -463,9 +552,10 @@ def _astar(
             ((layer, i, j + 1), 1),
             ((layer, i, j - 1), 1),
         ]
-        for other in layers:
-            if other is not layer:
-                moves.append(((other, i, j), via_cost))
+        if len(layers) > 1 and via_fits(i, j):
+            for other in layers:
+                if other is not layer:
+                    moves.append(((other, i, j), via_cost))
         for nxt, step in moves:
             if not passable(nxt):
                 continue
@@ -486,6 +576,8 @@ def _commit(
     *,
     net: str,
     reserved: dict[Layer, dict[tuple[int, int], str]],
+    copper: dict[Layer, dict[tuple[int, int], str]],
+    via_nodes: dict[Layer, dict[tuple[int, int], str]],
     track_disc: tuple[tuple[int, int], ...],
     via_disc: tuple[tuple[int, int], ...],
     nx: int,
@@ -504,6 +596,7 @@ def _commit(
 
     for index, (layer, i, j) in enumerate(path):
         reserved[layer][(i, j)] = net
+        copper[layer][(i, j)] = net
         for dx, dy in track_disc:
             mark(layer, i + dx, j + dy)
         changes_layer = (index and path[index - 1][0] is not layer) or (
@@ -514,6 +607,8 @@ def _commit(
             # the side the path never touches, too.
             for other in reserved:
                 reserved[other][(i, j)] = net
+                copper[other][(i, j)] = net
+                via_nodes[other][(i, j)] = net
                 for dx, dy in via_disc:
                     mark(other, i + dx, j + dy)
 

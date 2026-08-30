@@ -250,39 +250,119 @@ def test_no_copper_leaves_the_board_outline(routed):
         assert lo_x <= v.x_nm <= hi_x and lo_y <= v.y_nm <= hi_y, v
 
 
-def test_tracks_of_different_nets_keep_their_clearance(routed):
-    """Two nets one grid step apart would pass a node-by-node check and short.
+#: A board with two layers in play, so vias exist to be checked. The regulator
+#: fixture above routes entirely on the front, so every via rule it claims to
+#: enforce went untested until this was added.
+VIA_BOARD = {
+    "devices": {"AMS1117-3.3": {"pins": {"GND": "1", "VOUT": "2", "VIN": "3"}}},
+    "passives": {
+        "Cin": {"type": "capacitor", "value": "10uF"},
+        "Cout": {"type": "capacitor", "value": "22uF"},
+        "Rled": {"type": "resistor", "value": "1k"},
+        "D1": {"type": "diode", "value": "LED"},
+        "L1": {"type": "inductor", "value": "10uH"},
+        "Y1": {"type": "crystal", "value": "8MHz"},
+    },
+    "nets": {
+        "VIN": ["AMS1117-3.3.VIN", "Cin.1", "L1.1"],
+        "GND": ["AMS1117-3.3.GND", "Cin.2", "Cout.2", "D1.2", "Y1.2"],
+        "VOUT": ["AMS1117-3.3.VOUT", "Cout.1", "Rled.1"],
+        "LED_A": ["Rled.2", "D1.1"],
+        "XTAL": ["L1.2", "Y1.1"],
+    },
+}
 
-    Sampled along each track rather than solved analytically: the point is to
-    catch copper that is too close, and a dense sample of an axis-aligned
-    segment finds that without reimplementing segment-to-segment distance.
+
+@pytest.fixture(scope="module")
+def via_routed():
+    board = build_board(parse_circuit_spec(VIA_BOARD), time_limit_s=10.0)
+    result = route_board(board)
+    assert result.vias, "fixture is meant to exercise vias and produced none"
+    return board, result
+
+
+def _copper_discs(board):
+    """Every piece of copper as (net, layer, x, y, radius), in millimetres.
+
+    A disc per sample point, so one distance rule covers track-to-track,
+    track-to-via and via-to-via without three separate geometries. Sampled
+    rather than solved analytically for the same reason the original did it:
+    the point is to catch copper that is too close.
     """
-    board, _ = routed
     step = mm(0.05)
-    points: dict[str, list[tuple[int, int, Layer]]] = {}
-    for t in board.tracks:
-        dx = (t.end_x_nm > t.start_x_nm) - (t.end_x_nm < t.start_x_nm)
-        dy = (t.end_y_nm > t.start_y_nm) - (t.end_y_nm < t.start_y_nm)
-        length = abs(t.end_x_nm - t.start_x_nm) + abs(t.end_y_nm - t.start_y_nm)
+    out = []
+    for tr in board.tracks:
+        r = tr.width_nm / 2
+        dx = (tr.end_x_nm > tr.start_x_nm) - (tr.end_x_nm < tr.start_x_nm)
+        dy = (tr.end_y_nm > tr.start_y_nm) - (tr.end_y_nm < tr.start_y_nm)
+        length = abs(tr.end_x_nm - tr.start_x_nm) + abs(tr.end_y_nm - tr.start_y_nm)
         for k in range(0, length + 1, step):
-            points.setdefault(t.net, []).append(
-                (t.start_x_nm + dx * k, t.start_y_nm + dy * k, t.layer)
+            out.append(
+                (tr.net, tr.layer, tr.start_x_nm + dx * k, tr.start_y_nm + dy * k, r)
+            )
+    for via in board.vias:
+        # A barrel pierces both layers, so it is copper on each of them.
+        for layer in (Layer.TOP, Layer.BOTTOM):
+            out.append((via.net, layer, via.x_nm, via.y_nm, via.diameter_nm / 2))
+    return out
+
+
+def test_copper_of_different_nets_keeps_its_clearance(via_routed):
+    """The rule the router claims to enforce, on a board that has vias.
+
+    The original check sampled tracks only, on a fixture with no vias at all,
+    so nothing tested the via rules -- and KiCad's own DRC found a via shorting
+    a foreign track plus two sub-clearance gaps on a board this suite passed.
+    The clearance is a property of the search now rather than of whatever the
+    clearance halo happened to win, and this is what says so.
+    """
+    required = mm(0.2)  # netclass default, the same number KiCad checks
+    discs = _copper_discs(via_routed[0])
+    for a in range(len(discs)):
+        net_a, layer_a, ax, ay, ra = discs[a]
+        for b in range(a + 1, len(discs)):
+            net_b, layer_b, bx, by, rb = discs[b]
+            if net_a == net_b or layer_a is not layer_b:
+                continue
+            gap = ((ax - bx) ** 2 + (ay - by) ** 2) ** 0.5 - ra - rb
+            assert gap >= required - 1, (
+                f"{net_a} and {net_b} are {gap / 1e6:.3f} mm apart on "
+                f"{layer_a}, under the {required / 1e6:.2f} mm rule"
             )
 
-    # width + clearance, minus a nanometre of slack for integer rounding.
-    required = mm(0.2) + mm(0.2) - 1
-    nets = sorted(points)
-    for i, a in enumerate(nets):
-        for b in nets[i + 1 :]:
-            for ax, ay, al in points[a]:
-                for bx, by, bl in points[b]:
-                    if al is not bl:
-                        continue
-                    d2 = (ax - bx) ** 2 + (ay - by) ** 2
-                    assert d2 >= required**2, (
-                        f"{a} and {b} come within "
-                        f"{d2 ** 0.5 / 1e6:.3f} mm on {al}"
-                    )
+
+def test_copper_keeps_its_clearance_from_foreign_pads(via_routed):
+    """Copper must clear a pad it does not belong to, not only other copper."""
+    from silkscreen.board import board_pads
+
+    required = mm(0.2)
+    board = via_routed[0]
+    pads = [p for p in board_pads(board) if p.net]
+    for net, layer, x, y, r in _copper_discs(board):
+        for pad in pads:
+            if pad.net == net or pad.layer is not layer:
+                continue
+            dx = max(abs(x - pad.x_nm) - pad.w_nm / 2, 0)
+            dy = max(abs(y - pad.y_nm) - pad.h_nm / 2, 0)
+            gap = (dx * dx + dy * dy) ** 0.5 - r
+            assert gap >= required - 1, (
+                f"{net} copper is {gap / 1e6:.3f} mm from {pad.ref} pad "
+                f"{pad.number} [{pad.net}], under the {required / 1e6:.2f} mm rule"
+            )
+
+
+def test_the_via_defaults_clear_kicads_own_minimums():
+    """KiCad 8 defaults to a 0.5 mm via and a 0.3 mm hole.
+
+    The emitted board carries no design-settings block, so a reader gets those
+    defaults -- and every via written at 0.4/0.2 came back a DRC error.
+    """
+    from silkscreen.routing import DEFAULT_VIA_DIAMETER_NM, DEFAULT_VIA_DRILL_NM
+
+    # Read as "KiCad's minimum is at most ours". Ruff treats the SCREAMING_CASE
+    # module constants as the constant side, so they go on the right.
+    assert mm(0.5) <= DEFAULT_VIA_DIAMETER_NM
+    assert mm(0.3) <= DEFAULT_VIA_DRILL_NM
 
 
 def test_an_unroutable_net_is_reported_and_not_half_laid():
