@@ -12,12 +12,16 @@ placement lab remains the inspectable proof surface underneath that flow.
 
 ## What runs today
 
-The default path is a deterministic repair oracle. The private-GPU path runs
-base Gemma 3 4B through Ollama on the 5090. For this stopgap, the deterministic
-search produces a bounded candidate set and Gemma selects a short ordered
-batch. The geometry verifier evaluates each action and commits only the longest
-improving prefix. This is speculative placement execution, not token-level
-speculative decoding.
+The demo exposes two modes. Verified fast policy is the product path. It picks
+the best configured small-policy backend and falls back to deterministic repair
+when none is available. Gemini directly is the comparison demo. Backend names
+remain visible in the run receipt, not as separate product choices.
+
+On the private-GPU stopgap, base Gemma 3 4B runs through Ollama on the 5090.
+Deterministic search produces a bounded candidate set and Gemma selects a short
+ordered batch. The geometry verifier evaluates each action and commits only the
+longest improving prefix. This is speculative placement execution, not
+token-level speculative decoding.
 
 The visible score has two axes. `H` is hard penetration in millimetres from
 overlap, clearance, boundary, and keepout faults. A legal placement has `H = 0`.

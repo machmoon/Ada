@@ -19,7 +19,7 @@ from silkscreen.agents.model import ScriptedModel
 from silkscreen.kicad import footprint_ref, load_board
 from silkscreen.units import to_mm
 
-from service.app import Handler, make_server
+from service.app import Handler, make_server, resolve_placement_policy
 from service.cache import MemoryFactStore
 
 try:
@@ -293,6 +293,38 @@ def test_placement_repair_is_model_free_and_geometry_grounded(server):
     assert 0 < body["reward"]["preference"] <= 0.1
     assert "quality" not in body["reward"]
     assert body["steps"][0]["accepted"]
+
+
+@pytest.mark.parametrize(
+    ("available", "expected"),
+    [
+        ({"hybrid": True, "tinker": True, "ollama": True}, "hybrid"),
+        ({"tinker": True, "ollama": True}, "tinker"),
+        ({"ollama": True}, "ollama"),
+        ({}, "deterministic"),
+    ],
+)
+def test_fast_policy_resolves_to_best_configured_backend(available, expected):
+    assert resolve_placement_policy("fast", available) == expected
+
+
+def test_fast_policy_falls_back_safely(server, monkeypatch):
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    monkeypatch.delenv("GOOGLE_API_KEY", raising=False)
+    monkeypatch.delenv("TINKER_API_KEY", raising=False)
+    monkeypatch.delenv("TINKER_PLACEMENT_MODEL", raising=False)
+    monkeypatch.delenv("OLLAMA_PLACEMENT_URL", raising=False)
+
+    status, body = post(
+        server,
+        {"profile": "compact-control", "policy": "fast"},
+        path="/placement/repair",
+    )
+
+    assert status == 200
+    assert body["requested_policy"] == "fast"
+    assert body["policy"] == "deterministic"
+    assert body["completed"] is True
 
 
 def test_placement_feedback_is_saved_and_reloaded(server):

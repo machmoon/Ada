@@ -11,7 +11,7 @@
   ]
 
   let profile = $state('compact-control')
-  let policy = $state('deterministic')
+  let policy = $state('fast')
   let result = $state(null)
   let busy = $state(false)
   let error = $state('')
@@ -67,6 +67,21 @@
     return Number.isFinite(number) ? number.toFixed(digits) : 'not scored'
   }
 
+  function activePolicyName(run) {
+    return run.requested_policy === 'gemini' ? 'Gemini directly' : 'Verified fast policy'
+  }
+
+  function activePolicyNote(run) {
+    const notes = {
+      hybrid: 'The small policy proposes first. Gemini recovers only when it stalls.',
+      tinker: 'The promoted Qwen policy proposes. The verifier accepts only improving moves.',
+      ollama: 'Local Gemma is the stopgap proposer. The verifier accepts only improving moves.',
+      gemini: 'Gemini proposes directly. The verifier still accepts only improving moves.',
+      deterministic: 'The deterministic fallback is active because no small policy is configured.',
+    }
+    return notes[run.policy] || 'The verifier accepts only improving moves.'
+  }
+
   onMount(() => run())
 </script>
 
@@ -91,13 +106,10 @@
         {/each}
       </div>
       <div class="policy">
-        <label class="lbl" for="policy">Policy</label>
+        <label class="lbl" for="policy">Mode</label>
         <select id="policy" bind:value={policy} onchange={() => run()} disabled={busy}>
-          <option value="deterministic">Deterministic repair oracle</option>
-          <option value="gemini" disabled={result && !result.available_policies?.gemini}>Gemini proposal policy</option>
-          <option value="ollama" disabled={result && !result.available_policies?.ollama}>Base Gemma on private 5090</option>
-          <option value="tinker" disabled={result && !result.available_policies?.tinker}>Tinker Qwen SFT checkpoint</option>
-          <option value="hybrid" disabled={result && !result.available_policies?.hybrid}>Fast policy + Gemini recovery</option>
+          <option value="fast">Verified fast policy</option>
+          <option value="gemini" disabled={result && !result.available_policies?.gemini}>Gemini directly · demo</option>
         </select>
         <button class="run" type="button" onclick={() => run()} disabled={busy}>{busy ? 'Repairing…' : 'Run repair'}</button>
       </div>
@@ -119,8 +131,8 @@
         </div>
         <div class="metric">
           <span class="lbl">Active policy</span>
-          <strong>{result.policy === 'hybrid' ? 'Fast policy + Gemini recovery' : result.policy === 'ollama' ? 'Base Gemma on private 5090' : result.policy === 'tinker' ? 'Tinker Qwen SFT checkpoint' : result.policy === 'gemini' ? 'Gemini proposal policy' : 'Deterministic repair oracle'}</strong>
-          <p>{result.policy === 'ollama' ? 'Gemma 3 4B selects bounded candidates. It is not fine-tuned.' : result.available_policies?.tinker ? 'A promoted Tinker checkpoint is configured.' : result.available_policies?.ollama ? 'The private 5090 fast path is configured.' : 'No learned fast policy is configured.'}</p>
+          <strong>{activePolicyName(result)}</strong>
+          <p>{activePolicyNote(result)}</p>
         </div>
         <div class="metric">
           <span class="lbl">Training reward</span>
@@ -141,10 +153,10 @@
         </div>
         <ol>
           <li><b>1</b><span><strong>Intent becomes a profile</strong>Team corrections set grouping, access, compactness, thermal, keepout, and fixed-part preferences.</span></li>
-          <li><b>2</b><span><strong>Fast policy selects</strong>Base Gemma now, or a promoted Tinker policy later, selects a short ordered batch from bounded PLACE candidates.</span></li>
+          <li><b>2</b><span><strong>Fast policy selects</strong>The configured small policy selects a short ordered batch from bounded PLACE candidates.</span></li>
           <li><b>3</b><span><strong>Rules measure H</strong>H is summed overlap, boundary, keepout, and clearance penetration in millimetres.</span></li>
           <li><b>4</b><span><strong>Profile measures P</strong>P is weighted grouping, edge access, compactness, and thermal cost. Lower is better.</span></li>
-          <li><b>5</b><span><strong>Verifier commits a prefix</strong>It accepts moves only while (H, P) improves. In hybrid mode Gemini is called only if the fast policy stalls.</span></li>
+          <li><b>5</b><span><strong>Verifier commits a prefix</strong>It accepts moves only while (H, P) improves. Gemini recovery runs only if the fast policy stalls.</span></li>
         </ol>
         <p class="formula mono">reward = legality[H = 0] + progress[(H₀ − Hₜ) / H₀] + preference[0.1 / (1 + P), legal boards only]</p>
       </section>

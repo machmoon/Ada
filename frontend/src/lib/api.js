@@ -59,7 +59,7 @@ export function normalizeRequest(request) {
 }
 
 export function normalizePlacementRequest(request = {}) {
-  const policies = new Set(['deterministic', 'gemini', 'ollama', 'tinker', 'hybrid'])
+  const policies = new Set(['fast', 'deterministic', 'gemini', 'ollama', 'tinker', 'hybrid'])
   const requestedPolicy = String(request.policy || 'deterministic')
   const profile =
     request.profile && typeof request.profile === 'object'

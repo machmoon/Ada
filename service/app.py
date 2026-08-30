@@ -90,6 +90,7 @@ __all__ = [
     "build_store",
     "build_tinker_model",
     "placement_policy_status",
+    "resolve_placement_policy",
     "caused_by_model_failure",
     "generate",
     "make_server",
@@ -599,6 +600,19 @@ def placement_policy_status() -> dict[str, bool]:
     }
 
 
+def resolve_placement_policy(
+    requested: str, available: dict[str, bool] | None = None
+) -> str:
+    """Resolve the single fast product mode to the best configured backend."""
+    if requested != "fast":
+        return requested
+    status = available if available is not None else placement_policy_status()
+    for candidate in ("hybrid", "tinker", "ollama"):
+        if status.get(candidate):
+            return candidate
+    return "deterministic"
+
+
 def _placement_model_id(policy: str) -> str:
     if policy == "ollama":
         return os.getenv("OLLAMA_PLACEMENT_MODEL", "gemma3:4b")
@@ -1046,7 +1060,12 @@ class Handler(BaseHTTPRequestHandler):
         if payload is None:
             return
         try:
-            policy = str(payload.get("policy", "deterministic")).strip().lower()
+            requested_policy = str(
+                payload.get("policy", "deterministic")
+            ).strip().lower()
+            policy_status = placement_policy_status()
+            policy = resolve_placement_policy(requested_policy, policy_status)
+            resolved_payload = {**payload, "policy": policy}
             model, fallback_model = _placement_models(
                 policy, self.model_factory
             )
@@ -1056,12 +1075,13 @@ class Handler(BaseHTTPRequestHandler):
                 else build_profile_store()
             )
             result = repair_request(
-                payload,
+                resolved_payload,
                 model=model,
                 fallback_model=fallback_model,
                 profile_store=store,
             )
-            result["available_policies"] = placement_policy_status()
+            result["requested_policy"] = requested_policy
+            result["available_policies"] = policy_status
             trace_store = self.failure_trace_store or build_failure_trace_store()
             trace_ids = _record_failure_trace_ids(
                 payload, result, trace_store

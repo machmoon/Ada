@@ -280,7 +280,7 @@ describe('normalizePlacementRequest', () => {
     })
   })
 
-  it.each(['deterministic', 'gemini', 'ollama', 'tinker', 'hybrid'])(
+  it.each(['fast', 'deterministic', 'gemini', 'ollama', 'tinker', 'hybrid'])(
     'preserves the supported %s policy',
     (policy) => {
       expect(normalizePlacementRequest({ policy }).policy).toBe(policy)
