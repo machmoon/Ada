@@ -88,6 +88,12 @@ const DONE_SUMMARY = {
     wirelength_mm: finiteOrNull(e.wirelength_mm),
     warnings: countOf(e.warnings),
   }),
+  route: (e) => ({
+    tracks: countOf(e.tracks),
+    vias: countOf(e.vias),
+    routed_nets: countOf(e.routed_nets),
+    unrouted_nets: countOf(e.unrouted_nets),
+  }),
   review: (e) => ({ findings: countOf(e.findings), blockers: countOf(e.blockers) }),
 }
 

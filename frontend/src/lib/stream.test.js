@@ -324,6 +324,40 @@ describe('describeStageEvent', () => {
     expect(describeStageEvent({ event: 'stage.done', stage: 'place' })).toBe('placed')
   })
 
+  it('reports the routing tally, and names what is still ratsnest', () => {
+    expect(
+      describeStageEvent({
+        event: 'stage.done',
+        stage: 'route',
+        tracks: 28,
+        vias: 5,
+        routed_nets: 5,
+        unrouted_nets: 0,
+      }),
+    ).toBe('routed: 5/5 nets, 28 tracks, 5 vias')
+  })
+
+  it('says how many nets were left unrouted rather than only what worked', () => {
+    // A net left as ratsnest is invisible until fabrication, so the count that
+    // matters is the one that did not finish.
+    expect(
+      describeStageEvent({
+        event: 'stage.done',
+        stage: 'route',
+        tracks: 12,
+        vias: 0,
+        routed_nets: 6,
+        unrouted_nets: 44,
+      }),
+    ).toBe('routed: 6/50 nets, 12 tracks, 44 left unrouted')
+  })
+
+  it('describes a starting route stage', () => {
+    expect(describeStageEvent({ event: 'stage.start', stage: 'route' })).toBe(
+      'routing the copper…',
+    )
+  })
+
   it('reports the review tally', () => {
     expect(
       describeStageEvent({ event: 'stage.done', stage: 'review', findings: 2, blockers: 1 }),
