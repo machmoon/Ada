@@ -2,6 +2,8 @@
 // from the same origin as the API — in dev by the Vite proxy, in production by
 // service/app.py. No absolute URL, therefore no CORS, ever.
 
+import { logError, logEvent, logWarn } from './log.js'
+
 const ENDPOINT = '/generate'
 
 export const REQUEST_TIMEOUT_MS = 300000
@@ -96,10 +98,23 @@ function errorFor(status, body) {
   return new ApiError('upstream', message, { status })
 }
 
+/** The one line a response leaves behind, whichever way generate() exits. A
+    body that would not parse is a failed run even under a 200, so it warns. */
+function recordOutcome(response, ms, parsed) {
+  const outcome = { status: response.status, ok: response.ok, ms, parsed }
+  const line = `POST /generate returned ${response.status} in ${ms} ms`
+  if (response.ok && parsed) logEvent('api.response', line, outcome)
+  else logWarn('api.response', line, outcome)
+}
+
 export async function generate(request) {
   const body = JSON.stringify(request)
   const bytes = new TextEncoder().encode(body).length
   if (bytes > MAX_REQUEST_BYTES) {
+    logWarn('api.too-large', `Request of ${bytes} bytes refused before the network`, {
+      bytes,
+      limit: MAX_REQUEST_BYTES,
+    })
     throw new ApiError(
       'too-large',
       `The request is ${bytes} bytes; the service accepts at most ${MAX_REQUEST_BYTES}.`,
@@ -109,6 +124,7 @@ export async function generate(request) {
   const controller = new AbortController()
   const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS)
 
+  const startedAt = Date.now()
   let response
   try {
     response = await fetch(ENDPOINT, {
@@ -118,6 +134,10 @@ export async function generate(request) {
       signal: controller.signal,
     })
   } catch (err) {
+    logError('api.failed', 'POST /generate never reached a response', {
+      ms: Date.now() - startedAt,
+      aborted: controller.signal.aborted,
+    })
     if (controller.signal.aborted) {
       throw new ApiError('timeout', 'The run passed the 300 second budget and was cancelled.')
     }
@@ -127,15 +147,23 @@ export async function generate(request) {
   }
 
   let data = {}
+  let parsed = true
   try {
     data = await response.json()
   } catch {
+    parsed = false
     if (response.ok) {
+      // Written before the throw, which is the one exit that would otherwise
+      // skip the line below -- and a 200 whose body will not parse is exactly
+      // the response worth having a record of.
+      recordOutcome(response, Date.now() - startedAt, false)
       throw new ApiError('internal', 'The service returned a body that is not JSON.', {
         status: response.status,
       })
     }
   }
+
+  recordOutcome(response, Date.now() - startedAt, parsed)
 
   if (!response.ok) throw errorFor(response.status, data || {})
   return normalizeResponse(data || {})
