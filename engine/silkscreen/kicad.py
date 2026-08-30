@@ -20,7 +20,9 @@ place, explicitly.
 
 from __future__ import annotations
 
+import math
 import re
+from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -133,6 +135,38 @@ def _mm(value: float) -> int:
     return int(round(value * _MM_TO_NM))
 
 
+def _placer_ref(fp) -> str:
+    """The name the placer knows a footprint by.
+
+    ``extract_parts`` and :func:`apply_placements` must agree on this, or a
+    footprint gets a slot in the solve under one name and is looked up under
+    another on the way back -- it keeps its original position while the solver
+    reserves empty space for it.
+    """
+    return footprint_ref(fp) or (getattr(fp, "entryName", "") or "")
+
+
+def _rotate_mm(x: float, y: float, angle_deg: float) -> tuple[float, float]:
+    """Map a footprint-local point into the board frame.
+
+    KiCad's ``angle`` turns a footprint counter-clockwise *on screen*, and screen
+    Y points down, so the board-frame image of a local point is a mathematical
+    rotation by ``-angle``. At 90 degrees this is ``(x, y) -> (y, -x)``, matching
+    :meth:`FootprintInfo.local_bbox_after_rotation`.
+    """
+    if not angle_deg:
+        return x, y
+    r = math.radians(angle_deg)
+    c, s = math.cos(r), math.sin(r)
+    return x * c + y * s, -x * s + y * c
+
+
+def _fp_angle(fp) -> float:
+    """A footprint's existing placement angle in degrees, 0 if unset."""
+    position = getattr(fp, "position", None)
+    return float(getattr(position, "angle", None) or 0.0)
+
+
 def load_board(path: str | Path) -> Board:
     """Read a ``.kicad_pcb``. Raises ``FileNotFoundError`` if it is missing."""
     path = Path(path)
@@ -141,42 +175,88 @@ def load_board(path: str | Path) -> Board:
     return Board.from_file(str(path))
 
 
-def _courtyard_extent(fp) -> tuple[float, float, float, float] | None:
-    """Bounding box of the footprint's courtyard, in local mm.
+def _courtyard_points(item) -> list[tuple[float, float]]:
+    """Every point that bounds one courtyard graphic, in footprint-local mm.
 
-    Returns ``(min_x, min_y, max_x, max_y)`` or ``None`` if the footprint has no
-    courtyard layer.
+    Shape matters here, because reading the wrong attributes does not fail --
+    it silently reports a part that is smaller than it is, and the solver packs
+    something else on top of it:
+
+    * ``fp_poly`` keeps its vertices in ``coordinates``. Reading only
+      ``start``/``end`` finds nothing, so a footprint whose courtyard is drawn
+      as a polygon looks like it has no courtyard at all and falls back to the
+      bare pad box -- no clearance whatsoever.
+    * ``fp_circle``'s ``end`` is a point *on the circumference*, not a corner.
+      Treating the pair as a bbox gives a half-width, zero-height box.
+    * ``fp_arc``'s bulge is in ``mid``; its endpoints alone miss it entirely.
     """
-    xs: list[float] = []
-    ys: list[float] = []
+    coords = getattr(item, "coordinates", None)
+    if coords:
+        return [(pt.X, pt.Y) for pt in coords]
+
+    center = getattr(item, "center", None)
+    end = getattr(item, "end", None)
+    if center is not None and getattr(item, "start", None) is None:
+        # A circle: bound it by its radius, not by the point on its edge.
+        radius = math.hypot(end.X - center.X, end.Y - center.Y) if end else 0.0
+        return [
+            (center.X - radius, center.Y - radius),
+            (center.X + radius, center.Y + radius),
+        ]
+
+    # ``mid`` is the arc bulge; lines and rects simply do not have it.
+    attrs = ("start", "mid", "end", "position")
+    return [
+        (pt.X, pt.Y)
+        for pt in (getattr(item, attr, None) for attr in attrs)
+        if pt is not None
+    ]
+
+
+def _courtyard_extent(
+    fp, angle_deg: float = 0.0
+) -> tuple[float, float, float, float] | None:
+    """Bounding box of the footprint's courtyard, in board-frame mm.
+
+    Returns ``(min_x, min_y, max_x, max_y)`` relative to the anchor, already
+    turned by the footprint's existing placement angle, or ``None`` if the
+    footprint has no courtyard layer. (A circle rotated by a non-multiple of 90
+    degrees is bounded slightly loosely -- conservative, never tight.)
+    """
+    pts: list[tuple[float, float]] = []
     for item in fp.graphicItems:
         layer = getattr(item, "layer", "") or ""
         if "CrtYd" not in layer:
             continue
-        for attr in ("start", "end", "center", "position"):
-            pt = getattr(item, attr, None)
-            if pt is not None:
-                xs.append(pt.X)
-                ys.append(pt.Y)
-    if not xs or not ys:
+        pts += [_rotate_mm(x, y, angle_deg) for x, y in _courtyard_points(item)]
+    if not pts:
         return None
+    xs = [p[0] for p in pts]
+    ys = [p[1] for p in pts]
     return min(xs), min(ys), max(xs), max(ys)
 
 
-def _pad_extent(fp) -> tuple[float, float, float, float]:
-    """Bounding box of all pads, in local mm. Fallback when no courtyard."""
-    xs: list[float] = []
-    ys: list[float] = []
+def _pad_extent(fp, angle_deg: float = 0.0) -> tuple[float, float, float, float]:
+    """Bounding box of all pads, in board-frame mm. Fallback when no courtyard."""
+    pts: list[tuple[float, float]] = []
     for pad in fp.pads:
         px, py = pad.position.X, pad.position.Y
         hw = (pad.size.X or 0) / 2
         hh = (pad.size.Y or 0) / 2
-        xs += [px - hw, px + hw]
-        ys += [py - hh, py + hh]
-    if not xs:
+        # A pad carries its own angle relative to the footprint; the footprint's
+        # angle then turns the whole thing.
+        total = angle_deg + float(getattr(pad.position, "angle", None) or 0.0)
+        for cx in (-hw, hw):
+            for cy in (-hh, hh):
+                ox, oy = _rotate_mm(cx, cy, total)
+                rx, ry = _rotate_mm(px, py, angle_deg)
+                pts.append((rx + ox, ry + oy))
+    if not pts:
         # Degenerate footprint (e.g. a fiducial with no pads). Give it a
         # nominal 1 mm square so it still gets a slot rather than crashing.
         return -0.5, -0.5, 0.5, 0.5
+    xs = [p[0] for p in pts]
+    ys = [p[1] for p in pts]
     return min(xs), min(ys), max(xs), max(ys)
 
 
@@ -188,12 +268,20 @@ def extract_parts(
     Sizes come from the courtyard layer where present, falling back to the pad
     bounding box. Pad offsets are converted into the placer's Y-up frame,
     measured from the part's bottom-left corner.
+
+    A footprint that is **already rotated** on the input board is measured as it
+    actually sits. Its courtyard and pads are stored unrotated in the file, so
+    reading them literally models a part turned 90 degrees with its width and
+    height the wrong way round -- the solver reserves a box of the wrong shape,
+    and because :func:`apply_placements` leaves the existing angle in place, the
+    written board really does overlap.
     """
     infos: list[FootprintInfo] = []
     for fp in board.footprints:
-        ref = footprint_ref(fp) or (getattr(fp, "entryName", "") or "")
+        ref = _placer_ref(fp)
 
-        extent = _courtyard_extent(fp) or _pad_extent(fp)
+        angle = _fp_angle(fp)
+        extent = _courtyard_extent(fp, angle) or _pad_extent(fp, angle)
         min_x, min_y, max_x, max_y = extent
         min_x -= courtyard_margin_mm
         min_y -= courtyard_margin_mm
@@ -208,8 +296,9 @@ def extract_parts(
         for pad in fp.pads:
             name = str(pad.number)
             # Local mm -> offset from bottom-left, flipping Y (KiCad Y is down).
-            off_x = _mm(pad.position.X - min_x)
-            off_y = _mm(max_y - pad.position.Y)
+            pad_x, pad_y = _rotate_mm(pad.position.X, pad.position.Y, angle)
+            off_x = _mm(pad_x - min_x)
+            off_y = _mm(max_y - pad_y)
             pad_offsets[name] = (off_x, off_y)
             if pad.net is not None and pad.net.name:
                 pad_nets[name] = pad.net.name
@@ -341,6 +430,26 @@ def to_parts(
     edge_refs = set(edge_refs or ())
     rotatable_refs = set(rotatable_refs or ())
 
+    # A placement is matched back to its footprint by ref and nothing else, so a
+    # ref shared by two footprints -- or missing altogether -- is not a cosmetic
+    # problem. Both placements land on whichever footprint the lookup happens to
+    # keep, and the other one silently stays where it was while the solver holds
+    # empty space for it. That reads as a successful placement: the moved count
+    # still equals the part count.
+    blank = sum(1 for info in infos if not info.ref)
+    if blank:
+        raise ValueError(
+            f"{blank} footprint(s) on this board have no reference designator "
+            "and no library name; placements cannot be matched back to them."
+        )
+    duplicated = sorted(r for r, n in Counter(i.ref for i in infos).items() if n > 1)
+    if duplicated:
+        raise ValueError(
+            f"duplicate reference designators on this board: {duplicated}. "
+            "Two footprints sharing a ref would collapse onto one position and "
+            "strand the other. Annotate the board in KiCad first."
+        )
+
     # Silently ignoring a ref that matches nothing turns a typo into a missing
     # constraint with no signal at all.
     known = {info.ref for info in infos}
@@ -397,7 +506,10 @@ def apply_placements(
     by_ref = {info.ref: info for info in infos}
     fp_by_ref = {}
     for fp in board.footprints:
-        ref = footprint_ref(fp)
+        # Must be the same resolution ``extract_parts`` used, fallback included:
+        # matching on the bare reference here strands every footprint that was
+        # sized and packed under its library name.
+        ref = _placer_ref(fp)
         if ref:
             fp_by_ref[ref] = fp
 

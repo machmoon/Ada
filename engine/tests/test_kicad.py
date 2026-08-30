@@ -9,6 +9,7 @@ a GUI.
 from __future__ import annotations
 
 import itertools
+import math
 from pathlib import Path
 
 import pytest
@@ -18,6 +19,7 @@ from silkscreen.kicad import (
     extract_nets,
     extract_parts,
     extract_wires,
+    footprint_ref,
     is_power_net,
     load_board,
     save_board,
@@ -238,3 +240,181 @@ def test_unknown_edge_ref_raises_instead_of_silently_doing_nothing(infos):
     """A typo'd ref used to produce no constraint and no signal."""
     with pytest.raises(ValueError, match="not on this board"):
         to_parts(infos, edge_refs={"J1"})
+
+
+# --- Footprints that arrive already rotated ---------------------------------
+#
+# A courtyard is stored unrotated in the file; the footprint's ``angle`` turns it
+# on the board. Reading the stored geometry literally models a part turned 90
+# degrees with its width and height the wrong way round, and apply_placements
+# leaves the angle alone -- so the written board really does overlap.
+
+
+def _truth_box(fp):
+    """On-board courtyard bbox from raw file geometry, honouring the angle.
+
+    Deliberately does not use anything in ``kicad.py``: a check written in terms
+    of the code under test shares its blind spot and passes while the board is
+    wrong.
+    """
+    angle = math.radians(-(fp.position.angle or 0))
+    cos_a, sin_a = math.cos(angle), math.sin(angle)
+    pts = []
+    for item in fp.graphicItems:
+        if "CrtYd" not in (getattr(item, "layer", "") or ""):
+            continue
+        for attr in ("start", "end"):
+            pt = getattr(item, attr, None)
+            if pt is not None:
+                pts.append((pt.X * cos_a - pt.Y * sin_a, pt.X * sin_a + pt.Y * cos_a))
+    xs = [p[0] for p in pts]
+    ys = [p[1] for p in pts]
+    return (
+        fp.position.X + min(xs), fp.position.Y + min(ys),
+        fp.position.X + max(xs), fp.position.Y + max(ys),
+    )
+
+
+def test_pre_rotated_footprint_is_measured_as_it_sits():
+    """U3 is a SOT-223: 8.8 x 7.2 mm flat, 7.2 x 8.8 mm turned 90 degrees."""
+    board = load_board(FIXTURE)
+    flat = next(i for i in extract_parts(board) if i.ref == "U3")
+
+    next(f for f in board.footprints if footprint_ref(f) == "U3").position.angle = 90
+    turned = next(i for i in extract_parts(board) if i.ref == "U3")
+
+    assert (turned.width_nm, turned.height_nm) == (flat.height_nm, flat.width_nm)
+    assert flat.width_nm != flat.height_nm, "fixture part must be non-square here"
+
+
+def test_pre_rotated_pads_move_with_their_footprint():
+    """Pad offsets feed the wirelength objective; a stale offset aims a net at
+    the corner the pad used to be in."""
+    board = load_board(FIXTURE)
+    flat = next(i for i in extract_parts(board) if i.ref == "U3")
+    next(f for f in board.footprints if footprint_ref(f) == "U3").position.angle = 90
+    turned = next(i for i in extract_parts(board) if i.ref == "U3")
+
+    assert turned.pad_offsets != flat.pad_offsets
+    # Offsets stay inside the (rotated) courtyard they are measured against.
+    for ref, (ox, oy) in turned.pad_offsets.items():
+        assert 0 <= ox <= turned.width_nm, ref
+        assert 0 <= oy <= turned.height_nm, ref
+
+
+def test_pre_rotated_board_places_without_real_overlap(tmp_path):
+    """The regression in full: rotate two non-square parts as a user would in
+    KiCad, then place. This overlapped by 2.5 mm before rotation was read."""
+    board = load_board(FIXTURE)
+    for ref in ("U2", "U3"):
+        next(f for f in board.footprints if footprint_ref(f) == ref).position.angle = 90
+
+    new_infos = extract_parts(board)
+    result = pack(to_parts(new_infos), extract_wires(new_infos), time_limit_s=20.0)
+    assert apply_placements(
+        board, new_infos, result.placements, result.board_height_nm
+    ) == len(new_infos)
+
+    reloaded = load_board(save_board(board, tmp_path / "rotated.kicad_pcb"))
+    boxes = [(footprint_ref(f),) + _truth_box(f) for f in reloaded.footprints]
+    for (ra, ax0, ay0, ax1, ay1), (rb, bx0, by0, bx1, by1) in itertools.combinations(
+        boxes, 2
+    ):
+        dx = min(ax1, bx1) - max(ax0, bx0)
+        dy = min(ay1, by1) - max(ay0, by0)
+        assert not (dx > 0.01 and dy > 0.01), (
+            f"courtyard overlap {ra}/{rb}: {dx:.2f} x {dy:.2f} mm"
+        )
+
+
+# --- Courtyards that are not made of straight lines --------------------------
+
+
+class _Graphics:
+    """Minimal stand-in for a footprint carrying only courtyard graphics."""
+
+    def __init__(self, items):
+        self.graphicItems = items
+
+
+def test_circle_courtyard_is_bounded_by_its_radius():
+    """``fp_circle``'s ``end`` is a point on the circumference, not a corner.
+    Read as a bbox pair it gives a half-width, zero-height box."""
+    from kiutils.items.common import Position
+    from kiutils.items.fpitems import FpCircle
+    from silkscreen.kicad import _courtyard_extent
+
+    circle = FpCircle(
+        center=Position(X=1.0, Y=2.0), end=Position(X=4.0, Y=2.0), layer="F.CrtYd"
+    )
+    assert _courtyard_extent(_Graphics([circle])) == (-2.0, -1.0, 4.0, 5.0)
+
+
+def test_polygon_courtyard_is_not_mistaken_for_no_courtyard():
+    """``fp_poly`` keeps its vertices in ``coordinates``. Missing them made the
+    footprint fall back to its bare pad box -- zero courtyard clearance."""
+    from kiutils.items.common import Position
+    from kiutils.items.fpitems import FpPoly
+    from silkscreen.kicad import _courtyard_extent
+
+    poly = FpPoly(
+        layer="F.CrtYd",
+        coordinates=[
+            Position(X=-2.0, Y=-2.0), Position(X=2.0, Y=-2.0),
+            Position(X=2.0, Y=2.0), Position(X=-2.0, Y=2.0),
+        ],
+    )
+    assert _courtyard_extent(_Graphics([poly])) == (-2.0, -2.0, 2.0, 2.0)
+
+
+def test_arc_courtyard_includes_its_bulge():
+    """An arc's extreme is ``mid``; its endpoints alone miss it."""
+    from kiutils.items.common import Position
+    from kiutils.items.fpitems import FpArc
+    from silkscreen.kicad import _courtyard_extent
+
+    arc = FpArc(
+        start=Position(X=-3.0, Y=0.0), mid=Position(X=0.0, Y=-4.0),
+        end=Position(X=3.0, Y=0.0), layer="F.CrtYd",
+    )
+    assert _courtyard_extent(_Graphics([arc])) == (-3.0, -4.0, 3.0, 0.0)
+
+
+# --- Reference designators as identity ---------------------------------------
+
+
+def test_duplicate_refs_are_rejected_rather_than_collapsed(infos):
+    """Placements are matched back by ref alone. Two footprints sharing one ref
+    both land on whichever the lookup kept; the other silently stays put while
+    the solver holds empty space for it -- and the moved count still says every
+    part was placed."""
+    with pytest.raises(ValueError, match="duplicate reference designators"):
+        to_parts(list(infos) + [infos[0]])
+
+
+def test_footprint_without_a_reference_is_still_moved(tmp_path):
+    """It is sized and packed under its library name, so it must be looked up
+    under that same name on the way back -- not left at its original position
+    with the solver reserving a slot for it."""
+    board = load_board(FIXTURE)
+    fp = next(f for f in board.footprints if footprint_ref(f) == "C4")
+    if isinstance(getattr(fp, "properties", None), dict):
+        fp.properties.pop("Reference", None)
+    else:
+        fp.properties = [
+            p for p in fp.properties if getattr(p, "key", None) != "Reference"
+        ]
+    fp.graphicItems = [
+        g for g in fp.graphicItems if getattr(g, "type", None) != "reference"
+    ]
+    before = (fp.position.X, fp.position.Y)
+
+    new_infos = extract_parts(board)
+    assert not any(i.ref == "C4" for i in new_infos)
+    result = pack(to_parts(new_infos), time_limit_s=15.0)
+    moved = apply_placements(
+        board, new_infos, result.placements, result.board_height_nm
+    )
+
+    assert moved == len(new_infos)
+    assert before != (fp.position.X, fp.position.Y)
