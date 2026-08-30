@@ -75,50 +75,86 @@ def _line(x0, y0, x1, y1, *, stroke, width, cap="round", extra="") -> str:
     )
 
 
-def _text(x, y, content, *, size=0.9, fill=_TEXT, anchor="middle", weight="400") -> str:
+def _text(
+    x, y, content, *, size=0.9, fill=_TEXT, anchor="middle", weight="400",
+    opacity=1.0,
+) -> str:
     return (
         f'<text x="{_fmt(x)}" y="{_fmt(y)}" font-size="{_fmt(size)}" '
         f'fill="{fill}" text-anchor="{anchor}" font-weight="{weight}" '
+        f'opacity="{_fmt(opacity)}" '
         f'font-family="ui-monospace, SFMono-Regular, Menlo, monospace">'
         f"{escape(content)}</text>"
     )
 
 
-def _slider_svg(level: Effort, x: float, y: float) -> str:
+def _slider_svg(level: Effort, x: float, y: float, scale: float = 1.0) -> str:
     """The thinking slider, drawn where the picture can carry it too."""
     order = [Effort.QUICK, Effort.STANDARD, Effort.DEEP]
-    span = 12.0
+    span = 12.0 * scale
     out = [
         f'<line x1="{_fmt(x)}" y1="{_fmt(y)}" x2="{_fmt(x + span)}" y2="{_fmt(y)}" '
-        f'stroke="{_COURTYARD}" stroke-width="0.25" stroke-linecap="round"/>'
+        f'stroke="{_COURTYARD}" stroke-width="{_fmt(0.25 * scale)}" '
+        f'stroke-linecap="round"/>'
     ]
     for index, lvl in enumerate(order):
         cx = x + span * index / (len(order) - 1)
         here = lvl is level
         out.append(
-            f'<circle cx="{_fmt(cx)}" cy="{_fmt(y)}" r="{"0.85" if here else "0.5"}" '
+            f'<circle cx="{_fmt(cx)}" cy="{_fmt(y)}" '
+            f'r="{_fmt((0.85 if here else 0.5) * scale)}" '
             f'fill="{"#7ee2a8" if here else _SUBSTRATE}" stroke="{_COURTYARD}" '
-            f'stroke-width="0.18"/>'
+            f'stroke-width="{_fmt(0.18 * scale)}"/>'
         )
         out.append(
-            _text(cx, y + 2.2, lvl.value, size=0.85,
+            _text(cx, y + 2.2 * scale, lvl.value, size=0.85 * scale,
                   fill=_TEXT if here else _COURTYARD,
                   weight="600" if here else "400")
         )
     return "".join(out)
 
 
-def _badge(finding: Finding, x: float, y: float) -> str:
+def _badge(finding: Finding, x: float, y: float, scale: float) -> str:
     colour = SEVERITY_COLOUR[finding.severity]
     proven = finding.origin is Origin.PROVEN
     fill = colour if proven else _SUBSTRATE
     text_fill = "#10171a" if proven else colour
-    dash = "" if proven else ' stroke-dasharray="0.5 0.35"'
-    return (
-        f'<circle cx="{_fmt(x)}" cy="{_fmt(y)}" r="1.35" fill="{fill}" '
-        f'stroke="{colour}" stroke-width="0.28"{dash}/>'
-        + _text(x, y + 0.42, finding.id, size=1.15, fill=text_fill, weight="700")
+    dash = (
+        ""
+        if proven
+        else f' stroke-dasharray="{_fmt(0.5 * scale)} {_fmt(0.35 * scale)}"'
     )
+    return (
+        f'<circle cx="{_fmt(x)}" cy="{_fmt(y)}" r="{_fmt(1.35 * scale)}" '
+        f'fill="{fill}" stroke="{colour}" stroke-width="{_fmt(0.28 * scale)}"'
+        f"{dash}/>"
+        + _text(x, y + 0.42 * scale, finding.id, size=1.15 * scale, fill=text_fill,
+                weight="700")
+    )
+
+
+def _free_spot(
+    x: float, y: float, step: float, taken: list[tuple[float, float]]
+) -> tuple[float, float]:
+    """Nudge a badge off its neighbours.
+
+    Findings cluster -- three problems around one capacitor is normal -- and
+    stacked badges hide both the board and each other. The badge stays near
+    the thing it marks; only enough offset is applied to keep its number
+    readable.
+    """
+    offsets = [(0.0, 0.0)]
+    for ring in (1, 2, 3):
+        for dx, dy in ((1, 0), (0, -1), (1, -1), (-1, 0), (0, 1),
+                       (-1, -1), (1, 1), (-1, 1)):
+            offsets.append((dx * ring, dy * ring))
+    for dx, dy in offsets:
+        cx, cy = x + dx * step, y + dy * step
+        if all(
+            (cx - px) ** 2 + (cy - py) ** 2 >= (step * 0.9) ** 2 for px, py in taken
+        ):
+            return cx, cy
+    return x, y
 
 
 def render_svg(
@@ -127,13 +163,22 @@ def render_svg(
     """One self-contained SVG: the board, then every located finding on it."""
     board: AuditBoard = result.board
     extent = board.extent
-    pad_mm = 6.0
-    legend_mm = 16.0 if show_legend else 0.0
+    # Marker geometry is expressed for a 60 mm board and scaled from there, so
+    # a badge is about the same fraction of a 20 mm board as of a 200 mm one.
+    # Fixed millimetre markers swamp a small board and vanish on a large one.
+    span_mm = max(_mm(extent.width_nm), _mm(extent.height_nm), 1.0)
+    scale = max(0.35, min(2.0, span_mm / 60.0))
+    pad_mm = 6.0 * scale
+    legend_mm = 16.0 * scale if show_legend else 0.0
 
     x0 = _mm(extent.x0) - pad_mm
     y0 = _mm(extent.y0) - pad_mm
     w = _mm(extent.width_nm) + 2 * pad_mm
     h = _mm(extent.height_nm) + 2 * pad_mm + legend_mm
+
+    # A vector image still needs sensible intrinsic pixels: a 19 mm board at a
+    # fixed mm-to-pixel ratio opens as a postage stamp.
+    px_per_mm = max(px_per_mm, 760.0 / w)
 
     out: list[str] = []
     out.append(
@@ -187,21 +232,25 @@ def render_svg(
             fill = _PAD_BOTTOM if pad.side == "B" and not pad.through_hole else _PAD
             out.append(_rect(pad.rect, fill=fill))
         cx, cy = part.centre
+        # Sized off the part, not the board: a designator that overflows its
+        # own courtyard is worse than no designator.
+        label = max(0.5, min(1.0, _mm(part.extent.width_nm) * 0.22))
         out.append(
-            _text(_mm(cx), _mm(cy) + 0.35, part.ref, size=1.1, fill=_SILK,
-                  weight="600")
+            _text(_mm(cx), _mm(cy) + label * 0.35, part.ref, size=label,
+                  fill=_SILK, weight="600", opacity=0.8)
         )
         out.append("</g>")
     out.append("</g>")
 
     # Findings last: they must never be drawn under the board.
     out.append('<g id="findings">')
+    taken: list[tuple[float, float]] = []
     for finding in result.visible():
         if not finding.located:
             continue
         colour = SEVERITY_COLOUR[finding.severity]
         proven = finding.origin is Origin.PROVEN
-        dash = "" if proven else "0.7 0.5"
+        dash = "" if proven else f"{_fmt(0.7 * scale)} {_fmt(0.5 * scale)}"
         out.append(
             f'<g class="finding sev-{finding.severity.value} '
             f'origin-{finding.origin.value}" data-finding="{finding.id}" '
@@ -209,57 +258,77 @@ def render_svg(
         )
         box = finding.extent
         if box is not None:
-            box = box.grown(int(0.35 * NM_PER_MM))
+            box = box.grown(int(0.3 * scale * NM_PER_MM))
             out.append(
-                _rect(box, stroke=colour, width=0.22, dash=dash,
-                      extra=' fill="none" opacity="0.95"')
+                _rect(box, stroke=colour, width=0.16 * scale, dash=dash,
+                      extra=' opacity="0.9"')
             )
-            bx, by = _mm(box.x1), _mm(box.y0)
+            anchor = (_mm(box.x1), _mm(box.y0))
         else:
             assert finding.point is not None
-            bx, by = _mm(finding.point[0]), _mm(finding.point[1])
+            anchor = (_mm(finding.point[0]), _mm(finding.point[1]))
             out.append(
-                f'<circle cx="{_fmt(bx)}" cy="{_fmt(by)}" r="1.8" fill="none" '
-                f'stroke="{colour}" stroke-width="0.22"'
+                f'<circle cx="{_fmt(anchor[0])}" cy="{_fmt(anchor[1])}" '
+                f'r="{_fmt(1.8 * scale)}" fill="none" stroke="{colour}" '
+                f'stroke-width="{_fmt(0.18 * scale)}"'
                 + (f' stroke-dasharray="{dash}"' if dash else "")
                 + "/>"
             )
+        bx, by = _free_spot(anchor[0], anchor[1], 2.9 * scale, taken)
+        taken.append((bx, by))
+        # A badge that had to move keeps a leader back to what it marks, so a
+        # number is never floating over an unrelated part.
+        if (bx, by) != anchor:
+            out.append(
+                f'<line x1="{_fmt(anchor[0])}" y1="{_fmt(anchor[1])}" '
+                f'x2="{_fmt(bx)}" y2="{_fmt(by)}" stroke="{colour}" '
+                f'stroke-width="{_fmt(0.12 * scale)}" opacity="0.7"/>'
+            )
         out.append(f"<title>{escape(finding.id + ': ' + finding.title)}</title>")
-        out.append(_badge(finding, bx, by))
+        out.append(_badge(finding, bx, by, scale))
         out.append("</g>")
     out.append("</g>")
 
     if show_legend:
-        ly = _mm(extent.y1) + pad_mm + 4.0
+        ly = _mm(extent.y1) + pad_mm + 4.0 * scale
         lx = _mm(extent.x0)
         counts = result.counts()
         out.append('<g id="legend">')
         out.append(
-            _text(lx, ly - 2.0, f"{result.source.name if result.source else 'board'}"
+            _text(lx, ly - 2.0 * scale,
+                  f"{result.source.name if result.source else 'board'}"
                   f"  ·  {counts['blocker']} blocker  {counts['marginal']} marginal"
-                  f"  {counts['note']} note", size=1.2, anchor="start", weight="600")
+                  f"  {counts['note']} note", size=1.2 * scale, anchor="start",
+                  weight="600")
         )
         cursor = lx
+        swatch = 1.4 * scale
         for severity, label in (
             (Severity.BLOCKER, "blocker"),
             (Severity.MARGINAL, "marginal"),
             (Severity.NOTE, "note"),
         ):
             out.append(
-                f'<rect x="{_fmt(cursor)}" y="{_fmt(ly)}" width="1.4" height="1.4" '
-                f'fill="{SEVERITY_COLOUR[severity]}"/>'
+                f'<rect x="{_fmt(cursor)}" y="{_fmt(ly)}" width="{_fmt(swatch)}" '
+                f'height="{_fmt(swatch)}" fill="{SEVERITY_COLOUR[severity]}"/>'
             )
-            out.append(_text(cursor + 2.0, ly + 1.2, label, size=1.0, anchor="start"))
-            cursor += 2.0 + len(label) * 0.75 + 3.0
+            out.append(
+                _text(cursor + 2.0 * scale, ly + 1.2 * scale, label,
+                      size=1.0 * scale, anchor="start")
+            )
+            cursor += (2.0 + len(label) * 0.75 + 3.0) * scale
         out.append(
-            f'<rect x="{_fmt(cursor)}" y="{_fmt(ly)}" width="1.4" height="1.4" '
-            f'fill="none" stroke="{_TEXT}" stroke-width="0.2"/>'
+            f'<rect x="{_fmt(cursor)}" y="{_fmt(ly)}" width="{_fmt(swatch)}" '
+            f'height="{_fmt(swatch)}" fill="none" stroke="{_TEXT}" '
+            f'stroke-width="{_fmt(0.2 * scale)}"/>'
         )
         out.append(
-            _text(cursor + 2.0, ly + 1.2, "solid = proven · dashed = suggested",
-                  size=1.0, anchor="start")
+            _text(cursor + 2.0 * scale, ly + 1.2 * scale,
+                  "solid = proven · dashed = suggested", size=1.0 * scale,
+                  anchor="start")
         )
-        out.append(_slider_svg(result.profile.level, lx + 1.0, ly + 6.0))
+        out.append(_slider_svg(result.profile.level, lx + 1.0 * scale,
+                               ly + 6.0 * scale, scale))
         out.append("</g>")
 
     out.append("</svg>")

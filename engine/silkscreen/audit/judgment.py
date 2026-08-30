@@ -208,10 +208,14 @@ def _parse_findings(
         # reviewer does: a finding pointing at an invented part is noise that
         # reads exactly like signal.
         refs = tuple(
-            r for r in (entry.get("refs") or []) if isinstance(r, str) and r in known_refs
+            r
+            for r in (entry.get("refs") or [])
+            if isinstance(r, str) and r in known_refs
         )
         nets = tuple(
-            n for n in (entry.get("nets") or []) if isinstance(n, str) and n in known_nets
+            n
+            for n in (entry.get("nets") or [])
+            if isinstance(n, str) and n in known_nets
         )
         if limit_refs is not None and not (set(refs) & limit_refs):
             continue
@@ -239,7 +243,9 @@ def _parse_findings(
     return out
 
 
-def _locate(board: AuditBoard, refs: tuple[str, ...], nets: tuple[str, ...]) -> Rect | None:
+def _locate(
+    board: AuditBoard, refs: tuple[str, ...], nets: tuple[str, ...]
+) -> Rect | None:
     """Put a model's finding on the board, or leave it honestly unplaced."""
     boxes: list[Rect] = []
     for ref in refs:

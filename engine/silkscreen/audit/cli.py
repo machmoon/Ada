@@ -15,7 +15,7 @@ import sys
 import webbrowser
 from pathlib import Path
 
-from . import Effort, PROFILES, review_board, slider, write_reports
+from . import PROFILES, Effort, review_board, slider, write_reports
 from .report import json_report, text_report
 
 __all__ = ["main"]

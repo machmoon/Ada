@@ -266,6 +266,24 @@ def _touching(a: AuditPad | Seg, b: Seg) -> bool:
     return seg_rect_distance_nm(b, a.rect) <= 0
 
 
+class _DisjointSet:
+    """Union-find, so an island count is a fact rather than a heuristic."""
+
+    def __init__(self, size: int) -> None:
+        self._parent = list(range(size))
+
+    def find(self, i: int) -> int:
+        while self._parent[i] != i:
+            self._parent[i] = self._parent[self._parent[i]]
+            i = self._parent[i]
+        return i
+
+    def union(self, i: int, j: int) -> None:
+        ri, rj = self.find(i), self.find(j)
+        if ri != rj:
+            self._parent[rj] = ri
+
+
 def _net_connectivity(board: AuditBoard, profile: EffortProfile) -> list[Finding]:
     """Union-find over pads, tracks and vias, one net at a time.
 
@@ -331,43 +349,28 @@ def _net_connectivity(board: AuditBoard, profile: EffortProfile) -> list[Finding
         # another track merges their sets. A via merges nothing on its own --
         # it is a layer change on copper that must already reach it.
         nodes: list = list(pads) + list(tracks)
-        parent = list(range(len(nodes)))
-
-        def find(i: int) -> int:
-            while parent[i] != i:
-                parent[i] = parent[parent[i]]
-                i = parent[i]
-            return i
-
-        def union(i: int, j: int) -> None:
-            ri, rj = find(i), find(j)
-            if ri != rj:
-                parent[rj] = ri
-
+        sets = _DisjointSet(len(nodes))
         for ti in range(len(pads), len(nodes)):
             track = nodes[ti]
             for pi, pad in enumerate(pads):
                 if _touching(pad, track):
-                    union(pi, ti)
+                    sets.union(pi, ti)
             for tj in range(ti + 1, len(nodes)):
                 if _touching(nodes[tj], track):
-                    union(ti, tj)
+                    sets.union(ti, tj)
         for vx, vy, size, _net in vias:
+            box = Rect(vx - size // 2, vy - size // 2, vx + size // 2, vy + size // 2)
             hit = [
                 i
                 for i in range(len(pads), len(nodes))
-                if seg_rect_distance_nm(
-                    nodes[i], Rect(vx - size // 2, vy - size // 2,
-                                   vx + size // 2, vy + size // 2)
-                )
-                <= 0
+                if seg_rect_distance_nm(nodes[i], box) <= 0
             ]
             for other in hit[1:]:
-                union(hit[0], other)
+                sets.union(hit[0], other)
 
         islands: dict[int, list[int]] = {}
         for pi in range(len(pads)):
-            islands.setdefault(find(pi), []).append(pi)
+            islands.setdefault(sets.find(pi), []).append(pi)
         if len(islands) > 1:
             groups = [
                 ", ".join(pads[i].name for i in sorted(members))
