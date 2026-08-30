@@ -131,7 +131,7 @@ placement diagram, review, and final `.kicad_pcb`. It still does not return the 
 
 ---
 
-## Do I need KiCad?
+## How you are meant to run this
 
 **Not to run Silkscreen. Yes, strongly recommended, to do anything with what it makes.**
 
@@ -145,7 +145,7 @@ work you do in KiCad. Install it unless you have a specific reason not to.
 |---|---|---|
 | Generate a schematic and a routed board from a prompt | ✅ | ✅ |
 | Run the test suite | ✅ | ✅ |
-| Deploy the service, use the MCP server | ✅ | ✅ |
+| Deploy the service, use the MCP server or the Slack bot | ✅ | ✅ |
 | **See the schematic and the board** | ❌ | ✅ |
 | **Finish the nets the router left unrouted** | ❌ | ✅ |
 | **Run DRC and electrical rules check** | ❌ | ✅ |
@@ -176,6 +176,7 @@ Platform-by-platform commands are in [docs/install.md](docs/install.md#kicad-opt
 | `mcp/` — MCP server over stdio | **Working** · 43 tests |
 | `audit/` — optional visual design review | **Working** · 52 tests |
 | `service/` — Cloud Run + Firestore cache | **Working** · 143 tests · not deployed anywhere yet; no live URL |
+| `slackbot/` — Slack bot over the pipeline | **Working** · untested against a live workspace |
 | `frontend/` — Svelte review UI, served by the service | **Working** · persistent orchestrator chat, expandable traces, session JSON, review, schematic, placement and board tabs |
 | `engine/silkscreen/placement/` — verifier-grounded repair and company profiles | **Working** · deterministic and Gemini policies; experimental providers are opt-in |
 | `constraints.py` — approved build contract and post-route receipt | **Working** · opt-in, fail-closed, and deterministically tested |
@@ -563,7 +564,69 @@ and notices local `.env` edits that require a backend restart. The response cont
 variable names and status messages only; it never returns configuration values or
 credentials. These checks do not make paid generation calls.
 
+### In Slack
+
+`slackbot/` puts the pipeline in a hardware team's channel. Mention the bot with
+what you want built and it replies **in a thread under your message** — a live
+stage list, the review, a rendered preview of the placement, and the emitted
+`.kicad_pcb` — so the whole team can read the run later, not just whoever asked.
+
+```
+@silkscreen design a 3.3V buck converter from 12V --datasheet TPS62840=https://…
+@silkscreen place an stm32f103 breakout      # skip the review: faster and cheaper
+@silkscreen review                           # re-run the critic on this thread's run
+@silkscreen order 25                         # prepare a fab order (never submits one)
+@silkscreen help
+```
+
+`order` **prepares** a fabrication order and stops: board size, stackup, the files
+the run produced, any blocking findings from the review, and what a fabricator still
+needs. It posts that draft as a message and a JSON attachment. It does not contact a
+vendor, submit anything, or touch a payment method — none of that exists in this
+codebase, and a test enforces it by import. A human places the order.
+
+**Running it:**
+
+```bash
+./.venv/bin/pip install -e ".[dev,agents,slack]"
+export SLACK_BOT_TOKEN=xoxb-… SLACK_SIGNING_SECRET=… GOOGLE_API_KEY=…
+python -m slackbot                      # POST /slack/events on :3000
+```
+
+Slack has to reach that port, so in development put a tunnel in front of it
+(`ngrok http 3000` or equivalent) and give Slack the public URL.
+
+**Creating the app** (once, in your workspace, at <https://api.slack.com/apps>):
+
+1. **Create New App → From scratch**, pick your workspace.
+2. **OAuth & Permissions → Bot Token Scopes**: `app_mentions:read`, `chat:write`,
+   `files:write`, `reactions:write`. Add `commands` if you want the slash command.
+3. **Install to Workspace**, then copy the **Bot User OAuth Token** (`xoxb-…`) into
+   `SLACK_BOT_TOKEN`.
+4. **Basic Information → Signing Secret** goes into `SLACK_SIGNING_SECRET`. Every
+   request is HMAC-verified against it before it is parsed, and requests older than
+   five minutes are refused, so a captured one cannot be replayed.
+5. **Event Subscriptions → Enable**, request URL `https://your-host/slack/events`.
+   Slack verifies the URL with a challenge the bot answers automatically. Under
+   **Subscribe to bot events** add `app_mention`.
+6. Optionally **Slash Commands → Create**: `/silkscreen`, request URL
+   `https://your-host/slack/commands`.
+7. Invite the bot to the channel: `/invite @silkscreen`.
+
+Set `SILKSCREEN_SLACK_CHANNELS` to a comma-separated list of channel IDs to confine
+runs to the channels that are paying for them; leave it unset to allow any channel
+the bot is in. `SILKSCREEN_SLACK_MAX_RUNS` (default 2) caps concurrent runs — a
+design run costs model calls and a CP-SAT solve, so six people asking at once should
+not start six.
+
+Runs are remembered per thread **in memory**, so `review` and `order` work on the
+run above them and a restart forgets them; the bot says so rather than acting on the
+wrong board. Artifacts are also written under `SILKSCREEN_SLACK_WORKDIR`
+(default `slack-runs/`).
+
 ### Running the web UI
+
+> Secondary and not well supported — see [How you are meant to run this](#how-you-are-meant-to-run-this).
 
 The UI is a Svelte SPA in `frontend/`, and it needs Node 22 or newer
 (`node --version`). In development it runs on Vite's dev server, which proxies

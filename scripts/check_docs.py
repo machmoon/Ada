@@ -60,6 +60,16 @@ MODULES: dict[str, tuple[str, ...]] = {
     "mcp/": ("test_mcp.py",),
     "audit/": ("test_audit.py",),
     "service/": ("test_app.py", "test_cache.py"),
+    "slackbot/": (
+        "test_commands.py",
+        "test_slack.py",
+        "test_render.py",
+        "test_blocks.py",
+        "test_order.py",
+        "test_config.py",
+        "test_runner.py",
+        "test_http.py",
+    ),
 }
 
 

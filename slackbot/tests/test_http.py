@@ -1,4 +1,9 @@
-"""The HTTP surface: signatures, acknowledgement, routing, and deduplication."""
+"""The HTTP surface: signatures, acknowledgement, routing, and deduplication.
+
+Named test_http rather than test_app because ``scripts/check_docs.py`` keys its
+per-module test counts by file *basename*, and a second ``test_app.py`` would be
+silently added to the service's count.
+"""
 
 from __future__ import annotations
 
