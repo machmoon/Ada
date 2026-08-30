@@ -56,11 +56,19 @@ FEATURES
  ----- Grounding toggle on the intent form             [DONE]        sends "ground" only when a datasheet is given
  ----- Download the emitted .kicad_pcb                 [DONE]        from the board well and the review results
  ----- Voice: spoken intent, findings read aloud       [NOT BUILT]   the last phase, by instruction; Whisper
+ 10  Service error taxonomy                            [OPEN]
+ ----- Split request errors from internal ValueErrors  [OPEN]        PR #5 review: an internal ValueError from board
+                                                                     generation/packing surfaces as a 400 with its raw
+                                                                     message instead of the sanitized 500 + error_id.
+                                                                     Fix is a dedicated RequestError type raised only
+                                                                     for field validation; do_POST catches that alone
+                                                                     and lets ValueError fall to the 500 path.
 
 OPEN WORK, SUMMARISED
 ---------------------
 Everything actionable reduces to: feature 2 in full (parallel reads, an SDK
 thread-pool task), feature 6 in full (confirmation gates), the deploy and
-smoke check under 7, the ops polish under 8, and voice under 9. The board
-well shipped, so voice is all that is left of 9 and stays last. The [IDEA]
-rows under 4 and 5 are ideas, not commitments.
+smoke check under 7, the ops polish under 8, voice under 9, and the error
+taxonomy under 10 (from PR #5 review). The board well shipped, so voice is
+all that is left of 9 and stays last. The [IDEA] rows under 4 and 5 are
+ideas, not commitments.
