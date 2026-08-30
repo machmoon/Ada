@@ -62,6 +62,8 @@ FEATURES
  ----- Findings cross-highlight, review <-> board      [DONE]        a selected finding lights up its parts
  ----- Grounding toggle on the intent form             [DONE]        sends "ground" only when a datasheet is given
  ----- Download the emitted .kicad_pcb                 [DONE]        from the board well and the review results
+ ----- In-app debug console + log export               [DONE]        console/window capture; text + NDJSON
+ ----- data-testid sweep across every component        [DONE]        stable hooks for e2e and agent QA
  ----- Voice: spoken intent, findings read aloud       [NOT BUILT]   the last phase, by instruction; Whisper
  10  Service error taxonomy                            [OPEN]
  ----- Split request errors from internal ValueErrors  [OPEN]        PR #5 review: an internal ValueError from board

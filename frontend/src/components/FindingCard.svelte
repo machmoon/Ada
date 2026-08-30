@@ -23,25 +23,25 @@
   const selectable = $derived(Boolean(onselect) && parts.length > 0)
 </script>
 
-<article class="card" data-sev={info.key} class:selected>
+<article class="card" data-testid="finding-card" data-sev={info.key} data-selected={selected} data-parts={parts.join(' ')} class:selected>
   <!-- The button sits inside the heading so the card keeps its outline level
        while the chips and title become one selection target. -->
   <h3 class="title">
     {#if selectable}
-      <button type="button" class="head" aria-pressed={selected} onclick={onselect}>
+      <button type="button" class="head" data-testid="finding-card-head" data-interactive="true" aria-pressed={selected} onclick={onselect}>
         <span class="chips">
           <SeverityChip severity={finding.severity} />
-          {#if scope}<span class="mono scope">{scope}</span>{/if}
+          {#if scope}<span class="mono scope" data-testid="finding-card-scope">{scope}</span>{/if}
         </span>
-        <span class="text">{finding.title}</span>
+        <span class="text" data-testid="finding-card-title">{finding.title}</span>
       </button>
     {:else}
-      <span class="head static">
+      <span class="head static" data-testid="finding-card-head" data-interactive="false">
         <span class="chips">
           <SeverityChip severity={finding.severity} />
-          {#if scope}<span class="mono scope">{scope}</span>{/if}
+          {#if scope}<span class="mono scope" data-testid="finding-card-scope">{scope}</span>{/if}
         </span>
-        <span class="text">{finding.title}</span>
+        <span class="text" data-testid="finding-card-title">{finding.title}</span>
       </span>
     {/if}
   </h3>
@@ -49,16 +49,16 @@
   {#if finding.detail}<p class="detail">{finding.detail}</p>{/if}
 
   {#if citation || fix || (selectable && boardEnabled)}
-    <div class="footer">
+    <div class="footer" data-testid="finding-card-footer">
       <Citation {citation} />
       {#if selectable && boardEnabled}
-        <button type="button" class="board" onclick={onshowboard}>Show on board</button>
+        <button type="button" class="board" data-testid="finding-card-show-board" onclick={onshowboard}>Show on board</button>
       {/if}
       <div class="spacer"></div>
       {#if fix}
         <!-- Secondary style on purpose: nothing in the app applies a fix, so
              this must not read as the primary action. -->
-        <button type="button" class="fix" title="Suggested fix — nothing is applied automatically">{fix}</button>
+        <button type="button" class="fix" data-testid="finding-card-fix" title="Suggested fix — nothing is applied automatically">{fix}</button>
       {/if}
     </div>
   {/if}

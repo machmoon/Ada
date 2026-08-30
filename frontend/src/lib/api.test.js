@@ -1,4 +1,5 @@
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { get } from 'svelte/store'
 import {
   ApiError,
   MAX_REQUEST_BYTES,
@@ -9,6 +10,7 @@ import {
   normalizeRequest,
   requestBytes,
 } from './api.js'
+import { clearLog, log } from './log.js'
 
 /** A fetch Response is duck-typed here: generate() only reads ok, status and json(). */
 function jsonResponse(status, body) {
@@ -45,6 +47,17 @@ function stubFetchRejecting(error) {
 
 /** The minimum a successful response needs; every field is optional to the normalizer. */
 const OK_BODY = { status: 'feasible', board_mm: [20, 30], parts: [{ ref: 'U1' }] }
+
+// The log buffer is a module singleton and appends are batched through a
+// microtask, so a read waits one turn before looking.
+async function recorded(event) {
+  await Promise.resolve()
+  return get(log).entries.filter((entry) => entry.event === event)
+}
+
+beforeEach(() => {
+  clearLog()
+})
 
 afterEach(() => {
   vi.unstubAllGlobals()
@@ -588,5 +601,97 @@ describe('generate: transport failures', () => {
     await expect(generate({ intent: 'x' })).rejects.toThrow()
 
     expect(vi.getTimerCount()).toBe(0)
+  })
+})
+
+describe('generate: what it writes to the debug log', () => {
+  it('records a response that arrived and parsed', async () => {
+    stubFetch(jsonResponse(200, OK_BODY))
+
+    await generate({ intent: 'x' })
+
+    const [entry] = await recorded('api.response')
+    expect(entry).toMatchObject({ level: 'info', src: 'app' })
+    expect(entry.data).toMatchObject({ status: 200, ok: true, parsed: true })
+    expect(typeof entry.data.ms).toBe('number')
+    expect(entry.data.ms).toBeGreaterThanOrEqual(0)
+  })
+
+  it('records the response before throwing, so a failed run still says what came back', async () => {
+    stubFetch(jsonResponse(500, { error: 'unhandled', error_id: 'a1b2c3d4' }))
+
+    await expect(generate({ intent: 'x' })).rejects.toThrow()
+
+    const [entry] = await recorded('api.response')
+    expect(entry.level).toBe('warn')
+    expect(entry.data).toMatchObject({ status: 500, ok: false, parsed: true })
+  })
+
+  it('reports a body that would not parse, which is otherwise invisible', async () => {
+    stubFetch(unparseableResponse(502))
+
+    await expect(generate({ intent: 'x' })).rejects.toThrow()
+
+    const [entry] = await recorded('api.response')
+    expect(entry.data).toMatchObject({ status: 502, ok: false, parsed: false })
+  })
+
+  it('reports a 200 whose body would not parse, on the path that throws first', async () => {
+    stubFetch(unparseableResponse(200))
+
+    await expect(generate({ intent: 'x' })).rejects.toThrow()
+
+    const [entry] = await recorded('api.response')
+    // A 200 the client could not read is a failed run, whatever the status said.
+    expect(entry.level).toBe('warn')
+    expect(entry.data).toMatchObject({ status: 200, ok: true, parsed: false })
+    expect(typeof entry.data.ms).toBe('number')
+  })
+
+  it('records a transport failure that no abort of ours caused', async () => {
+    stubFetchRejecting(new TypeError('Failed to fetch'))
+
+    await expect(generate({ intent: 'x' })).rejects.toThrow()
+
+    const [entry] = await recorded('api.failed')
+    expect(entry.level).toBe('error')
+    expect(entry.data).toMatchObject({ aborted: false })
+    expect(typeof entry.data.ms).toBe('number')
+    expect(await recorded('api.response')).toEqual([])
+  })
+
+  it('records the budget timer firing as an abort, which is a different bug', async () => {
+    vi.useFakeTimers()
+    const fetch = vi.fn(
+      (_url, init) =>
+        new Promise((_resolve, reject) => {
+          init.signal.addEventListener('abort', () => {
+            reject(new DOMException('This operation was aborted', 'AbortError'))
+          })
+        }),
+    )
+    vi.stubGlobal('fetch', fetch)
+
+    const pending = generate({ intent: 'x' })
+    const assertion = expect(pending).rejects.toThrow()
+    await vi.advanceTimersByTimeAsync(REQUEST_TIMEOUT_MS)
+    await assertion
+
+    const [entry] = await recorded('api.failed')
+    expect(entry.data.aborted).toBe(true)
+    expect(typeof entry.data.ms).toBe('number')
+  })
+
+  it('records the pre-flight refusal, with no response to report', async () => {
+    const fetch = stubFetch(jsonResponse(200, OK_BODY))
+    const request = { intent: 'x'.repeat(MAX_REQUEST_BYTES) }
+
+    await expect(generate(request)).rejects.toThrow()
+
+    const [entry] = await recorded('api.too-large')
+    expect(entry.level).toBe('warn')
+    expect(entry.data).toEqual({ bytes: requestBytes(request), limit: MAX_REQUEST_BYTES })
+    expect(fetch).not.toHaveBeenCalled()
+    expect(await recorded('api.response')).toEqual([])
   })
 })

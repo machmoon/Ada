@@ -53,7 +53,7 @@ that consumes the file. Install it if you are a person who wants to see a board.
 | `agents/resilience.py` — provider failover | **Working** · 14 tests |
 | `mcp/` — MCP server over stdio | **Working** · 23 tests |
 | `service/` — Cloud Run + Firestore cache | **Working** · 70 tests |
-| `frontend/` — Svelte review UI, served by the service | **Working** · review and board tabs |
+| `frontend/` — Svelte review UI, served by the service | **Working** · review and board tabs, with an in-app debug console for log export |
 | Overlay UI, guided cursor | Not built (mockups only) |
 
 ---
@@ -476,8 +476,8 @@ CI runs two more jobs that need Node 22 and Docker rather than Python, so they
 are not in the list above:
 
 ```bash
-cd web && npm ci && npm test && npm run build   # the `web` job
-docker build .                                  # the `docker` job
+cd frontend && npm ci && npm test && npm run build   # the `web` job
+docker build .                                      # the `docker` job
 ```
 
 ### Expected output

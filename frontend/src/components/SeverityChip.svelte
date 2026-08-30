@@ -5,7 +5,7 @@
   const info = $derived(severityInfo(severity))
 </script>
 
-<span class="mono chip" data-sev={info.key}>{info.label}</span>
+<span class="mono chip" data-testid="severity-chip" data-sev={info.key}>{info.label}</span>
 
 <style>
   .chip {

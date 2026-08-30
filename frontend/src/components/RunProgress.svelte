@@ -15,22 +15,22 @@
   const budget = $derived($run.request ? $run.request.time_limit_s : null)
 </script>
 
-<section class="progress">
-  <h1 class="title">Working</h1>
-  <p class="lead">
+<section class="progress" data-testid="run-progress">
+  <h1 class="title" data-testid="run-progress-title">Working</h1>
+  <p class="lead" data-testid="run-progress-lead">
     One request, one answer — the service reports nothing until the whole pipeline finishes,
     so these stages are what is queued, not a live trace.
   </p>
 
-  <ol class="stages">
+  <ol class="stages" data-testid="run-progress-stages">
     {#each STAGES as stage (stage)}
-      <li class="stage"><span class="box" aria-hidden="true"></span>{stage}</li>
+      <li class="stage" data-testid="run-progress-stage" data-stage={stage}><span class="box" aria-hidden="true"></span>{stage}</li>
     {/each}
   </ol>
 
-  <div class="clock mono">
+  <div class="clock mono" data-testid="run-progress-clock">
     {formatDuration($elapsed / 1000)}
-    {#if budget}<span class="budget">· {budget} s solver budget</span>{/if}
+    {#if budget}<span class="budget" data-testid="run-progress-budget">· {budget} s solver budget</span>{/if}
   </div>
 </section>
 

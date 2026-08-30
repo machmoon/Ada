@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { get } from 'svelte/store'
+import { clearLog, log } from './log.js'
 import { elapsed, failRun, finishRun, resetRun, run, startRun } from './run.js'
 
 // The store is a module singleton, so the idle value has to be captured at import
@@ -15,6 +16,7 @@ function watchElapsed() {
 
 beforeEach(() => {
   run.set(IDLE)
+  clearLog()
 })
 
 afterEach(() => {
@@ -29,7 +31,194 @@ describe('the run store', () => {
       result: null,
       error: null,
       startedAt: 0,
+      id: '',
     })
+  })
+})
+
+// Every entry the store writes goes through log.js's buffer, whose appends are
+// batched onto a microtask; nothing is readable until that queue drains.
+async function flushed() {
+  await Promise.resolve()
+  return get(log).entries
+}
+
+function lastEvent(entries, event) {
+  return entries.filter((entry) => entry.event === event).pop()
+}
+
+describe('what the run store logs', () => {
+  // Run ids come from a module-level counter that no API resets, so this is the
+  // one test that can name an id: it is the first in the file to start a run.
+  it('records the request shape under run.start, and mints r1 for the first run', async () => {
+    startRun({
+      intent: 'a 3v3 regulator',
+      datasheets: { U1: 'https://example.com/u1.pdf' },
+      time_limit_s: 20,
+      review: true,
+      ground: true,
+    })
+
+    const entry = lastEvent(await flushed(), 'run.start')
+
+    expect(entry.level).toBe('info')
+    expect(entry.data).toEqual({
+      id: 'r1',
+      intent: 'a 3v3 regulator',
+      intent_chars: 15,
+      datasheets: 1,
+      time_limit_s: 20,
+      review: true,
+      ground: true,
+    })
+    expect(get(run).id).toBe('r1')
+  })
+
+  it('reads an absent ground flag as not grounded, the way the service does', async () => {
+    startRun({ intent: 'x', datasheets: {}, time_limit_s: 5, review: false })
+
+    expect(lastEvent(await flushed(), 'run.start').data).toMatchObject({
+      review: false,
+      ground: false,
+    })
+  })
+
+  it('records the fields no other surface shows under run.done', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(1_700_000_000_000)
+    startRun({ intent: 'x' })
+    vi.setSystemTime(1_700_000_004_000)
+
+    finishRun({
+      status: 'feasible',
+      served_by: 'gemini-3.7-flash',
+      cache: { hit: ['STM32F103'], read: [], unusable: [] },
+      repair_rounds: 2,
+      duration_s: 3.5,
+      parts: [{ ref: 'U1' }, { ref: 'C1' }],
+      nets: ['vcc'],
+      findings: [{ title: 'a' }],
+      blockers: [],
+      warnings: ['no decoupling on U1'],
+      wirelength_mm: 41.2,
+    })
+
+    const entry = lastEvent(await flushed(), 'run.done')
+
+    expect(entry.level).toBe('info')
+    expect(entry.data).toMatchObject({
+      id: get(run).id,
+      client_ms: 4000,
+      server_s: 3.5,
+      overhead_ms: 500,
+      status: 'feasible',
+      served_by: 'gemini-3.7-flash',
+      cache: { hit: ['STM32F103'], read: [], unusable: [] },
+      repair_rounds: 2,
+      parts: 2,
+      nets: 1,
+      findings: 1,
+      blockers: 0,
+      warnings: 1,
+      first_warning: 'no decoupling on U1',
+      wirelength_mm: 41.2,
+    })
+  })
+
+  it('warns rather than informs when the placer fell back', async () => {
+    startRun({ intent: 'x' })
+    finishRun({ status: 'fallback', blockers: [] })
+
+    expect(lastEvent(await flushed(), 'run.done').level).toBe('warn')
+  })
+
+  it('warns when the review found a blocker', async () => {
+    startRun({ intent: 'x' })
+    finishRun({ status: 'feasible', blockers: ['U1 has no decoupling capacitor'] })
+
+    const entry = lastEvent(await flushed(), 'run.done')
+
+    expect(entry.level).toBe('warn')
+    expect(entry.data.blockers).toBe(1)
+  })
+
+  it('keeps the done entry small when the response carries a 200 KB board', async () => {
+    const kicad_pcb = 'x'.repeat(200_000)
+    startRun({ intent: 'x' })
+
+    finishRun({ status: 'feasible', kicad_pcb })
+
+    const entry = lastEvent(await flushed(), 'run.done')
+
+    expect(entry.data).toMatchObject({ has_pcb: true, pcb_chars: 200_000 })
+    expect(JSON.stringify(entry)).not.toContain('xxxxx')
+    expect(JSON.stringify(entry).length).toBeLessThan(1024)
+  })
+
+  it('reports no board when the response carries none', async () => {
+    startRun({ intent: 'x' })
+    finishRun({ status: 'feasible' })
+
+    expect(lastEvent(await flushed(), 'run.done').data).toMatchObject({
+      has_pcb: false,
+      pcb_chars: 0,
+    })
+  })
+
+  it('records the kind, status and error id under run.error', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(1_700_000_000_000)
+    startRun({ intent: 'x' })
+    vi.setSystemTime(1_700_000_000_250)
+
+    failRun({ name: 'ApiError', kind: 'internal', status: 500, errorId: 'e-42', message: 'boom' })
+
+    const entry = lastEvent(await flushed(), 'run.error')
+
+    expect(entry.level).toBe('error')
+    expect(entry.data).toEqual({
+      id: get(run).id,
+      client_ms: 250,
+      kind: 'internal',
+      status: 500,
+      errorId: 'e-42',
+      message: 'boom',
+      suspect_engine_bug: false,
+    })
+  })
+
+  it('names known issue 10 when a 400 mentions no request field', async () => {
+    startRun({ intent: 'x' })
+
+    failRun({ kind: 'validation', status: 400, message: 'not enough values to unpack' })
+
+    const entry = lastEvent(await flushed(), 'run.error')
+
+    expect(entry.data.suspect_engine_bug).toBe(true)
+    expect(entry.msg).toContain('known issue 10')
+  })
+
+  it('leaves a plain field-validation 400 unflagged', async () => {
+    startRun({ intent: 'x' })
+
+    failRun({ kind: 'validation', status: 400, message: 'intent must be a string' })
+
+    const entry = lastEvent(await flushed(), 'run.error')
+
+    expect(entry.data.suspect_engine_bug).toBe(false)
+    expect(entry.msg).not.toContain('known issue 10')
+  })
+
+  it('records run.reset at debug level, naming the run it cleared', async () => {
+    startRun({ intent: 'x' })
+    const { id } = get(run)
+
+    resetRun()
+
+    const entry = lastEvent(await flushed(), 'run.reset')
+
+    expect(entry.level).toBe('debug')
+    expect(entry.data).toEqual({ id })
   })
 })
 

@@ -1,3 +1,7 @@
+// First line on purpose: imports are hoisted and evaluated in order, so the
+// console and window hooks have to install before anything else can log.
+import './lib/capture.js'
+
 import { mount } from 'svelte'
 
 // Self-hosted so the demo survives bad wifi — no Google Fonts request.
