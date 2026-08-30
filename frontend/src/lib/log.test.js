@@ -10,6 +10,7 @@ import {
   MAX_TOTAL_BYTES,
   SOURCES,
   clearLog,
+  isExtensionNoise,
   log,
   logError,
   logEvent,
@@ -153,6 +154,75 @@ describe('record', () => {
     expect(() => record(null)).not.toThrow()
     expect(() => record(exploding)).not.toThrow()
     expect(() => record({ msg: 'x', data: circular })).not.toThrow()
+  })
+})
+
+describe('extension noise', () => {
+  const SCHEMES = ['chrome-extension://', 'moz-extension://', 'safari-web-extension://']
+
+  it('flags a capture whose message names any of the three schemes', async () => {
+    for (const scheme of SCHEMES) {
+      clearLog()
+      record({ src: 'console', level: 'warn', msg: `injected at ${scheme}abcdef/inpage.js:1:2` })
+
+      const [entry] = (await settled()).entries
+      expect(entry.ext).toBe(true)
+    }
+  })
+
+  it('flags a capture whose scheme is buried in the serialized data', async () => {
+    for (const scheme of SCHEMES) {
+      clearLog()
+      record({
+        src: 'window',
+        level: 'error',
+        event: 'window.unhandledrejection',
+        msg: 'Could not establish connection',
+        data: { reason: { stack: `at f (${scheme}nkbihfbeog/inpage.js:1:1)` } },
+      })
+
+      const [entry] = (await settled()).entries
+      expect(entry.ext).toBe(true)
+    }
+  })
+
+  it('never flags an app entry, whatever string it carries', async () => {
+    record({ src: 'app', event: 'ui.note', msg: 'blocked chrome-extension:// requests' })
+    record({ src: 'app', event: 'ui.note', msg: 'x', data: { url: 'moz-extension://a/b.js' } })
+
+    const { entries } = await settled()
+    expect(entries).toHaveLength(2)
+    for (const entry of entries) expect(entry.ext).toBe(false)
+  })
+
+  it('leaves an ordinary capture unflagged', async () => {
+    record({ src: 'console', level: 'info', msg: 'hello', data: { method: 'log', args: ['hello'] } })
+    record({ src: 'window', level: 'error', msg: 'TypeError at http://127.0.0.1:5173/src/App.js' })
+
+    const { entries } = await settled()
+    expect(entries).toHaveLength(2)
+    for (const entry of entries) expect(entry.ext).toBe(false)
+  })
+
+  it('decides once, at capture, and stores a plain boolean', async () => {
+    record({ src: 'console', level: 'warn', msg: 'chrome-extension://a/b.js said something' })
+
+    expect(typeof (await settled()).entries[0].ext).toBe('boolean')
+  })
+
+  it('reads a scheme anywhere in the string, not only at the start', () => {
+    expect(isExtensionNoise('console', 'at f (chrome-extension://a/b.js:1:1)')).toBe(true)
+    expect(isExtensionNoise('window', '', '{"u":"safari-web-extension://a"}')).toBe(true)
+  })
+
+  it('flags nothing from a source the page did not write', () => {
+    expect(isExtensionNoise('app', 'chrome-extension://a/b.js')).toBe(false)
+    expect(isExtensionNoise('', 'chrome-extension://a/b.js')).toBe(false)
+  })
+
+  it('survives a missing message or a missing serialization', () => {
+    expect(isExtensionNoise('console')).toBe(false)
+    expect(isExtensionNoise('console', null, undefined)).toBe(false)
   })
 })
 
@@ -832,6 +902,16 @@ describe('toText', () => {
   it('ends with a newline', () => {
     expect(toText([entryAt()], NOW).endsWith('\n')).toBe(true)
   })
+
+  // The drawer hides extension noise; the file someone pastes into an issue
+  // does not, and does not mention the flag either -- the text format is a
+  // fixed set of columns and `ext` is not one of them.
+  it('writes a flagged entry exactly as it writes any other', () => {
+    const entry = entryAt({ src: 'console', event: '', msg: 'noise' })
+
+    expect(toText([{ ...entry, ext: true }], NOW)).toBe(toText([entry], NOW))
+    expect(toText([{ ...entry, ext: true }], NOW)).toContain('noise')
+  })
 })
 
 describe('toNdjson', () => {
@@ -874,7 +954,17 @@ describe('toNdjson', () => {
     const [, entry] = parsedLines(toNdjson([entryAt()], NOW))
 
     expect('bytes' in entry).toBe(false)
-    expect(Object.keys(entry)).toEqual(['ts', 'level', 'src', 'event', 'msg', 'run', 'seq', 'data'])
+    expect(Object.keys(entry)).toEqual([
+      'ts',
+      'level',
+      'src',
+      'event',
+      'msg',
+      'run',
+      'seq',
+      'ext',
+      'data',
+    ])
   })
 
   it('carries a console line at info with the method that wrote it', () => {
@@ -902,6 +992,14 @@ describe('toNdjson', () => {
 
   it('writes just the meta record for an empty buffer', () => {
     expect(parsedLines(toNdjson([], NOW))).toHaveLength(1)
+  })
+
+  it('carries the extension flag, which the text format has no column for', () => {
+    const [, flagged] = parsedLines(toNdjson([entryAt({ ext: true })], NOW))
+    const [, plain] = parsedLines(toNdjson([entryAt()], NOW))
+
+    expect(flagged.ext).toBe(true)
+    expect(plain.ext).toBe(false)
   })
 
   it('ends with a newline, so the file appends cleanly', () => {

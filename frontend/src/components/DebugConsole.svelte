@@ -35,6 +35,7 @@
   const KEY_BURST_MS = 400
 
   let errorsOnly = $state(false)
+  let showExt = $state(false)
   let showAll = $state(false)
   let copyLabel = $state('Copy')
   let list = $state(null)
@@ -66,7 +67,12 @@
     ]),
   )
 
-  const shown = $derived(errorsOnly ? entries.filter((e) => e.level === 'error') : entries)
+  // The two filters compose. Extension noise is out of the way by default --
+  // an injected script warning about its own wallet is not about this board --
+  // and "errors only" narrows whatever is left of the buffer after that.
+  const visible = $derived(showExt ? entries : entries.filter((e) => !e.ext))
+  const extHidden = $derived(entries.length - visible.length)
+  const shown = $derived(errorsOnly ? visible.filter((e) => e.level === 'error') : visible)
   const rows = $derived(!showAll && shown.length > VISIBLE ? shown.slice(-VISIBLE) : shown)
   const hidden = $derived(shown.length - rows.length)
 
@@ -271,6 +277,11 @@
   <div class="toolbar" data-testid="debug-console-toolbar">
     <span class="lbl">Console</span>
     <span class="mono counts" data-testid="debug-console-counts">{counts}</span>
+    <!-- Says why the rows are fewer than the count beside them. Only when the
+         filter is actually holding something back. -->
+    {#if extHidden && !showExt}
+      <span class="mono ext" data-testid="debug-console-ext-hidden">· {extHidden} ext hidden</span>
+    {/if}
     <!-- Only shown when the buffer actually lost something: a standing
          "dropped 0" would read as a warning about nothing. -->
     {#if $log.dropped}
@@ -287,6 +298,14 @@
       onclick={() => (errorsOnly = !errorsOnly)}
       data-testid="debug-console-filter-errors"
     >Errors only</button>
+    <button
+      type="button"
+      class="btn"
+      class:on={showExt}
+      aria-pressed={showExt}
+      onclick={() => (showExt = !showExt)}
+      data-testid="debug-console-filter-ext"
+    >Show extensions</button>
     <button type="button" class="btn" onclick={copy} data-testid="debug-console-copy">
       {copyLabel}
     </button>
@@ -342,6 +361,8 @@
       <li class="empty" data-testid="debug-console-empty">
         {#if errorsOnly}
           No errors captured. Clear the filter to see every entry.
+        {:else if extHidden}
+          Only browser-extension output was captured. Show extensions to read it.
         {:else}
           Nothing captured yet. Console output, page errors, and run events appear here.
         {/if}
@@ -387,6 +408,8 @@
   }
   .counts { font-size: var(--fs-mono-sm); color: var(--ink-soft); }
   .dropped { font-size: var(--fs-mono-sm); color: var(--sev-marginal-fg); }
+  /* Hidden noise is not a warning, so it stays quieter than dropped. */
+  .ext { font-size: var(--fs-mono-sm); color: var(--ink-faint); }
   .spacer { flex-grow: 1; }
 
   /* The secondary button from ReviewResults, sized down to fit a 30 px bar. */
