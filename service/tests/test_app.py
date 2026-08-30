@@ -20,6 +20,13 @@ from silkscreen.units import to_mm
 from service.app import Handler, make_server
 from service.cache import MemoryFactStore
 
+try:
+    import google.adk  # noqa: F401
+
+    _HAS_ADK = True
+except ImportError:  # a base install has no google.adk; the ADK test skips
+    _HAS_ADK = False
+
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
 CIRCUIT = {
@@ -208,6 +215,56 @@ def test_generate_returns_a_board(server):
     assert body["kicad_pcb"].startswith("(kicad_pcb")
     assert [p["ref"] for p in body["parts"]] == ["U1", "C1", "C2"]
     assert body["board_mm"][0] > 0
+
+
+@pytest.mark.skipif(not _HAS_ADK, reason="the 'adk' extra is not installed")
+def test_the_adk_engine_answers_with_the_same_contract(monkeypatch, server):
+    """Which driver ran is an implementation detail; the response is not.
+
+    ``SILKSCREEN_ENGINE`` is read inside ``generate_pcb``, and the handler runs
+    in a thread of this process, so setting it here picks the driver for the
+    next request. Both halves are set, not just the second: an exported
+    ``SILKSCREEN_ENGINE`` would otherwise decide the baseline, and a developer
+    running the suite with the workflow already selected would be comparing
+    ADK against ADK and asserting nothing.
+
+    The counter is what proves the workflow ran at all. Every assertion below
+    holds trivially if both requests took the same driver, so the run is
+    observed directly rather than inferred from a response that is designed
+    not to distinguish them. The key set is compared against the SDK body
+    rather than against a literal list: the response is additive-only, and a
+    hand-written list would go stale the next time a field is added to it.
+    """
+    import silkscreen.agents.adk.runner as adk_runner
+
+    ran = []
+    workflow_driver = adk_runner.generate_pcb_adk
+
+    def counting(*args, **kwargs):
+        ran.append(1)
+        return workflow_driver(*args, **kwargs)
+
+    # ``generate_pcb`` does ``from .adk.runner import generate_pcb_adk`` inside
+    # the call, so the name is looked up on this module every time and patching
+    # the attribute here intercepts the dispatcher.
+    monkeypatch.setattr(adk_runner, "generate_pcb_adk", counting)
+
+    payload = {"intent": "a 3.3V regulator", "time_limit_s": 5}
+    monkeypatch.setenv("SILKSCREEN_ENGINE", "sdk")
+    sdk_status, sdk_body = post(server, payload)
+    assert ran == [], "the baseline request went through the ADK workflow"
+
+    monkeypatch.setenv("SILKSCREEN_ENGINE", "adk")
+    status, body = post(server, payload)
+    assert ran == [1], "the second request never reached the ADK workflow"
+
+    assert sdk_status == 200 and status == 200
+    assert set(body) == set(sdk_body)
+    assert body["kicad_pcb"].startswith("(kicad_pcb")
+    assert [p["ref"] for p in body["parts"]] == [p["ref"] for p in sdk_body["parts"]]
+    assert body["board_mm"] == sdk_body["board_mm"]
+    assert body["findings"] == sdk_body["findings"]
+    assert body["blockers"] == sdk_body["blockers"]
 
 
 def test_intent_is_required(server):
