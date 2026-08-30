@@ -69,6 +69,7 @@ MODULES: dict[str, tuple[str, ...]] = {
         "test_config.py",
         "test_runner.py",
         "test_http.py",
+        "test_end_to_end.py",
     ),
 }
 
