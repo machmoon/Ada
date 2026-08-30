@@ -29,11 +29,13 @@ from google.adk.sessions import InMemorySessionService
 
 from ...board import BoardResult
 from ...netlist import CircuitSpec
+from ...routing import RouteResult
 from ..datasheet import PartFacts
 from ..model import Model
 from ..pipeline import PipelineResult, _finish, _wire_events
 from ..propose import ProposalAttempt
 from ..review import Finding
+from ..stages import NO_ARTIFACTS, SchematicArtifacts
 
 __all__ = ["generate_pcb_adk"]
 
@@ -59,6 +61,9 @@ class _RunContext:
     max_repairs: int
     time_limit_s: float
     review: bool
+    route: bool
+    output: str | Path | None
+    emit_stages: bool
     emit: Callable[[dict[str, Any]], None]
     enter: Callable[[str], None]
     propose_on_event: Callable[[dict[str, Any]], None] | None
@@ -66,6 +71,8 @@ class _RunContext:
     spec: CircuitSpec | None = None
     attempts: list[ProposalAttempt] = field(default_factory=list)
     board: BoardResult | None = None
+    artifacts: SchematicArtifacts = NO_ARTIFACTS
+    route_result: RouteResult | None = None
     findings: list[Finding] = field(default_factory=list)
     error: BaseException | None = None
     # The chain as it stood at the raise site. ADK re-raises the original
@@ -203,6 +210,8 @@ def generate_pcb_adk(
     max_repairs: int = 3,
     time_limit_s: float = 20.0,
     review: bool = True,
+    route: bool = True,
+    emit_stages: bool = True,
     on_event: Callable[[dict[str, Any]], None] | None = None,
     include_responses: bool = False,
 ) -> PipelineResult:
@@ -221,6 +230,9 @@ def generate_pcb_adk(
         max_repairs=max_repairs,
         time_limit_s=time_limit_s,
         review=review,
+        route=route,
+        output=output,
+        emit_stages=emit_stages,
         emit=emit,
         enter=enter,
         propose_on_event=emit if on_event is not None else None,
@@ -253,4 +265,6 @@ def generate_pcb_adk(
         findings=run.findings,
         attempts=run.attempts,
         output=output,
+        route=run.route_result,
+        artifacts=run.artifacts,
     )

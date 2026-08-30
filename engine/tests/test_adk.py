@@ -81,7 +81,7 @@ def _chain(exc):
 
 @needs_adk
 def test_events_trace_every_stage_and_model_call(tmp_path):
-    """The same twelve frames, in the same order, as the SDK driver's stream."""
+    """The same sixteen frames, in the same order, as the SDK driver's stream."""
     model = _scripted_pipeline_model()
     events = []
 
@@ -98,13 +98,51 @@ def test_events_trace_every_stage_and_model_call(tmp_path):
         "stage.start", "read.part", "model.call", "stage.done",
         "stage.start", "model.call", "stage.done",
         "stage.start", "stage.done",
+        "stage.start", "stage.done",
+        "stage.start", "stage.done",
         "stage.start", "model.call", "stage.done",
     ]
     assert [e["stage"] for e in events if e["event"].startswith("stage.")] == [
-        "read", "read", "propose", "propose", "place", "place", "review", "review",
+        "read", "read", "propose", "propose", "place", "place",
+        "schematic", "schematic", "route", "route", "review", "review",
     ]
     assert all(isinstance(e["t_s"], (int, float)) for e in events)
     assert len([e for e in events if e["event"] == "model.call"]) == len(model.calls)
+
+
+@needs_adk
+def test_both_engines_leave_the_same_files_behind(tmp_path):
+    """Parity of artifacts, not only of events.
+
+    A driver that emitted the right frames and wrote three of the four files
+    would pass every other test here. The schematic stage is the only stage
+    body that touches the filesystem, so it is the only place the two drivers
+    could disagree about what a run leaves on disk.
+    """
+    from silkscreen.agents.pipeline import _generate_pcb_sdk
+
+    def run(driver, where):
+        where.mkdir()
+        return driver(
+            _scripted_pipeline_model(),
+            INTENT,
+            datasheets=SHEETS,
+            output=where / "board.kicad_pcb",
+            time_limit_s=15.0,
+        )
+
+    sdk = run(_generate_pcb_sdk, tmp_path / "sdk")
+    adk = run(generate_pcb_adk, tmp_path / "adk")
+
+    assert [p.name for p in adk.artifacts] == [p.name for p in sdk.artifacts]
+    assert [p.name for p in adk.artifacts] == [
+        "board.kicad_pro", "board.kicad_sch", "board.placed.kicad_pcb",
+        "board.kicad_pcb",
+    ]
+    # Byte-identical, not merely present: the emitters seed their UUIDs from
+    # stable strings, so a difference here means a driver changed the design.
+    for a, s in zip(adk.artifacts, sdk.artifacts, strict=True):
+        assert a.read_bytes() == s.read_bytes(), a.name
 
 
 @needs_adk
