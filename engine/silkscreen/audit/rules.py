@@ -418,6 +418,12 @@ def _pad_clearance(board: AuditBoard, profile: EffortProfile) -> list[Finding]:
             if gap >= limit:
                 continue
             shorted = gap <= 0
+            # Two pads of one footprint at their nominal spacing are the land
+            # pattern, not a layout mistake: nobody fixes a SOT-223's 0.1 mm
+            # pad gap by moving something. Overlapping pads on one footprint
+            # stay reported, because that is a broken footprint.
+            if a.ref == b.ref and not shorted:
+                continue
             out.append(
                 _f(
                     "pad-clearance",
@@ -524,8 +530,13 @@ def _track_clearance(board: AuditBoard, profile: EffortProfile) -> list[Finding]
 
 
 def _silk_over_pad(board: AuditBoard, profile: EffortProfile) -> list[Finding]:
-    out: list[Finding] = []
+    """Silkscreen ink on solderable copper, one finding per pair of parts.
+
+    Several silk segments crossing one pad is one problem, not three, and the
+    fix is always the same edit to the same footprint.
+    """
     pads = board.pads()
+    hits: dict[tuple[str, str], dict] = {}
     for part in board.parts:
         for seg in part.silk:
             for pad in pads:
@@ -534,24 +545,42 @@ def _silk_over_pad(board: AuditBoard, profile: EffortProfile) -> list[Finding]:
                 gap = seg_rect_distance_nm(seg, pad.rect)
                 if gap > 0:
                     continue
-                out.append(
-                    _f(
-                        "silkscreen-over-pad",
-                        severity=Severity.MARGINAL,
-                        title=f"silkscreen from {part.ref} covers {pad.name}",
-                        detail=(
-                            f"A silkscreen line belonging to {part.ref} crosses "
-                            f"the solderable area of {pad.name}. Ink on a pad "
-                            "resists solder; most fabs clip it silently, which "
-                            "leaves the board looking unlike the artwork."
-                        ),
-                        refs=tuple(dict.fromkeys((part.ref, pad.ref))),
-                        extent=seg.bbox.union(pad.rect),
-                        point=pad.rect.centre,
-                        evidence=f"overlap {fmt_mm(-gap)} into the pad",
-                        fix=f"Trim or move {part.ref}'s silkscreen clear of the pad.",
-                    )
+                entry = hits.setdefault(
+                    (part.ref, pad.ref),
+                    {"pads": {}, "extent": seg.bbox, "worst": 0},
                 )
+                entry["pads"][pad.name] = pad
+                entry["extent"] = entry["extent"].union(seg.bbox).union(pad.rect)
+                entry["worst"] = max(entry["worst"], -gap)
+
+    out: list[Finding] = []
+    for (silk_ref, pad_ref), entry in sorted(hits.items()):
+        names = sorted(entry["pads"])
+        own = " its own" if silk_ref == pad_ref else f" {pad_ref}'s"
+        out.append(
+            _f(
+                "silkscreen-over-pad",
+                severity=Severity.MARGINAL,
+                title=(
+                    f"{silk_ref}'s silkscreen covers{own} "
+                    f"{'pad' if len(names) == 1 else 'pads'} {', '.join(names)}"
+                ),
+                detail=(
+                    f"Silkscreen belonging to {silk_ref} crosses the solderable "
+                    f"area of {len(names)} pad(s). Ink on a pad resists solder; "
+                    "most fabs clip it silently, so the board that arrives does "
+                    "not match the artwork that was approved."
+                ),
+                refs=tuple(dict.fromkeys((silk_ref, pad_ref))),
+                extent=entry["extent"],
+                point=list(entry["pads"].values())[0].rect.centre,
+                evidence=(
+                    f"{len(names)} pad(s) overlapped, deepest "
+                    f"{fmt_mm(entry['worst'])} into the pad"
+                ),
+                fix=f"Trim {silk_ref}'s outline clear of the pads.",
+            )
+        )
     return out
 
 
@@ -680,55 +709,83 @@ def _copper_off_board(board: AuditBoard, profile: EffortProfile) -> list[Finding
 
 
 def _track_widths(board: AuditBoard, profile: EffortProfile) -> list[Finding]:
-    out = []
+    """One finding per net, not one per segment.
+
+    A net routed too thin is thin along its whole length, and a report that
+    repeats the same sentence twelve times with twelve different badges buries
+    the eleven other things wrong with the board. The finding names how many
+    segments are affected and points at the thinnest of them.
+    """
+    thin: dict[str, list[Seg]] = {}
+    weak: dict[str, list[Seg]] = {}
     for track in board.tracks:
-        if track.width_nm and track.width_nm < _MIN_TRACK_NM:
-            out.append(
-                _f(
-                    "track-too-thin",
-                    severity=Severity.BLOCKER,
-                    title=f"{fmt_mm(track.width_nm)} track on {track.net or 'no net'}",
-                    detail=(
-                        "Standard 1oz process does not hold a track this thin. "
-                        "It etches away or comes back necked."
-                    ),
-                    nets=(track.net,) if track.net else (),
-                    extent=track.bbox,
-                    point=track.midpoint,
-                    evidence=(
-                        f"width {fmt_mm(track.width_nm)}, floor "
-                        f"{fmt_mm(_MIN_TRACK_NM)}"
-                    ),
-                    fix="Widen the track.",
-                )
-            )
+        if not track.width_nm:
+            continue
+        if track.width_nm < _MIN_TRACK_NM:
+            thin.setdefault(track.net, []).append(track)
         elif (
             (is_supply(track.net) or is_ground(track.net))
-            and track.width_nm
             and track.width_nm < _MIN_POWER_TRACK_NM
         ):
-            out.append(
-                _f(
-                    "power-track-thin",
-                    severity=Severity.MARGINAL,
-                    title=(
-                        f"{track.net} routed at {fmt_mm(track.width_nm)}"
-                    ),
-                    detail=(
-                        f"{track.net} is a supply net carried on a signal-width "
-                        "track. Current density and IR drop both scale with "
-                        "width, and this is the net the whole board leans on."
-                    ),
-                    nets=(track.net,),
-                    extent=track.bbox,
-                    point=track.midpoint,
-                    evidence=(
-                        f"width {fmt_mm(track.width_nm)}, suggested "
-                        f"{fmt_mm(_MIN_POWER_TRACK_NM)}"
-                    ),
-                    fix=f"Widen {track.net} to at least {fmt_mm(_MIN_POWER_TRACK_NM)}.",
-                )
+            weak.setdefault(track.net, []).append(track)
+
+    def span(segs: list[Seg]) -> Rect:
+        box = segs[0].bbox
+        for seg in segs[1:]:
+            box = box.union(seg.bbox)
+        return box
+
+    out: list[Finding] = []
+    for net, segs in sorted(thin.items()):
+        worst = min(segs, key=lambda s: s.width_nm)
+        out.append(
+            _f(
+                "track-too-thin",
+                severity=Severity.BLOCKER,
+                title=(
+                    f"{net or 'unnamed net'} routed at "
+                    f"{fmt_mm(worst.width_nm)}"
+                ),
+                detail=(
+                    f"{len(segs)} segment(s) on this net are below the process "
+                    "floor. A standard 1oz etch does not hold copper this "
+                    "narrow: it comes back necked, or open."
+                ),
+                nets=(net,) if net else (),
+                extent=span(segs),
+                point=worst.midpoint,
+                evidence=(
+                    f"{len(segs)} segment(s), thinnest {fmt_mm(worst.width_nm)}, "
+                    f"floor {fmt_mm(_MIN_TRACK_NM)}"
+                ),
+                fix=f"Widen {net or 'this net'} to at least {fmt_mm(_MIN_TRACK_NM)}.",
             )
+        )
+    for net, segs in sorted(weak.items()):
+        worst = min(segs, key=lambda s: s.width_nm)
+        total = sum(1 for t in board.tracks if t.net == net)
+        out.append(
+            _f(
+                "power-track-thin",
+                severity=Severity.MARGINAL,
+                title=f"{net} routed at signal width ({fmt_mm(worst.width_nm)})",
+                detail=(
+                    f"{len(segs)} of {total} segment(s) on {net} are narrower "
+                    "than a supply net should be. Current density and IR drop "
+                    "both scale with width, and this is the net the rest of the "
+                    "board leans on."
+                ),
+                nets=(net,),
+                extent=span(segs),
+                point=worst.midpoint,
+                evidence=(
+                    f"{len(segs)}/{total} segment(s), thinnest "
+                    f"{fmt_mm(worst.width_nm)}, suggested "
+                    f"{fmt_mm(_MIN_POWER_TRACK_NM)}"
+                ),
+                fix=f"Widen {net} to at least {fmt_mm(_MIN_POWER_TRACK_NM)}.",
+            )
+        )
     return out
 
 
