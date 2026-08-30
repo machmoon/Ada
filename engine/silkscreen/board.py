@@ -14,23 +14,32 @@ if KiCad's own parser cannot read what we wrote, the tests fail.
 
 from __future__ import annotations
 
-import hashlib
 from dataclasses import dataclass, field
 from pathlib import Path
 
 from .footprints import Footprint, UnsupportedPackage, for_passive, lqfp, soic, sot223
+from .ids import stable_uuid
 from .netlist import CircuitSpec
 from .packing import Layer, Part, Placement, pack
 from .packing import Net as PackNet
+from .routing import RoutePad, RouteResult, Track, Via, route
 from .units import DEFAULT_CLEARANCE_NM, NM_PER_MM, mm
 
 __all__ = [
     "BoardResult",
     "PlacedPart",
+    "DEFAULT_BOARD_MARGIN_NM",
     "build_board",
+    "board_pads",
+    "route_board",
     "emit_kicad_pcb",
     "write_board",
 ]
+
+#: Gap between the outermost courtyard and the board edge. Shared by the
+#: emitter and the router: the router must know where the copper may go, and
+#: the edge is drawn from the same number, so they cannot drift apart.
+DEFAULT_BOARD_MARGIN_NM = mm(2.0)
 
 _LAYERS = """    (0 "F.Cu" signal)
     (31 "B.Cu" signal)
@@ -72,10 +81,28 @@ class BoardResult:
     solver_status: str
     wirelength_nm: int | None = None
     warnings: list[str] = field(default_factory=list)
+    #: Copper laid by :func:`route_board`. Empty means the board is placed but
+    #: unrouted -- which is what KiCad draws as a ratsnest.
+    tracks: list[Track] = field(default_factory=list)
+    vias: list[Via] = field(default_factory=list)
+    #: Nets the router could not finish, each mapped to the reason. Read this
+    #: before telling anyone the board is routed.
+    unrouted_nets: dict[str, str] = field(default_factory=dict)
+    routed_nets: list[str] = field(default_factory=list)
 
     @property
     def size_mm(self) -> tuple[float, float]:
         return (self.width_nm / NM_PER_MM, self.height_nm / NM_PER_MM)
+
+    @property
+    def is_routed(self) -> bool:
+        """True only when every routable net came out fully connected."""
+        return bool(self.tracks) and not self.unrouted_nets
+
+    @property
+    def route_completion(self) -> float:
+        total = len(self.routed_nets) + len(self.unrouted_nets)
+        return 1.0 if total == 0 else len(self.routed_nets) / total
 
 
 def _footprint_for_device(
@@ -135,12 +162,10 @@ def build_board(
     """
     spec.validate()
 
-    counters: dict[str, int] = {}
-    ref_of: dict[str, str] = {}
-
-    def next_ref(prefix: str) -> str:
-        counters[prefix] = counters.get(prefix, 0) + 1
-        return f"{prefix}{counters[prefix]}"
+    # The schematic emitter numbers parts from the same call, so R2 on the
+    # drawing is R2 on the board. Numbering them separately would give two
+    # self-consistent files that describe different circuits.
+    ref_of = spec.assign_refs()
 
     placed: list[PlacedPart] = []
 
@@ -156,8 +181,7 @@ def build_board(
         fp = _footprint_for_device(
             device.name, _package_pin_count(device.pins), pin_nets
         )
-        ref = next_ref("U")
-        ref_of[device.name] = ref
+        ref = ref_of[device.name]
         placed.append(PlacedPart(ref=ref, footprint=fp, value=device.name))
 
     for passive in spec.passives:
@@ -170,8 +194,7 @@ def build_board(
         fp = for_passive(
             passive.type.value, passive.value, net1=legs["1"], net2=legs["2"]
         )
-        ref = next_ref(passive.ref_prefix)
-        ref_of[passive.name] = ref
+        ref = ref_of[passive.name]
         placed.append(PlacedPart(ref=ref, footprint=fp, value=passive.value))
 
     parts = [
@@ -242,13 +265,97 @@ def build_board(
     )
 
 
+def board_pads(board: BoardResult) -> list[RoutePad]:
+    """Every pad on the board, absolute, in the solver's Y-up frame.
+
+    The placer hands back a courtyard's bottom-left corner with Y up; a pad
+    offset inside a footprint is measured from the anchor with Y **down**,
+    because that is the frame it is written to the file in. Composing the two
+    is the single place those frames meet outside the emitter, and getting it
+    wrong is the silent-geometry bug class: the router would lay copper to
+    coordinates no pad occupies, the run would report success, and the board
+    would come back with tracks ending in bare laminate.
+
+    Rotated parts are refused rather than approximated -- see
+    :func:`route_board`.
+    """
+    pads: list[RoutePad] = []
+    for part in board.parts:
+        fp = part.footprint
+        anchor_x = part.x_nm + fp.courtyard_w_nm
+        anchor_y = part.y_nm + fp.courtyard_h_nm
+        for pad in fp.pads:
+            pads.append(
+                RoutePad(
+                    net=pad.net,
+                    x_nm=anchor_x + pad.x_nm,
+                    y_nm=anchor_y - pad.y_nm,
+                    w_nm=pad.w_nm,
+                    h_nm=pad.h_nm,
+                    layer=part.layer,
+                    ref=part.ref,
+                    number=pad.number,
+                )
+            )
+    return pads
+
+
+def route_board(
+    board: BoardResult,
+    *,
+    margin_nm: int = DEFAULT_BOARD_MARGIN_NM,
+    two_layer: bool = True,
+    **kwargs,
+) -> RouteResult:
+    """Route ``board`` in place, filling its tracks, vias and unrouted nets.
+
+    Placement and routing are separate calls, not one, so the placed board can
+    be written out and inspected before any copper exists. That is the step the
+    pipeline used to skip past.
+
+    Rotated parts abort routing. :func:`emit_kicad_pcb` is known to misplace a
+    rotated footprint's anchor (a recorded, unfixed bug), so pad coordinates
+    for a rotated part disagree with the file it writes. Routing to them would
+    turn a latent placement bug into copper that lands nowhere, so this refuses
+    and says why. Nothing sets rotation today, which is why the fix belongs to
+    that bug rather than to this function.
+    """
+    rotated = [p.ref for p in board.parts if p.rotated]
+    if rotated:
+        result = RouteResult()
+        result.warnings.append(
+            "not routed: rotated footprints "
+            f"({', '.join(sorted(rotated))}) have a known anchor bug in the "
+            "board emitter, so their pad coordinates cannot be trusted"
+        )
+        board.warnings.extend(result.warnings)
+        return result
+
+    result = route(
+        board_pads(board),
+        min_x_nm=-margin_nm,
+        min_y_nm=-margin_nm,
+        max_x_nm=board.width_nm + margin_nm,
+        max_y_nm=board.height_nm + margin_nm,
+        two_layer=two_layer,
+        **kwargs,
+    )
+    board.tracks = list(result.tracks)
+    board.vias = list(result.vias)
+    board.unrouted_nets = dict(result.unrouted)
+    board.routed_nets = list(result.routed)
+    board.warnings.extend(result.warnings)
+    return result
+
+
 def _uuid(seed: str) -> str:
     """Stable UUID from a seed, so output is byte-identical across runs."""
-    h = hashlib.sha1(seed.encode()).hexdigest()
-    return f"{h[0:8]}-{h[8:12]}-{h[12:16]}-{h[16:20]}-{h[20:32]}"
+    return stable_uuid(seed)
 
 
-def emit_kicad_pcb(board: BoardResult, *, margin_nm: int = mm(2.0)) -> str:
+def emit_kicad_pcb(
+    board: BoardResult, *, margin_nm: int = DEFAULT_BOARD_MARGIN_NM
+) -> str:
     """Render a :class:`BoardResult` as KiCad 8 ``.kicad_pcb`` source."""
 
     def f(nm: int) -> str:
@@ -353,6 +460,32 @@ def emit_kicad_pcb(board: BoardResult, *, margin_nm: int = mm(2.0)) -> str:
                 f' (uuid "{_uuid(part.ref + "p" + pad.number)}"))'
             )
         out.append("  )")
+
+    # Copper last, after every footprint, matching KiCad's own ordering.
+    # The Y flip here is the same one applied to footprint anchors above: the
+    # router works in the placer's Y-up frame and this is the only place its
+    # output crosses into KiCad's Y-down frame.
+    def flip_y(y_nm: int) -> int:
+        return board.height_nm - y_nm
+
+    for index, track in enumerate(board.tracks):
+        layer = "B.Cu" if track.layer is Layer.BOTTOM else "F.Cu"
+        idx = net_index.get(track.net, 0)
+        out.append(
+            f"  (segment (start {f(track.start_x_nm)} {f(flip_y(track.start_y_nm))})"
+            f" (end {f(track.end_x_nm)} {f(flip_y(track.end_y_nm))})"
+            f" (width {f(track.width_nm)}) (layer \"{layer}\") (net {idx})"
+            f' (uuid "{_uuid(f"seg{index}:{track.net}")}"))'
+        )
+
+    for index, via in enumerate(board.vias):
+        idx = net_index.get(via.net, 0)
+        out.append(
+            f"  (via (at {f(via.x_nm)} {f(flip_y(via.y_nm))})"
+            f" (size {f(via.diameter_nm)}) (drill {f(via.drill_nm)})"
+            f' (layers "F.Cu" "B.Cu") (net {idx})'
+            f' (uuid "{_uuid(f"via{index}:{via.net}")}"))'
+        )
 
     out.append(")")
     return "\n".join(out) + "\n"

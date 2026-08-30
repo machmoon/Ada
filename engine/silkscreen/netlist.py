@@ -204,6 +204,40 @@ class CircuitSpec:
         if errors:
             raise ValidationError(errors)
 
+    def assign_refs(self) -> dict[str, str]:
+        """Map each part's spec name to its reference designator.
+
+        The schematic and the board must agree on what ``C3`` is, or the two
+        files describe different circuits while both looking plausible. Both
+        emitters call this rather than numbering parts themselves, so the
+        mapping is defined once: devices first as ``U1..Un`` in spec order,
+        then passives in spec order, each counted per prefix.
+        """
+        counters: dict[str, int] = {}
+
+        def next_ref(prefix: str) -> str:
+            counters[prefix] = counters.get(prefix, 0) + 1
+            return f"{prefix}{counters[prefix]}"
+
+        refs = {device.name: next_ref("U") for device in self.devices}
+        for passive in self.passives:
+            refs[passive.name] = next_ref(passive.ref_prefix)
+        return refs
+
+    def nets_of(self, part_name: str) -> dict[str, str]:
+        """``{pin_name: net}`` for one part, from the connection list.
+
+        A pin absent from every net is absent from the mapping: an unconnected
+        pin and a pin tied to a net named ``""`` are different circuits.
+        """
+        found: dict[str, str] = {}
+        for conn in self.connections:
+            for endpoint in conn.endpoints:
+                part, _, pin = endpoint.rpartition(".")
+                if part == part_name:
+                    found[pin] = conn.net
+        return found
+
     def part_count(self) -> int:
         return len(self.devices) + len(self.passives)
 
