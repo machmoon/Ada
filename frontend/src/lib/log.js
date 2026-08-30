@@ -31,9 +31,11 @@ const SECRET_KEY = /key|token|secret|password/i
     cannot reach it. The name only has to contain one of the words, because
     `X-Amz-Signature`, `access_token` and `api-key` are all the same secret. The
     value runs to the next separator, so the path and the harmless parameters
-    around it stay readable -- a scrubbed line is still worth reading. */
+    around it stay readable -- a scrubbed line is still worth reading. `#` opens
+    a parameter as well as `?` and `&`, because an OAuth implicit-grant redirect
+    puts the token in the fragment (`#access_token=...`) and never in the query. */
 const SECRET_PARAM =
-  /([?&][^?&=\s]*(?:key|token|secret|password|signature|sig|auth|credential)[^?&=\s]*=)[^&\s#"'<>]*/gi
+  /([?&#][^?&=\s]*(?:key|token|secret|password|signature|sig|auth|credential)[^?&=\s]*=)[^&\s#"'<>]*/gi
 /** An `Authorization: Bearer …` value, wherever it was stringified from. */
 const BEARER = /\bBearer\s+[A-Za-z0-9._~+\/-]+=*/g
 const UNSERIALIZABLE = '[unserializable]'
@@ -372,12 +374,15 @@ function isoStamp(ts) {
 }
 
 /** The NDJSON header line, and the counts the drawer shows. href and ua are read
-    here rather than at module scope: in the node test run there is no window. */
+    here rather than at module scope: in the node test run there is no window.
+    The href is scrubbed like any other captured string -- whoever opened the app
+    from a link carrying `?api_key=` or `#access_token=` should not have it copied
+    into a support log. `ua` carries no credential and is exported as it stands. */
 export function logMeta(now = Date.now()) {
   const win = typeof window !== 'undefined' ? window : null
   return {
     app: 'silkscreen',
-    href: win?.location?.href ?? '',
+    href: scrubText(win?.location?.href ?? ''),
     ua: win?.navigator?.userAgent ?? '',
     capacity: LOG_CAPACITY,
     dropped,

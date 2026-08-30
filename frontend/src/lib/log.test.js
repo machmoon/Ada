@@ -57,6 +57,16 @@ function entryAt(fields = {}) {
   }
 }
 
+/** Runs `body` with a window whose location is `href`, and takes it away again. */
+function withHref(href, body) {
+  globalThis.window = { location: { href }, navigator: { userAgent: 'Mozilla/5.0 (test)' } }
+  try {
+    body()
+  } finally {
+    delete globalThis.window
+  }
+}
+
 const NOW = Date.UTC(2026, 7, 29, 18, 15, 4, 0)
 
 beforeEach(() => {
@@ -372,6 +382,16 @@ describe('scrubText', () => {
     )
   })
 
+  it('hides a credential that sits in the fragment rather than the query', () => {
+    expect(scrubText('https://silkscreen.app/#access_token=xyz789&state=abc')).toBe(
+      'https://silkscreen.app/#access_token=[redacted]&state=abc',
+    )
+  })
+
+  it('leaves an ordinary fragment alone', () => {
+    expect(scrubText('http://127.0.0.1:5173/#board')).toBe('http://127.0.0.1:5173/#board')
+  })
+
   it('leaves a string carrying no credential exactly as it is', () => {
     expect(scrubText('placed 11 parts, 214.5 mm of wire')).toBe('placed 11 parts, 214.5 mm of wire')
     expect(scrubText('POST /generate?intent=a+3v3+regulator&time_limit_s=10')).toBe(
@@ -672,6 +692,32 @@ describe('logMeta', () => {
     } finally {
       delete globalThis.window
     }
+  })
+
+  it('scrubs a credential the page URL was opened with', () => {
+    withHref('http://127.0.0.1:5173/?api_key=abc&intent=regulator', () => {
+      const meta = logMeta(NOW)
+      expect(meta.href).toBe('http://127.0.0.1:5173/?api_key=[redacted]&intent=regulator')
+      expect(meta.href).not.toContain('abc')
+    })
+  })
+
+  it('scrubs a credential the redirect left in the fragment', () => {
+    withHref('http://127.0.0.1:5173/#access_token=xyz', () => {
+      expect(logMeta(NOW).href).toBe('http://127.0.0.1:5173/#access_token=[redacted]')
+    })
+  })
+
+  it('carries the scrubbed URL into both exports, not the raw one', () => {
+    withHref('http://127.0.0.1:5173/?api_key=abc', () => {
+      const header = toText([entryAt()], NOW).split('\n')[0]
+      const first = JSON.parse(toNdjson([entryAt()], NOW).split('\n')[0])
+
+      expect(header).toContain('http://127.0.0.1:5173/?api_key=[redacted]')
+      expect(header).not.toContain('abc')
+      expect(first.href).toBe('http://127.0.0.1:5173/?api_key=[redacted]')
+      expect(first.href).not.toContain('abc')
+    })
   })
 
   it('carries the dropped count the buffer is holding', async () => {
