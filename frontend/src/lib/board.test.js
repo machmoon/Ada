@@ -222,23 +222,23 @@ describe('viewBoxOf', () => {
 
 describe('layers', () => {
   it('gives front copper the F.Cu colour', () => {
-    expect(layerColor('top')).toBe('#C83434')
+    expect(layerColor('top')).toBe('var(--board-copper-top)')
     expect(layerInfo('top').kicad).toBe('F.Cu')
   })
 
   it('gives back copper the B.Cu colour', () => {
-    expect(layerColor('bottom')).toBe('#4D7FC4')
+    expect(layerColor('bottom')).toBe('var(--board-copper-bottom)')
     expect(layerInfo('bottom').kicad).toBe('B.Cu')
   })
 
   it('accepts the layer name in any case', () => {
-    expect(layerColor('TOP')).toBe('#C83434')
-    expect(layerColor('Bottom')).toBe('#4D7FC4')
+    expect(layerColor('TOP')).toBe('var(--board-copper-top)')
+    expect(layerColor('Bottom')).toBe('var(--board-copper-bottom)')
   })
 
   it('draws an unrecognised layer as front copper rather than dropping the part', () => {
-    expect(layerColor('inner1')).toBe('#C83434')
-    expect(layerColor(undefined)).toBe('#C83434')
+    expect(layerColor('inner1')).toBe('var(--board-copper-top)')
+    expect(layerColor(undefined)).toBe('var(--board-copper-top)')
     expect(layerInfo(null).key).toBe('top')
   })
 
@@ -261,12 +261,12 @@ describe('layers', () => {
 describe('padRects', () => {
   it('passes the absolute pad rect through and colours it by the part layer', () => {
     expect(padRects(part())).toEqual([
-      { number: '1', net: 'VDD', color: '#C83434', x: 4.5, y: 2.5, width: 1, height: 0.4 },
+      { number: '1', net: 'VDD', color: 'var(--board-copper-top)', x: 4.5, y: 2.5, width: 1, height: 0.4 },
     ])
   })
 
   it('colours a bottom-layer part in B.Cu', () => {
-    expect(padRects(part({ layer: 'bottom' }))[0].color).toBe('#4D7FC4')
+    expect(padRects(part({ layer: 'bottom' }))[0].color).toBe('var(--board-copper-bottom)')
   })
 
   it('keeps an unconnected pad as null rather than inventing a net name', () => {

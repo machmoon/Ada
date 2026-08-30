@@ -2,6 +2,8 @@
 // console and window hooks have to install before anything else can log.
 import './lib/capture.js'
 
+import { readStored, themeAttribute } from './lib/theme.js'
+
 import { mount } from 'svelte'
 
 // Self-hosted so the demo survives bad wifi — no Google Fonts request.
@@ -17,5 +19,11 @@ import '@fontsource/chivo-mono/600.css'
 import './styles/tokens.css'
 import './styles/base.css'
 import App from './App.svelte'
+
+// The one write of the theme attribute at startup, ahead of the mount so the
+// first frame is already the chosen palette. No stored choice leaves the
+// attribute off, which is what keeps tokens.css following the OS.
+const theme = themeAttribute(readStored(globalThis.localStorage))
+if (theme) document.documentElement.dataset.theme = theme
 
 export default mount(App, { target: document.getElementById('app') })

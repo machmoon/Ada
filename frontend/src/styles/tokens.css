@@ -1,45 +1,71 @@
 /* Drafting Table — every value below is lifted from design/Review.dc.html.
-   Change a token here rather than hard-coding a colour in a component. */
+   Change a token here rather than hard-coding a colour in a component.
+
+   Night mode is the same instrument under a lamp rather than daylight: the
+   hues and the elevation order are the daylight palette's, read against a dark
+   ground. Each themed token carries both readings in one `light-dark()` pair,
+   so a token can never be defined for one theme and forgotten in the other.
+   The switch is `color-scheme`, set by the three rules below the block. */
 :root {
-  /* paper stack */
-  --paper: #F5F4EF;        /* KiCad schematic paper, the app background */
-  --surface: #FCFBF8;      /* cards, title bar */
-  --rail: #FAF9F5;         /* right rail */
-  --well: #EDEBE3;         /* status bar, note chips, selected rows */
+  color-scheme: light;
+
+  /* paper stack, lightest surface to deepest well in daylight; the same
+     raised-to-recessed order, mirrored, at night */
+  --paper: light-dark(#F5F4EF, #1B1B19);      /* KiCad schematic paper, the app background */
+  --surface: light-dark(#FCFBF8, #232320);    /* cards, title bar */
+  --rail: light-dark(#FAF9F5, #1F1F1D);       /* right rail */
+  --well: light-dark(#EDEBE3, #121210);       /* status bar, note chips, selected rows */
 
   /* ink tiers */
-  --ink: #14130F;
-  --ink-mid: #484848;
-  --ink-soft: #7C796E;
-  --ink-faint: #A9A69A;
+  --ink: light-dark(#14130F, #F0EEE6);
+  --ink-mid: light-dark(#484848, #B9B5AA);
+  --ink-soft: light-dark(#7C796E, #8C8A80);
+  --ink-faint: light-dark(#A9A69A, #6A685F);
 
   /* hairlines: --rule bounds the chrome, --rule-soft divides within it */
-  --rule: #B5B5B5;
-  --rule-soft: #D6D3C8;
+  --rule: light-dark(#B5B5B5, #4A4943);
+  --rule-soft: light-dark(#D6D3C8, #34332F);
 
-  /* the board well, from design/Board.dc.html. Only the two the stylesheet
-     needs live here; the layer colours are SVG attribute values and belong to
-     src/lib/board.js, which maps a layer name to one. */
+  /* the board well, from design/Board.dc.html. It is a dark well in both
+     themes — the board is the board — so none of these turn over at night. */
   --well-bg: #001023;
   --well-text: #5B7291;
+  --board-grid-dot: #848484;
+  --board-edge-cuts: #D0D2CD;
+  --board-courtyard: #FF26E2;
+  --board-silkscreen: #F2EDA1;
+  --board-copper-top: #C83434;
+  --board-copper-bottom: #4D7FC4;
 
-  /* KiCad symbol colours */
-  --oxblood: #840000;
-  --teal: #006464;
-  --green: #009600;
-  --navy: #000084;
+  /* KiCad symbol colours, as ink: dark on paper, lifted off the dark ground */
+  --oxblood: light-dark(#840000, #D9736A);
+  --teal: light-dark(#006464, #5FB8B0);
+  --green: light-dark(#009600, #4FB870);
+  --navy: light-dark(#000084, #7FA8E0);
+
+  /* the one filled button, and the text that sits on it. Separate from
+     --oxblood because a fill and a word on the ground cannot be one colour in
+     both themes: at night the fill stays deep and the ink on it goes pale. */
+  --accent: light-dark(#840000, #B23A32);
+  --accent-ink: light-dark(#FCFBF8, #F7EFEC);
+  --accent-off: light-dark(#B5B5B5, #3A3934);
+  --accent-off-ink: light-dark(#FCFBF8, #6A685F);
 
   /* severity. The mockup's fourth "sourcing" tier is deliberately dropped —
      the engine has no supplier data, so it could only ever be invented. */
-  --sev-blocker-fg: #E6090D;
-  --sev-blocker-bg: #FBEAEA;
-  --sev-blocker-rule: #E6090D;
-  --sev-marginal-fg: #8A6300;
-  --sev-marginal-bg: #F7EFD8;
-  --sev-marginal-rule: #D19200;
-  --sev-note-fg: #484848;
-  --sev-note-bg: #EDEBE3;
-  --sev-note-rule: #484848;
+  --sev-blocker-fg: light-dark(#E6090D, #FF6B63);
+  --sev-blocker-bg: light-dark(#FBEAEA, #2E1A19);
+  --sev-blocker-rule: light-dark(#E6090D, #FF6B63);
+  --sev-marginal-fg: light-dark(#8A6300, #E7B54A);
+  --sev-marginal-bg: light-dark(#F7EFD8, #2C2416);
+  --sev-marginal-rule: light-dark(#D19200, #C8912B);
+  --sev-note-fg: light-dark(#484848, #B9B5AA);
+  --sev-note-bg: light-dark(#EDEBE3, #121210);
+  --sev-note-rule: light-dark(#484848, #A8A499);
+
+  /* shadow colours only; the offsets stay with the thing casting them */
+  --shadow-inset: rgba(0, 0, 0, .5);
+  --shadow-pop: light-dark(rgba(0, 0, 0, .35), rgba(0, 0, 0, .6));
 
   /* geometry */
   --titlebar-h: 44px;
@@ -66,3 +92,12 @@
   --measure-lead: 66ch;
   --measure-detail: 76ch;
 }
+
+/* No stored choice: follow the OS. */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme='light']) { color-scheme: dark; }
+}
+
+/* A stored choice, which beats the OS in both directions. */
+:root[data-theme='dark'] { color-scheme: dark; }
+:root[data-theme='light'] { color-scheme: light; }
