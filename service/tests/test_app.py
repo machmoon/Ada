@@ -135,7 +135,7 @@ def web_dist(tmp_path):
     )
     # A build output whose name collides with the health probe.
     (dist / "healthz").write_text("not the health check", encoding="utf-8")
-    # Copied verbatim from web/public: served from the bundle root, and its
+    # Copied verbatim from frontend/public: served from the bundle root, and its
     # name carries no content hash.
     (dist / "favicon.svg").write_text(
         '<svg xmlns="http://www.w3.org/2000/svg"/>', encoding="utf-8"
@@ -582,7 +582,7 @@ def test_cache_headers(server, web_dist):
 def test_a_non_asset_file_is_not_cached_for_a_year(server, web_dist):
     """Only assets/ carries a content hash, so only assets/ may be immutable.
 
-    favicon.svg is copied from web/public under a fixed name. Pinned for a
+    favicon.svg is copied from frontend/public under a fixed name. Pinned for a
     year it cannot be replaced at all -- the URL never changes, so there is no
     bust path short of waiting the year out.
     """

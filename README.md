@@ -53,7 +53,7 @@ that consumes the file. Install it if you are a person who wants to see a board.
 | `agents/resilience.py` — provider failover | **Working** · 14 tests |
 | `mcp/` — MCP server over stdio | **Working** · 23 tests |
 | `service/` — Cloud Run + Firestore cache | **Working** · 70 tests |
-| `web/` — Svelte review UI, served by the service | **Working** · review and board tabs |
+| `frontend/` — Svelte review UI, served by the service | **Working** · review and board tabs |
 | Overlay UI, guided cursor | Not built (mockups only) |
 
 ---
@@ -269,26 +269,26 @@ UI at `/`, same origin as `/generate`, so there is no CORS anywhere.
 
 ### Running the web UI
 
-The UI is a Svelte SPA in `web/`, and it needs Node 22 or newer (`node --version`).
-In development it runs on Vite's dev server, which proxies `/generate` and
-`/healthz` to the Python service — two terminals:
+The UI is a Svelte SPA in `frontend/`, and it needs Node 22 or newer
+(`node --version`). In development it runs on Vite's dev server, which proxies
+`/generate` and `/healthz` to the Python service — two terminals:
 
 ```bash
-PORT=8081 python -m service.app       # terminal 1: the API
-cd web && npm install && npm run dev  # terminal 2: http://localhost:5173
+PORT=8081 python -m service.app            # terminal 1: the API
+cd frontend && npm install && npm run dev  # terminal 2: http://localhost:5173
 ```
 
 For the production path, build the bundle and let the service serve it itself:
 
 ```bash
-cd web && npm run build    # writes web/dist/
-python -m service.app      # http://localhost:8080 serves both the UI and the API
+cd frontend && npm run build  # writes frontend/dist/
+python -m service.app         # http://localhost:8080 serves the UI and the API
 ```
 
 The UI has its own suite, which CI runs before the build:
 
 ```bash
-cd web && npm test         # Vitest over web/src/lib
+cd frontend && npm test  # Vitest over frontend/src/lib
 ```
 
 A run lands on the review, and the **Board** tab draws the board the placer
@@ -407,7 +407,7 @@ engine/
 scripts/
   demo.py         end-to-end: read -> place -> write -> verify
   check_docs.py   fails CI if a quoted test count goes stale
-web/
+frontend/
   src/
     lib/          api client, run store, severity + format helpers
     components/   title bar, intent form, progress, findings, side rail

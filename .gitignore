@@ -15,7 +15,7 @@ venv/
 
 # Node
 node_modules/
-web/dist/
+frontend/dist/
 .next/
 out/
 *.tsbuildinfo

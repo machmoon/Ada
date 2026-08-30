@@ -81,7 +81,7 @@ def page_cache_key(part: str, url: str) -> str:
 #: copies the bundle to a path the repo layout does not imply.
 WEB_DIST = Path(
     os.getenv("SILKSCREEN_WEB_DIST")
-    or Path(__file__).resolve().parent.parent / "web" / "dist"
+    or Path(__file__).resolve().parent.parent / "frontend" / "dist"
 )
 
 # Spelled out rather than taken from mimetypes: on Windows mimetypes reads the
@@ -531,7 +531,7 @@ class Handler(BaseHTTPRequestHandler):
         """True only for files the build named with a content hash.
 
         The bundler puts those in ``assets/``. Everything else -- index.html,
-        and anything copied verbatim from ``web/public`` -- keeps a fixed name
+        and anything copied verbatim from ``frontend/public`` -- keeps a fixed name
         across deploys, so an immutable year on it is a cache entry with no
         way to be busted short of a new URL.
         """

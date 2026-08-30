@@ -35,8 +35,8 @@ injects `PORT` to tell the container which port to use.
 `python:3.11-slim`, installs the project with the `agents` and `cloud` extras,
 copies `service/` in as a later layer so that a source edit does not invalidate
 the dependency layer, sets `PORT=8080`, and runs `python -m service.app`.
-`.dockerignore` keeps `.env`, the frontend, the design canvas, and the caches
-out of the build context.
+`.dockerignore` keeps `.env`, the archived frontend, the design canvas, and
+the caches out of the build context.
 
 ### Firestore, for the cross-instance fact cache
 

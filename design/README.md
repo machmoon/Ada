@@ -24,7 +24,7 @@ courtyard, `#00F8FF` ratsnest — mirroring KiCad's own light-schematic /
 dark-board split.
 
 These are static mockups. Nothing here is wired to the engine, with one
-exception: `Review.dc.html` is built for real in `web/`, as a Svelte page over
+exception: `Review.dc.html` is built for real in `frontend/`, as a Svelte page over
 `POST /generate` that the service serves at `/`.
 
 ## Rebuilding the canvas

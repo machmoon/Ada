@@ -5,10 +5,10 @@ __pycache__/
 .pytest_cache/
 .ruff_cache/
 design/
-frontend/
+frontend-archive/
 scripts/
-# web/ itself is the build stage's input; only its generated trees are excluded.
-web/node_modules/
-web/dist/
+# frontend/ itself is the build stage's input; only its generated trees are excluded.
+frontend/node_modules/
+frontend/dist/
 *.kicad_pcb
 .env

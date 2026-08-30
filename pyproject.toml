@@ -33,7 +33,7 @@ where = ["engine"]
 
 [tool.pytest.ini_options]
 testpaths = ["engine/tests", "service/tests"]
-norecursedirs = ["vendor", ".venv", "frontend", "web", "node_modules"]
+norecursedirs = ["vendor", ".venv", "frontend", "frontend-archive", "node_modules"]
 pythonpath = ["engine", "."]
 
 [tool.ruff]
