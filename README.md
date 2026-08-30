@@ -13,7 +13,7 @@ python -m silkscreen "a 3.3V motor driver around an STM32F103" -o board.kicad_pc
 ```
 
 ```
-452 passed — no network, no API key, no KiCad install
+454 passed — no network, no API key, no KiCad install
 ```
 
 ---
@@ -160,7 +160,7 @@ treats the board file as the interface.
 | Requires KiCad running | Yes | **No** |
 | Headless / CI | Hard | **Native** |
 | Platform lock | KiCad's plugin loader | **None — pure Python** |
-| Testable without KiCad | No | **Yes, all 452 tests** |
+| Testable without KiCad | No | **Yes, all 454 tests** |
 
 ### What it reads
 
@@ -405,7 +405,7 @@ engine/
       propose.py    intent -> circuit, with a bounded repair loop
       review.py     adversarial design review
       pipeline.py   prompt -> PCB
-  tests/          452 tests — no network, no API keys, no KiCad
+  tests/          454 tests — no network, no API keys, no KiCad
     fixtures/     ref.kicad_pcb -- 11-footprint board fixture
 scripts/
   demo.py         end-to-end: read -> place -> write -> verify
@@ -485,10 +485,10 @@ docker build .                                      # the `docker` job
 
 ### Expected output
 
-**1. Test suite** — 452 tests, no warnings (four key-gated live-model tests skip unless `GOOGLE_API_KEY` is set):
+**1. Test suite** — 454 tests, no warnings (four key-gated live-model tests skip unless `GOOGLE_API_KEY` is set):
 
 ```
-452 passed in 190.85s
+454 passed in 190.85s
 ```
 
 The suite is dominated by the 20-second solver budget in a handful of placement

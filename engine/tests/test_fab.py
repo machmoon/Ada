@@ -699,3 +699,46 @@ def test_fab_files_are_byte_identical_when_regenerated(board):
     assert [f.filename for f in first] == [f.filename for f in second]
     for a, b in zip(first, second, strict=True):
         assert a.content == b.content, f"{a.filename} is not reproducible"
+
+
+def _board_with_values(values):
+    """A board carrying one single-pad part per supplied value."""
+    parts = []
+    for index, value in enumerate(values):
+        fp = Footprint(
+            name="C_0603",
+            pads=[Pad(number="1", x_nm=0, y_nm=0, w_nm=mm(1), h_nm=mm(1), net="N")],
+            courtyard_w_nm=mm(1),
+            courtyard_h_nm=mm(1),
+        )
+        parts.append(
+            PlacedPart(
+                ref=f"C{index}", footprint=fp, value=value, x_nm=mm(2), y_nm=mm(2)
+            )
+        )
+    return BoardResult(
+        parts=parts,
+        nets=["N"],
+        width_nm=mm(20),
+        height_nm=mm(20),
+        solver_status="optimal",
+    )
+
+def test_bom_neutralises_spreadsheet_formulas():
+    """A model-supplied value must not execute when the BOM is opened.
+
+    Values here are whatever the model read off a datasheet, and the file's
+    destination is a spreadsheet, where a leading '=', '+', '-' or '@' is a
+    formula rather than text.
+    """
+    hostile = ["=cmd|'/c calc'!A1", "+1+1", "-2+3", "@SUM(A1)"]
+    board = _board_with_values(hostile + ["10uF"])
+    rows = list(csv.reader(io.StringIO(bom_csv(board))))[1:]
+    assert rows, "expected one row per distinct value"
+    for row in rows:
+        assert row[0][:1] not in "=+-@", (
+            f"{row[0]!r} would be evaluated as a formula by a spreadsheet"
+        )
+    assert any(row[0] == "10uF" for row in rows), (
+        "a benign value must survive unchanged"
+    )

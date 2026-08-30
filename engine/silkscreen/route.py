@@ -714,7 +714,28 @@ def route_board(
     for node in sorted(set(terminal_nets) | set(claim_nets)):
         claiming = terminal_nets.get(node, set())
         if len(claiming) == 1:
-            owner[node] = next(iter(claiming))
+            net = next(iter(claiming))
+            # A terminal does not override foreign copper on the same node.
+            # Granting it would let this net's trace run through another net's
+            # pad -- a short in copper that the preflight would then wave
+            # through as "routed". Blocking the node instead leaves the
+            # terminal unreachable, so the net is reported unrouted, which is
+            # the honest answer.
+            contested = {other for other in claim_nets.get(node, set())
+                         if other != net}
+            if contested:
+                owner[node] = None
+                if net not in unrouted:
+                    named = ", ".join(repr(o) if o else "an unnetted pad"
+                                      for o in sorted(contested))
+                    warnings.append(
+                        f"Net {net!r} not routed: one of its pads shares a "
+                        f"grid node with copper belonging to {named}. Routing "
+                        f"through it would short them."
+                    )
+                    unrouted.append(net)
+                continue
+            owner[node] = net
             continue
         if len(claiming) > 1:
             winner = sorted(claiming)[0]

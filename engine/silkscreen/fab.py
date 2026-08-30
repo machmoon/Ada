@@ -117,8 +117,23 @@ def _mm4(nm: int) -> str:
     return f"{sign}{tenths_of_um // 10_000}.{tenths_of_um % 10_000:04d}"
 
 
+#: Leading characters a spreadsheet reads as the start of a formula.
+_FORMULA_PREFIXES = ("=", "+", "-", "@", "\t", "\r")
+
+
 def _csv_field(value: str) -> str:
-    """Quote a CSV field only when it needs it, doubling embedded quotes."""
+    """Quote a CSV field only when it needs it, doubling embedded quotes.
+
+    Component values and references in this file come from a model reading a
+    vendor's datasheet, so they are untrusted text on a path that ends in
+    someone opening the BOM in a spreadsheet. A cell beginning ``=``, ``+``,
+    ``-`` or ``@`` is evaluated as a formula there, which turns "the value of
+    C1" into code running on the buyer's machine. Prefixing an apostrophe is
+    the standard neutralisation: the spreadsheet shows the text and runs
+    nothing, and a plain CSV reader sees one extra leading character.
+    """
+    if value.startswith(_FORMULA_PREFIXES):
+        value = "'" + value
     if any(char in value for char in ',"\n\r'):
         return '"' + value.replace('"', '""') + '"'
     return value

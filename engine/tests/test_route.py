@@ -631,3 +631,56 @@ def test_order_manifest_from_a_routed_preflight_reports_orderable(board, spec, r
     assert manifest["requires_human_approval"] is True, (
         "a routed board is orderable, which is still not the same as ordered"
     )
+
+
+def _single_pad_part(ref, net, x_mm, y_mm, size_mm=1.0):
+    """One square pad on its own net, centred at ``(x_mm, y_mm)``."""
+    fp = Footprint(
+        name="P",
+        pads=[
+            Pad(
+                number="1",
+                x_nm=0,
+                y_nm=0,
+                w_nm=mm(size_mm),
+                h_nm=mm(size_mm),
+                net=net,
+            )
+        ],
+        courtyard_w_nm=mm(size_mm / 2),
+        courtyard_h_nm=mm(size_mm / 2),
+    )
+    return PlacedPart(
+        ref=ref,
+        footprint=fp,
+        x_nm=mm(x_mm) - mm(size_mm / 2),
+        y_nm=mm(y_mm) - mm(size_mm / 2),
+    )
+
+def test_a_terminal_does_not_override_a_foreign_pads_copper():
+    """A pad sharing a grid node with another net's copper is refused.
+
+    Granting the node to the terminal's net would let its trace run through
+    the other net's pad, which is a short in copper that preflight would then
+    accept as a routed net. Refusing the net is the honest outcome.
+    """
+    parts = [
+        _single_pad_part("A1", "NETA", 3.0, 3.0),
+        _single_pad_part("A2", "NETA", 8.0, 8.0),
+        _single_pad_part("B1", "NETB", 8.3, 8.0),
+        _single_pad_part("B2", "NETB", 3.0, 8.0),
+    ]
+    board = BoardResult(
+        parts=parts,
+        nets=["NETA", "NETB"],
+        width_nm=mm(14),
+        height_nm=mm(14),
+        solver_status="optimal",
+    )
+    result = route_board(board, time_limit_s=5.0)
+
+    assert set(result.unrouted_nets) == {"NETA", "NETB"}
+    assert not result.segments, "a contested node must not be routed through"
+    assert any("short" in w for w in result.warnings), (
+        "the caller must be told why the net was refused"
+    )
