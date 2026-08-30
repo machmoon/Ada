@@ -74,6 +74,34 @@ _VIA_COST_STEPS = 12
 #: for the board, and searching it would take minutes for a worse result.
 _MAX_NODES = 4_000_000
 
+#: Total A* node expansions one :func:`route` call may spend, across all nets.
+#:
+#: _MAX_NODES bounds the size of the lattice; this bounds the work done on it,
+#: which is a different thing. An unroutable net is the expensive case: A* only
+#: returns None once it has exhausted everything reachable, and it pays that in
+#: full for every net that fails. Measured before this existed, a 250x200 mm
+#: board with four blocked nets sat in route() for 76 seconds, and nothing
+#: stopped it -- the node guard does not fire until roughly 350 mm square.
+#:
+#: A count, not a clock. This module promises that the same design routes the
+#: same way twice, and test_routing_is_deterministic holds it to that; a
+#: wall-clock cutoff would make the copper depend on how busy the machine was.
+#:
+#: Sized from measurement rather than guessed. Boards that route successfully
+#: spend 72 expansions (12x12 mm, 6 nets) to 379k (250x200 mm, 20 nets, far
+#: larger than anything this pipeline generates); the search runs at roughly
+#: 35k expansions a second. 400k therefore clears every board measured that
+#: could finish, leaves about three orders of magnitude of headroom over a
+#: realistic one, and caps the pathological case near ten seconds.
+DEFAULT_MAX_EXPANSIONS = 400_000
+
+#: The most any single net may spend out of that. Without it one hopeless net
+#: drains the whole budget on its own and every net behind it is reported
+#: unrouted having never been tried -- honest, but needlessly bad copper. The
+#: largest single search on a board that did finish measured 125,626, so this
+#: sits above every success seen and well below the total.
+DEFAULT_MAX_EXPANSIONS_PER_NET = 150_000
+
 #: The two layers this router uses, in the order it prefers them.
 _LAYERS: tuple[Layer, ...] = (Layer.TOP, Layer.BOTTOM)
 
@@ -193,6 +221,8 @@ def route(
     via_diameter_nm: int = DEFAULT_VIA_DIAMETER_NM,
     via_drill_nm: int = DEFAULT_VIA_DRILL_NM,
     two_layer: bool = True,
+    max_expansions: int = DEFAULT_MAX_EXPANSIONS,
+    max_expansions_per_net: int = DEFAULT_MAX_EXPANSIONS_PER_NET,
 ) -> RouteResult:
     """Route every multi-terminal net over the placed pads.
 
@@ -205,6 +235,12 @@ def route(
         two_layer: Allow the back copper layer and vias. With this off the
             router is single-layer and will leave more nets unrouted, which is
             the honest outcome rather than a crossing short.
+        max_expansions: Total search effort for the whole call. Nets still
+            unrouted when it runs out are named like any other failure rather
+            than silently skipped, so the result says the board was not
+            finished instead of implying there was nothing left to do.
+        max_expansions_per_net: The most any one net may take out of that, so a
+            single hopeless net cannot starve the ones behind it.
 
     Returns:
         A :class:`RouteResult` whose ``unrouted`` names every net that did not
@@ -336,7 +372,14 @@ def route(
                 f"the routing grid is too coarse for this footprint"
             )
 
+    budget = _Budget(max_expansions, max_expansions_per_net)
     for net in routable:
+        if budget.spent:
+            result.unrouted[net] = (
+                f"search budget of {max_expansions} node expansions ran out "
+                f"before this net was reached"
+            )
+            continue
         paths, failure = _route_net(
             ports[net],
             net=net,
@@ -349,6 +392,7 @@ def route(
             track_disc=track_disc,
             via_disc=via_disc,
             via_cost=_VIA_COST_STEPS,
+            budget=budget,
         )
         if failure is not None:
             result.unrouted[net] = failure
@@ -385,6 +429,35 @@ def route(
 _Node = tuple[Layer, int, int]
 
 
+@dataclass
+class _Budget:
+    """Search effort left, for the whole call and for the net in hand.
+
+    Two caps because they answer different failures. The total is what stops a
+    board with forty hopeless nets costing forty times one with a single
+    hopeless net. The per-net share is what stops the first hopeless net
+    spending everything and leaving the rest reported unrouted without ever
+    having been tried.
+    """
+
+    remaining: int
+    per_net: int
+    net_remaining: int = 0
+
+    @property
+    def spent(self) -> bool:
+        return self.remaining <= 0
+
+    def start_net(self) -> None:
+        self.net_remaining = min(self.per_net, self.remaining)
+
+    def take(self) -> bool:
+        """Charge one node expansion. False once either cap is reached."""
+        self.remaining -= 1
+        self.net_remaining -= 1
+        return self.remaining > 0 and self.net_remaining > 0
+
+
 def _route_net(
     terminals: list[_Node],
     *,
@@ -398,6 +471,7 @@ def _route_net(
     track_disc: tuple[tuple[int, int], ...],
     via_disc: tuple[tuple[int, int], ...],
     via_cost: int,
+    budget: _Budget,
 ) -> tuple[list[list[_Node]], str | None]:
     """Grow one net's tree, terminal by terminal.
 
@@ -406,6 +480,7 @@ def _route_net(
     tracks laid down is a board that looks routed in the places you happen to
     look at.
     """
+    budget.start_net()
     tree: set[_Node] = {terminals[0]}
     paths: list[list[_Node]] = []
     for target in terminals[1:]:
@@ -424,11 +499,21 @@ def _route_net(
             track_disc=track_disc,
             via_disc=via_disc,
             via_cost=via_cost,
+            budget=budget,
             # A path may run along copper this net already owns; that is a
             # T-junction, which is exactly what a multi-pin net wants.
             owned=tree,
         )
         if path is None:
+            # Distinguish the two: "blocked" is a fact about the board, "ran
+            # out of budget" is a fact about how hard we looked. Reporting the
+            # second as the first would send someone rearranging a board that
+            # routes fine given more search.
+            if budget.spent or budget.net_remaining <= 0:
+                return [], (
+                    "search budget ran out while looking for a path to one of "
+                    f"its {len(terminals)} pads"
+                )
             return [], (
                 f"no clear path to one of its {len(terminals)} pads; "
                 f"the channel is blocked by earlier nets or by pad clearance"
@@ -452,6 +537,7 @@ def _astar(
     track_disc: tuple[tuple[int, int], ...],
     via_disc: tuple[tuple[int, int], ...],
     via_cost: int,
+    budget: _Budget,
     owned: set[_Node],
 ) -> list[_Node] | None:
     """Shortest path from any node in ``sources`` to ``goal``.
@@ -539,6 +625,8 @@ def _astar(
         _, _, cost, node = heapq.heappop(open_heap)
         if cost > best.get(node, cost):
             continue
+        if not budget.take():
+            return None
         if node == goal:
             path = [node]
             while path[-1] in came:

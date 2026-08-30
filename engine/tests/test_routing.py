@@ -501,3 +501,73 @@ def test_an_empty_board_area_names_its_nets_too():
     result = route(pads, min_x_nm=0, min_y_nm=0, max_x_nm=0, max_y_nm=0)
     assert list(result.unrouted) == ["A"]
     assert result.completion == 0.0
+
+
+def _boxed_in(cx_mm: float, cy_mm: float) -> list[RoutePad]:
+    """A net with one pad walled in by a ring of foreign pads.
+
+    Provably unroutable, so A* only gives up after exhausting everything it can
+    reach -- which is the expensive case the budget exists to bound.
+    """
+    pads = [
+        RoutePad(net="BLOCKED", x_nm=mm(cx_mm), y_nm=mm(cy_mm),
+                 w_nm=mm(0.4), h_nm=mm(0.4)),
+        RoutePad(net="BLOCKED", x_nm=mm(cx_mm + 40), y_nm=mm(cy_mm + 30),
+                 w_nm=mm(0.4), h_nm=mm(0.4)),
+    ]
+    for a in range(-6, 7):
+        for b in range(-6, 7):
+            if max(abs(a), abs(b)) == 6:
+                pads.append(
+                    RoutePad(net="RING", x_nm=mm(cx_mm + a * 0.25),
+                             y_nm=mm(cy_mm + b * 0.25),
+                             w_nm=mm(0.2), h_nm=mm(0.2))
+                )
+    return pads
+
+
+def test_a_hopeless_net_cannot_search_forever():
+    """The node guard bounds the lattice; this bounds the work done on it.
+
+    An unroutable net only returns once A* has exhausted everything reachable,
+    and before the budget existed a large board paid that in full for every
+    failing net -- 76 seconds measured, with nothing to stop it.
+    """
+    result = route(
+        _boxed_in(20.0, 20.0),
+        min_x_nm=0, min_y_nm=0, max_x_nm=mm(160.0), max_y_nm=mm(120.0),
+        max_expansions=5_000,
+    )
+    assert "BLOCKED" in result.unrouted
+    assert "budget" in result.unrouted["BLOCKED"]
+
+
+def test_a_hopeless_net_does_not_starve_the_ones_behind_it():
+    """Reported unrouted having never been tried is honest but avoidable."""
+    pads = _boxed_in(20.0, 20.0) + [
+        RoutePad(net="EASY", x_nm=mm(100.0), y_nm=mm(60.0), w_nm=mm(1.0), h_nm=mm(1.0)),
+        RoutePad(net="EASY", x_nm=mm(104.0), y_nm=mm(60.0), w_nm=mm(1.0), h_nm=mm(1.0)),
+    ]
+    result = route(
+        pads,
+        min_x_nm=0, min_y_nm=0, max_x_nm=mm(160.0), max_y_nm=mm(120.0),
+        max_expansions=12_000, max_expansions_per_net=4_000,
+    )
+    assert "BLOCKED" in result.unrouted
+    assert "EASY" in result.routed, "the per-net share did not protect it"
+
+
+def test_the_budget_keeps_routing_deterministic():
+    """A count, not a clock: two runs of one design must give one board.
+
+    A wall-clock cutoff would have been simpler and would have made the copper
+    depend on how busy the machine was.
+    """
+    pads = _boxed_in(20.0, 20.0)
+    runs = [
+        route(pads, min_x_nm=0, min_y_nm=0, max_x_nm=mm(160.0), max_y_nm=mm(120.0),
+              max_expansions=5_000)
+        for _ in range(2)
+    ]
+    assert runs[0].tracks == runs[1].tracks
+    assert runs[0].unrouted == runs[1].unrouted
