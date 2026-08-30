@@ -242,6 +242,12 @@
   $effect(() => () => {
     clearTimeout(copyTimer)
     flushKeys()
+    // Escape can close the drawer mid-drag; pointerup never reaches the
+    // unmounted grip, but the height change is already persisted.
+    if (dragging) {
+      dragging = false
+      noteResize(dragFrom, height)
+    }
   })
 </script>
 
