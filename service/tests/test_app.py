@@ -1743,3 +1743,278 @@ def test_a_streamed_grounded_run_reports_each_part(ground_server):
     assert frames[-1]["event"] == "run.done"
     pages = frames[-1]["result"]["grounding"]["pages"]
     assert pages == {"cached": ["AMS1117-3.3"], "read": []}
+
+
+# ------------------------------------------------------------------- ordering
+#
+# The order block is opt-in and additive. Without an "order" key the response
+# is exactly the object it always was; with one it gains the manifest, the
+# preflight issues, the orderable verdict and the fab files. What follows
+# covers that boundary, the gate that refuses a board with no copper on it, and
+# the option validation -- which has to run before the pipeline, so that a
+# misspelled option costs the caller nothing.
+
+ORDER_REQUEST = {
+    "intent": "a 3.3V regulator",
+    "time_limit_s": 5,
+    "order": {"quantity": 10},
+}
+
+#: The nine RS-274X layers fab_files emits. Every one has to carry the same
+#: format header and the same end-of-file word: a Gerber missing either is
+#: rejected at CAM, which is a week of lead time after the order was placed.
+GERBER_SUFFIXES = (
+    ".GTL",
+    ".GBL",
+    ".GTS",
+    ".GBS",
+    ".GTP",
+    ".GBP",
+    ".GTO",
+    ".GBO",
+    ".GKO",
+)
+
+#: Every option shape the request-level validator must refuse, paired with the
+#: field its message has to name. A 400 that does not say which of the ten
+#: options was wrong leaves the caller bisecting their own request.
+BAD_ORDER_OPTIONS = [
+    ("quantity below one", {"quantity": 0}, "quantity"),
+    ("an odd layer count", {"layers": 3}, "layers"),
+    ("a thickness no fab stocks", {"thickness_mm": 1.7}, "thickness_mm"),
+    ("a side that is not a side", {"assembly_side": "left"}, "assembly_side"),
+    ("zero panel rows", {"panel_rows": 0}, "panel_rows"),
+    ("an invented finish", {"surface_finish": "gold-plated"}, "surface_finish"),
+    ("a misspelled key", {"qty": 5}, "qty"),
+    ("not an object at all", "yes", "order"),
+]
+
+
+def order_of(srv, options=None):
+    """One successful order request, as the whole response body.
+
+    Returns the body rather than just ``body["order"]`` because half of what
+    these tests check is that the order block did not disturb anything around
+    it.
+    """
+    request = dict(ORDER_REQUEST)
+    if options is not None:
+        request["order"] = options
+    status, body = post(srv, request)
+    assert status == 200, body
+    return body
+
+
+@pytest.fixture
+def counting_server():
+    """A server whose every request shares one ScriptedModel.
+
+    ``model_factory`` is called once per request, so the ordinary fixture hands
+    each request its own recorder and the call count dies with it. One shared
+    instance is what lets a test say a request cost no model call at all.
+    """
+    model = scripted()
+
+    def shared():
+        return model
+
+    previous_factory = Handler.__dict__["model_factory"]
+    store = MemoryFactStore()
+    Handler.model_factory = staticmethod(shared)
+    Handler.store = store
+    srv = make_server(port=0)
+    thread = threading.Thread(target=srv.serve_forever, daemon=True)
+    thread.start()
+    srv.store = store
+    srv.model = model
+    try:
+        yield srv
+    finally:
+        srv.shutdown()
+        srv.server_close()
+        Handler.model_factory = previous_factory
+        Handler.store = None
+
+
+def test_no_order_key_unless_it_was_asked_for(server):
+    """The response without an order request is the one it has always been."""
+    status, body = post(server, {"intent": "a 3.3V regulator", "time_limit_s": 5})
+    assert status == 200
+    assert "order" not in body
+    assert body["kicad_pcb"].startswith("(kicad_pcb")
+    assert [p["ref"] for p in body["parts"]] == ["U1", "C1", "C2"]
+    assert [f["severity"] for f in body["findings"]] == [
+        "blocker",
+        "marginal",
+        "note",
+    ]
+
+
+def test_the_order_block_is_purely_additive(server):
+    """Asking for an order adds a key and changes nothing else.
+
+    Stated as an equality against a plain run rather than as a list of fields
+    to spot-check, because the fields that break a client are the ones nobody
+    remembered to list.
+    """
+    plain_status, plain = post(
+        server, {"intent": "a 3.3V regulator", "time_limit_s": 5}
+    )
+    ordered_status, ordered = post(server, ORDER_REQUEST)
+    assert plain_status == 200 and ordered_status == 200
+
+    order = ordered.pop("order")
+    # Wall clock is the one field two runs cannot share.
+    del plain["duration_s"]
+    del ordered["duration_s"]
+    assert ordered == plain
+    assert order["orderable"] is False
+
+
+def test_an_order_request_returns_a_manifest_and_the_fab_files(server):
+    order = order_of(server)["order"]
+    assert sorted(order) == ["files", "issues", "manifest", "orderable"]
+
+    filenames = [f["filename"] for f in order["files"]]
+    assert len(filenames) == 12
+    assert len(set(filenames)) == 12, (
+        "duplicate names collide in the package a human is meant to submit"
+    )
+
+    manifest = order["manifest"]
+    assert set(manifest) >= {
+        "board",
+        "disclaimer",
+        "issues",
+        "options",
+        "orderable",
+        "requires_human_approval",
+    }
+    assert manifest["options"]["quantity"] == 10
+    assert manifest["requires_human_approval"] is True
+    assert isinstance(manifest["disclaimer"], str)
+    assert manifest["disclaimer"].strip(), "the disclaimer must actually say something"
+
+
+def test_an_unrouted_board_is_not_orderable(server):
+    """The gate, on the only kind of board this pipeline can currently make.
+
+    Nothing here routes, so every net joining two pads is still open and the
+    board would arrive electrically dead. It is the one refusal that has to
+    fire on the happy path.
+    """
+    order = order_of(server)["order"]
+
+    assert order["orderable"] is False
+    blockers = [i for i in order["issues"] if i["severity"] == "blocker"]
+    assert [i["code"] for i in blockers] == ["unrouted-nets"]
+
+    issue = blockers[0]
+    assert set(issue) == {"code", "severity", "title", "detail", "parts"}
+    # Substrings taken from the detail this build actually emits.
+    assert "no traces" in issue["detail"]
+    assert "electrically dead" in issue["detail"]
+
+
+def test_the_manifest_verdict_matches_the_issues(server):
+    """The manifest cannot claim a board is orderable while a blocker stands."""
+    order = order_of(server)["order"]
+    manifest = order["manifest"]
+
+    assert manifest["orderable"] == order["orderable"]
+    assert manifest["issues"] == order["issues"]
+
+    blockers = [i for i in order["issues"] if i["severity"] == "blocker"]
+    assert manifest["blocker_count"] == len(blockers)
+    assert manifest["orderable"] == (not blockers), (
+        "orderable is true exactly when nothing blocks"
+    )
+
+
+@pytest.mark.parametrize(("label", "options", "field"), BAD_ORDER_OPTIONS)
+def test_a_bad_order_option_is_400_naming_the_field(server, label, options, field):
+    """A rejected option is the caller's error, and it says which one."""
+    status, body = post(
+        server,
+        {"intent": "a 3.3V regulator", "time_limit_s": 5, "order": options},
+    )
+    assert status == 400, f"{label}: {body}"
+    assert field in body["error"], f"{label}: {body['error']}"
+    assert "error_id" not in body, "a bad option is not an internal error"
+
+
+def test_a_rejected_order_option_costs_no_model_call(counting_server):
+    """Validation runs before the pipeline, so a bad option is free.
+
+    The second half of this test is the control: without it, a counter that
+    never records anything would make the first assertion pass for the wrong
+    reason.
+    """
+    status, body = post(
+        counting_server,
+        {"intent": "a 3.3V regulator", "time_limit_s": 5, "order": {"layers": 3}},
+    )
+    assert status == 400
+    assert "layers" in body["error"]
+    assert counting_server.model.calls == [], "a refused option must reach no model"
+
+    status, _ = post(counting_server, ORDER_REQUEST)
+    assert status == 200
+    assert counting_server.model.calls, "the same counter does record a real run"
+
+
+def test_the_fab_files_are_json_safe_and_well_formed(server):
+    """Twelve text artefacts, each one something a board house can read.
+
+    Arriving through :func:`post` at all is most of the JSON-safety claim --
+    the body was serialised by the service and parsed back here -- so what is
+    left to check is that the entries are strings and that each format's
+    opening and closing words are present.
+    """
+    files = order_of(server)["order"]["files"]
+    for entry in files:
+        assert set(entry) == {"filename", "content"}
+        assert isinstance(entry["filename"], str) and entry["filename"]
+        assert isinstance(entry["content"], str) and entry["content"].strip()
+
+    by_name = {f["filename"]: f["content"] for f in files}
+    assert len(by_name) == 12
+
+    gerbers = sorted(n for n in by_name if n.endswith(GERBER_SUFFIXES))
+    assert len(gerbers) == 9
+    for name in gerbers:
+        assert by_name[name].startswith("%FSLAX46Y46*%"), name
+        assert by_name[name].rstrip("\n").endswith("M02*"), name
+
+    drills = [n for n in by_name if n.endswith(".DRL")]
+    assert len(drills) == 1
+    assert by_name[drills[0]].startswith("M48")
+
+    csvs = sorted(n for n in by_name if n.endswith(".csv"))
+    assert [by_name[n].splitlines()[0] for n in csvs] == [
+        "Comment,Designator,Footprint,Quantity",
+        "Designator,Mid X,Mid Y,Layer,Rotation",
+    ]
+
+
+def test_an_order_and_grounding_coexist(ground_server):
+    """Two opt-in blocks in one response, neither standing on the other."""
+    ground_server.store.put("AMS1117-3.3", _cached_facts())
+    seed_pages(ground_server)
+
+    request = dict(GROUND_REQUEST)
+    request["order"] = {"quantity": 10}
+    status, body = post(ground_server, request)
+    assert status == 200
+
+    grounded = body["grounding"]
+    assert grounded["findings"][0]["status"] == "corroborated"
+    assert grounded["pages"] == {"cached": ["AMS1117-3.3"], "read": []}
+
+    order = body["order"]
+    assert len(order["files"]) == 12
+    assert order["manifest"]["options"]["quantity"] == 10
+    assert order["orderable"] is False
+
+    assert body["kicad_pcb"].startswith("(kicad_pcb")
+    assert [p["ref"] for p in body["parts"]] == ["U1", "C1", "C2"]
