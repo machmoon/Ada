@@ -48,6 +48,9 @@ FEATURES
  ----- FallbackModel chain w/ response validation      [DONE]        resilience.py
  ----- 3.7-flash primary, 3.5-flash-lite second        [DONE]        service/app.py
  ----- Per-task routing beyond failover                [IDEA]        vision/reasoning vs mechanical passes
+ ----- Request timeout so a hung primary fails over    [OPEN]        GeminiModel sets no deadline; observed 2026-08-30
+                                                                     via the event stream: 3.7-flash 504-degraded, the
+                                                                     propose call hangs, fallback is never reached
  6   Confirmation gates on file writes                 [NOT BUILT]
  ----- Inventory write points, define the gate         [NOT BUILT]   save_board, CLI output, service response
  ----- CLI confirmation prompt before board write      [NOT BUILT]   with a --yes bypass
