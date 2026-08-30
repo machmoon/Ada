@@ -16,6 +16,7 @@ Deploy::
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import json
 import os
@@ -259,6 +260,37 @@ def caused_by_model_failure(exc: BaseException) -> bool:
     return False
 
 
+def _error_response(exc: BaseException) -> tuple[int, dict[str, Any]]:
+    """One failed run, as the status and body a caller should be told about.
+
+    Both POST routes answer failures the same way and differ only in framing:
+    the one-shot route sends this as the whole response, and the streaming
+    route wraps it in a final ``run.error`` frame. Holding the taxonomy in one
+    place is also what makes it fixable in one place -- the bare ValueError
+    branch below still returns an internal message verbatim, and this function
+    is where a dedicated request-error type will replace it.
+    """
+    if isinstance(exc, ValueError):
+        # Deliberately narrow: generate() converts field-level failures
+        # (including float(None)'s TypeError) into ValueError, so a TypeError
+        # arriving here is an internal bug and falls through to the 500 branch
+        # with its error id and logged traceback.
+        return 400, {"error": str(exc)}
+    if isinstance(exc, (AllProvidersFailed, GroundingError, ModelError)):
+        # Upstream is down, not the caller's fault: 502, not 500.
+        return 502, {"error": str(exc)}
+    if caused_by_model_failure(exc):
+        return 502, {"error": str(exc)}
+    # The traceback goes to the log, not to the caller. This is a public
+    # endpoint, and a stack trace hands an anonymous client our file layout
+    # and internal call structure. The id is what makes the two halves
+    # joinable when someone reports a failure.
+    error_id = uuid.uuid4().hex[:12]
+    trace = "".join(traceback.format_exception(type(exc), exc, exc.__traceback__))
+    sys.stderr.write(f"error {error_id}: {type(exc).__name__}: {exc}\n{trace}\n")
+    return 500, {"error": "internal error", "error_id": error_id}
+
+
 def build_store() -> FactStore:
     """Firestore when deployed, in-memory when not configured."""
     if os.getenv("GOOGLE_CLOUD_PROJECT") and os.getenv("USE_FIRESTORE", "1") != "0":
@@ -303,9 +335,26 @@ def generate(
     store: FactStore,
     pages_store: FactStore | None = None,
     embedder_factory: Callable[[], Any] | None = None,
+    on_event: Callable[[dict[str, Any]], None] | None = None,
 ) -> dict[str, Any]:
-    """Run the pipeline for one request body."""
+    """Run the pipeline for one request body.
+
+    ``on_event`` is handed to the pipeline unchanged and additionally receives
+    the grounding events this function owns, since grounding happens after the
+    pipeline has returned and the pipeline therefore cannot report it. Its
+    ``t_s`` counts from this call rather than from the pipeline's own start,
+    so the two clocks differ by the cache reads done before the pipeline is
+    entered; that gap is real and reporting one clock as the other would only
+    hide it. Without ``on_event`` nothing is emitted and the response is
+    exactly what it was.
+    """
     started = time.monotonic()
+
+    def emit(event: dict[str, Any]) -> None:
+        if on_event is None:
+            return
+        event["t_s"] = round(time.monotonic() - started, 3)
+        on_event(event)
 
     intent = str(payload.get("intent") or "").strip()
     if not intent:
@@ -364,6 +413,7 @@ def generate(
         preloaded_facts=preloaded,
         time_limit_s=time_limit_s,
         review=bool(payload.get("review", True)),
+        on_event=on_event,
     )
 
     for fact in result.facts:
@@ -434,6 +484,9 @@ def generate(
         pages_read: list[str] = []
         for part, url in datasheets.items():
             pages = load_pages(pages_store, page_cache_key(part, url))
+            # Read before the fetch below reassigns it: afterwards every part
+            # holds pages and the distinction that matters is gone.
+            cached = pages is not None
             if pages is None:
                 try:
                     pages = pages_for_part(url=url)
@@ -444,6 +497,7 @@ def generate(
                 pages_read.append(part)
             else:
                 pages_cached.append(part)
+            emit({"event": "ground.part", "part": part, "cached": cached})
             index = build_index(pages, embedder)
             if len(index):
                 indexes[part] = index
@@ -477,8 +531,8 @@ def generate(
 
 
 class Handler(BaseHTTPRequestHandler):
-    """Three routes: a health check Cloud Run can probe, the generator, and
-    the built web bundle."""
+    """Four routes: a health check Cloud Run can probe, the generator in its
+    one-shot and streaming forms, and the built web bundle."""
 
     model_factory = staticmethod(build_model)
     store: FactStore | None = None
@@ -589,10 +643,22 @@ class Handler(BaseHTTPRequestHandler):
         self._send(404, {"error": f"no route {self.path}"})
 
     def do_POST(self) -> None:
-        if self.path not in ("/generate", "/"):
-            self._send(404, {"error": f"no route {self.path}"})
+        if self.path == "/generate/stream":
+            self._generate_stream()
             return
+        if self.path in ("/generate", "/"):
+            self._generate_once()
+            return
+        self._send(404, {"error": f"no route {self.path}"})
 
+    def _read_payload(self) -> dict[str, Any] | None:
+        """The request body as a JSON object, or None once its error is sent.
+
+        Shared by both POST routes. Everything checked here fails before a
+        single byte of response has been written, which is what lets the
+        streaming route answer a bad request with a plain JSON error rather
+        than a stream whose only frame is an apology.
+        """
         # A malformed Content-Length is the client's error. Parsing it outside
         # a guard lets a header of "abc" raise before any response is sent, so
         # the caller sees a dropped connection instead of a 400.
@@ -600,62 +666,111 @@ class Handler(BaseHTTPRequestHandler):
             length = int(self.headers.get("Content-Length") or 0)
         except ValueError:
             self._send(400, {"error": "invalid Content-Length"})
-            return
+            return None
         if length < 0:
             self._send(400, {"error": "invalid Content-Length"})
-            return
+            return None
         if length > MAX_BODY_BYTES:
             self._send(413, {"error": "request body too large"})
-            return
+            return None
         try:
             payload = json.loads(self.rfile.read(length) or b"{}")
         except json.JSONDecodeError as exc:
             self._send(400, {"error": f"invalid JSON: {exc}"})
-            return
+            return None
         if not isinstance(payload, dict):
             self._send(400, {"error": "body must be a JSON object"})
-            return
+            return None
+        return payload
 
+    def _run(
+        self,
+        payload: dict[str, Any],
+        on_event: Callable[[dict[str, Any]], None] | None = None,
+    ) -> dict[str, Any]:
+        """One pipeline run, wired to whatever this handler was injected with."""
+        store = self.store if self.store is not None else build_store()
+        return generate(
+            payload,
+            model=self.model_factory(),
+            store=store,
+            pages_store=self.pages_store,
+            embedder_factory=self.embedder_factory,
+            on_event=on_event,
+        )
+
+    def _generate_once(self) -> None:
+        """The whole run in one response, once it is finished."""
+        payload = self._read_payload()
+        if payload is None:
+            return
         try:
-            store = self.store if self.store is not None else build_store()
-            result = generate(
-                payload,
-                model=self.model_factory(),
-                store=store,
-                pages_store=self.pages_store,
-                embedder_factory=self.embedder_factory,
-            )
-        except ValueError as exc:
-            # Deliberately narrow: generate() converts field-level failures
-            # (including float(None)'s TypeError) into ValueError, so a
-            # TypeError arriving here is an internal bug and falls through to
-            # the 500 handler with its error id and logged traceback.
-            self._send(400, {"error": str(exc)})
-        except (AllProvidersFailed, GroundingError, ModelError) as exc:
-            # Upstream is down, not the caller's fault: 502, not 500.
-            self._send(502, {"error": str(exc)})
+            result = self._run(payload)
         except Exception as exc:
-            if caused_by_model_failure(exc):
-                self._send(502, {"error": str(exc)})
-            else:
-                # The traceback goes to the log, not to the caller. This is a
-                # public endpoint, and a stack trace hands an anonymous client
-                # our file layout and internal call structure. The id is what
-                # makes the two halves joinable when someone reports a failure.
-                error_id = uuid.uuid4().hex[:12]
-                sys.stderr.write(
-                    f"error {error_id}: {type(exc).__name__}: {exc}\n"
-                    f"{traceback.format_exc()}\n"
-                )
-                self._send(
-                    500,
-                    {
-                        "error": "internal error",
-                        "error_id": error_id,
-                    },
-                )
+            status, body = _error_response(exc)
+            self._send(status, body)
         else:
             self._send(200, result)
+
+    def _generate_stream(self) -> None:
+        """The same run, reported while it happens, as NDJSON.
+
+        No Content-Length and no chunked encoding: this server speaks HTTP/1.0,
+        where a body is delimited by the connection closing. That is also why
+        every frame is flushed the moment it is written -- a buffer that
+        delivered the frames at the end would turn progress into a transcript.
+        """
+        payload = self._read_payload()
+        if payload is None:
+            return
+
+        self.send_response(200)
+        self.send_header("Content-Type", "application/x-ndjson")
+        self.send_header("Cache-Control", "no-cache")
+        self.end_headers()
+
+        gone = False
+
+        def emit(event: dict[str, Any]) -> None:
+            """One frame, on the wire immediately.
+
+            A write to a client that has hung up re-raises on purpose: the
+            pipeline lets a callback's exception abandon the run, which is how
+            a reader's disconnect cancels the work being done for it.
+            """
+            nonlocal gone
+            try:
+                self.wfile.write((json.dumps(event) + "\n").encode())
+                self.wfile.flush()
+            except ConnectionError:
+                # BrokenPipeError and ConnectionResetError are the two that
+                # normally arrive; Windows reports the same disconnect as
+                # ConnectionAbortedError, and all three are ConnectionError.
+                gone = True
+                raise
+
+        try:
+            # Before any work starts, so a client can tell an accepted request
+            # from one still waiting for a connection.
+            emit({"event": "run.accepted", "t_s": 0.0})
+            result = self._run(payload, on_event=emit)
+        except Exception as exc:
+            if gone:
+                # The exception is our own emit reporting the disconnect, on
+                # its way out through the pipeline. There is nobody left to
+                # tell, and writing again would only raise a second time.
+                sys.stderr.write(f"stream client disconnected: {self.path}\n")
+                return
+            status, body = _error_response(exc)
+            # Whether this last frame lands is the client's business now; if
+            # it left between the failure and this write there is nothing
+            # further to do about it.
+            with contextlib.suppress(ConnectionError):
+                emit({"event": "run.error", "status": status, **body})
+            return
+
+        with contextlib.suppress(ConnectionError):
+            emit({"event": "run.done", "result": result})
 
     def log_message(self, fmt: str, *args: Any) -> None:
         sys.stderr.write(f"{self.address_string()} - {fmt % args}\n")
