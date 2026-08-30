@@ -19,8 +19,10 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from ..board import BoardResult, build_board, write_board
+from ..board import BoardResult, build_board, route_board, write_board
 from ..netlist import CircuitSpec
+from ..routing import RouteResult
+from ..schematic import build_schematic, write_project, write_schematic
 from ..units import NM_PER_MM
 from .datasheet import PartFacts, read_datasheet
 from .model import Document, Model
@@ -47,6 +49,24 @@ class PipelineResult:
     findings: list[Finding] = field(default_factory=list)
     attempts: list[ProposalAttempt] = field(default_factory=list)
     board_path: Path | None = None
+    #: The routed copper, or None when routing was turned off.
+    route: RouteResult | None = None
+    #: The other files a run leaves behind, so every stage is inspectable in
+    #: KiCad rather than only the last one.
+    schematic_path: Path | None = None
+    project_path: Path | None = None
+    placed_board_path: Path | None = None
+
+    @property
+    def artifacts(self) -> list[Path]:
+        """Every file this run wrote, in the order the stages produced them."""
+        ordered = [
+            self.project_path,
+            self.schematic_path,
+            self.placed_board_path,
+            self.board_path,
+        ]
+        return [p for p in ordered if p is not None]
 
     @property
     def blockers(self) -> list[Finding]:
@@ -65,6 +85,8 @@ class PipelineResult:
         ]
         if self.repair_rounds:
             lines.append(f"{self.repair_rounds} repair round(s) before it validated")
+        if self.route is not None:
+            lines.append(self.route.summary())
         blockers = len(self.blockers)
         lines.append(
             f"{len(self.findings)} finding(s), {blockers} blocker(s)"
@@ -174,6 +196,8 @@ def generate_pcb(
     max_repairs: int = 3,
     time_limit_s: float = 20.0,
     review: bool = True,
+    route: bool = True,
+    emit_stages: bool = True,
     on_event: Callable[[dict[str, Any]], None] | None = None,
     include_responses: bool = False,
 ) -> PipelineResult:
@@ -193,6 +217,15 @@ def generate_pcb(
         max_repairs: How many times the proposal may be sent back for repair.
         time_limit_s: Placement solver budget.
         review: Run the adversarial review pass.
+        route: Lay copper after placing. Off leaves a placed board whose pads
+            carry nets and whose copper is empty -- which KiCad draws as a
+            ratsnest, and which is what every run produced before routing
+            existed. Nets the router cannot finish are listed in
+            ``result.route.unrouted`` whether this is on or not.
+        emit_stages: Alongside the board, write the ``.kicad_sch``, the
+            ``.kicad_pro`` that ties the two together, and the pre-routing
+            ``.placed.kicad_pcb``, all named after ``output``. Ignored when
+            ``output`` is None, since there is nowhere to put them.
         on_event: Called with one flat dict per stage boundary and per model
             round-trip, each carrying ``event`` and ``t_s`` -- seconds since
             this call began. Events carry counts and status only, never board
@@ -301,6 +334,55 @@ def generate_pcb(
         }
     )
 
+    # Every stage leaves a file KiCad can open, not just the last one. The
+    # schematic goes out before any copper exists, because it is the artifact
+    # a person reads first and it does not depend on placement succeeding well.
+    schematic_path: Path | None = None
+    project_path: Path | None = None
+    placed_board_path: Path | None = None
+    out_path = Path(output) if output is not None else None
+    if out_path is not None and emit_stages:
+        stem = out_path.name[: -len("".join(out_path.suffixes))] or out_path.stem
+        sheet = build_schematic(
+            spec,
+            footprints={p.ref: f"silkscreen:{p.footprint.name}" for p in board.parts},
+        )
+        board.warnings.extend(sheet.warnings)
+        schematic_path = write_schematic(
+            sheet, out_path.with_name(f"{stem}.kicad_sch"), project_name=stem
+        )
+        project_path = write_project(
+            out_path.with_name(f"{stem}.kicad_pro"), project_name=stem
+        )
+        placed_board_path = write_board(
+            board, out_path.with_name(f"{stem}.placed.kicad_pcb")
+        )
+        emit(
+            {
+                "event": "stage.done",
+                "stage": "schematic",
+                "symbols": len(sheet.symbols),
+                "warnings": len(sheet.warnings),
+            }
+        )
+
+    route_result: RouteResult | None = None
+    if route:
+        enter("route")
+        emit({"event": "stage.start", "stage": "route"})
+        route_result = route_board(board)
+        emit(
+            {
+                "event": "stage.done",
+                "stage": "route",
+                "tracks": len(route_result.tracks),
+                "vias": len(route_result.vias),
+                "routed_nets": len(route_result.routed),
+                "unrouted_nets": len(route_result.unrouted),
+                "copper_mm": round(route_result.routed_length_nm / NM_PER_MM, 3),
+            }
+        )
+
     findings: list[Finding] = []
     if review:
         enter("review")
@@ -327,4 +409,8 @@ def generate_pcb(
         findings=findings,
         attempts=attempts,
         board_path=path,
+        route=route_result,
+        schematic_path=schematic_path,
+        project_path=project_path,
+        placed_board_path=placed_board_path,
     )

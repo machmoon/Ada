@@ -48,6 +48,11 @@ def main(argv: list[str] | None = None) -> int:
                         help="how many times to send a bad proposal back")
     parser.add_argument("--no-review", action="store_true",
                         help="skip the adversarial review pass")
+    parser.add_argument("--no-route", action="store_true",
+                        help="stop after placement, leaving the copper empty")
+    parser.add_argument("--board-only", action="store_true",
+                        help="write only the routed .kicad_pcb, no schematic, "
+                             "project file or pre-routing board")
     args = parser.parse_args(argv)
 
     _load_dotenv(Path.cwd() / ".env")
@@ -77,6 +82,8 @@ def main(argv: list[str] | None = None) -> int:
             max_repairs=args.repairs,
             time_limit_s=args.time_limit,
             review=not args.no_review,
+            route=not args.no_route,
+            emit_stages=not args.board_only,
         )
     except Exception as exc:
         print(f"error: {exc}", file=sys.stderr)
@@ -100,12 +107,25 @@ def main(argv: list[str] | None = None) -> int:
             if f.suggested_fix:
                 print(f"       fix:   {f.suggested_fix}")
 
+    # Say plainly which nets have no copper. A board reported as routed when
+    # some nets are still ratsnest is the failure this output exists to
+    # prevent -- the missing connections are invisible until fabrication.
+    if result.route is not None:
+        print()
+        print(f"Routing: {result.route.summary()}")
+        for net, reason in sorted(result.route.unrouted.items()):
+            print(f"  unrouted {net}: {reason}")
+
     for w in result.board.warnings:
         print(f"  note: {w}", file=sys.stderr)
 
-    if result.board_path:
+    if result.artifacts:
         print()
-        print(f"wrote {result.board_path}")
+        for path in result.artifacts:
+            print(f"wrote {path}")
+        if result.project_path:
+            print()
+            print(f"open in KiCad:  {result.project_path}")
     return 0
 
 
