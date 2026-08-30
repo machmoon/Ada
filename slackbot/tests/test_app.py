@@ -1,0 +1,264 @@
+"""The HTTP surface: signatures, acknowledgement, routing, and deduplication."""
+
+from __future__ import annotations
+
+import json
+import threading
+import time
+import urllib.error
+import urllib.request
+
+import pytest
+
+from slackbot.app import Dispatcher, make_handler, make_server
+from slackbot.config import Config
+from slackbot.tests.test_slack import SECRET, sign
+
+CONFIG = Config(bot_token="xoxb-t", signing_secret=SECRET)
+
+
+class FakeRunner:
+    """Records what would have been executed, without executing anything."""
+
+    def __init__(self):
+        self.handled: list[tuple] = []
+        self.errors: list[str] = []
+        self.busy = 0
+        self.slots = threading.Semaphore(2)
+
+    def handle(self, command, *, channel, thread_ts, user=""):
+        self.handled.append((command, channel, thread_ts, user))
+
+    def report_error(self, channel, thread_ts, message):
+        self.errors.append(message)
+
+    def report_busy(self, channel, thread_ts):
+        self.busy += 1
+
+    def acquire_slot(self, timeout=0.0):
+        return self.slots.acquire(timeout=timeout or 0.01)
+
+    def release_slot(self):
+        self.slots.release()
+
+
+@pytest.fixture
+def dispatcher():
+    # A short slot wait: the production 240s is there to absorb one run ahead
+    # in the queue, and waiting it out would make this file take four minutes.
+    return Dispatcher(CONFIG, FakeRunner(), slot_wait_s=0.05)
+
+
+def event(text="design a rail", **overrides):
+    payload = {
+        "type": "event_callback",
+        "event_id": "Ev1",
+        "event": {
+            "type": "app_mention",
+            "text": f"<@U0BOT> {text}",
+            "channel": "C1",
+            "ts": "1.1",
+            "user": "U9",
+        },
+    }
+    payload["event"].update(overrides.pop("event", {}))
+    payload.update(overrides)
+    return payload
+
+
+# -- dispatcher -----------------------------------------------------------
+
+
+def test_url_verification_echoes_the_challenge():
+    code, body = Dispatcher(CONFIG, FakeRunner()).handle_event_payload(
+        {"type": "url_verification", "challenge": "abc123"}
+    )
+    assert (code, body) == (200, {"challenge": "abc123"})
+
+
+def test_a_mention_schedules_a_run(dispatcher):
+    code, _ = dispatcher.handle_event_payload(event())
+    dispatcher.join()
+    assert code == 200
+    command, channel, thread_ts, user = dispatcher.runner.handled[0]
+    assert command.verb == "design"
+    assert (channel, thread_ts, user) == ("C1", "1.1", "U9")
+
+
+def test_a_mention_inside_a_thread_answers_in_that_thread(dispatcher):
+    """`review` and `order` refer to the run above them."""
+    dispatcher.handle_event_payload(event("review", event={"thread_ts": "0.9"}))
+    dispatcher.join()
+    assert dispatcher.runner.handled[0][2] == "0.9"
+
+
+def test_a_repeated_delivery_runs_once(dispatcher):
+    """Slack retries an unacknowledged event; a second run costs real money."""
+    dispatcher.handle_event_payload(event())
+    dispatcher.handle_event_payload(event())
+    dispatcher.join()
+    assert len(dispatcher.runner.handled) == 1
+
+
+def test_the_bot_ignores_other_bots(dispatcher):
+    dispatcher.handle_event_payload(event(event={"bot_id": "B1"}))
+    dispatcher.join()
+    assert dispatcher.runner.handled == []
+
+
+def test_non_mention_events_are_ignored(dispatcher):
+    dispatcher.handle_event_payload(event(event={"type": "message"}))
+    dispatcher.join()
+    assert dispatcher.runner.handled == []
+
+
+def test_a_disallowed_channel_is_ignored():
+    config = Config(
+        bot_token="t", signing_secret=SECRET, allowed_channels=frozenset({"C-ok"})
+    )
+    dispatcher = Dispatcher(config, FakeRunner(), slot_wait_s=0.05)
+    dispatcher.handle_event_payload(event())
+    dispatcher.join()
+    assert dispatcher.runner.handled == []
+
+
+def test_a_parse_error_is_relayed_rather_than_run(dispatcher):
+    dispatcher.handle_event_payload(event("design a rail --datasheet"))
+    dispatcher.join()
+    assert dispatcher.runner.handled == []
+    assert "PART=URL" in dispatcher.runner.errors[0]
+
+
+def test_saturation_is_reported(dispatcher):
+    dispatcher.runner.slots = threading.Semaphore(0)
+    dispatcher.handle_event_payload(event())
+    dispatcher.join()
+    assert dispatcher.runner.busy == 1
+    assert dispatcher.runner.handled == []
+
+
+def test_cheap_verbs_do_not_consume_a_slot(dispatcher):
+    dispatcher.runner.slots = threading.Semaphore(0)
+    dispatcher.handle_event_payload(event("help"))
+    dispatcher.join()
+    assert dispatcher.runner.handled[0][0].verb == "help"
+    assert dispatcher.runner.busy == 0
+
+
+def test_a_slash_command_posts_into_the_channel_not_a_dm(dispatcher):
+    code, body = dispatcher.handle_slash_payload(
+        {"channel_id": "C1", "user_id": "U9", "text": "design a rail"}
+    )
+    dispatcher.join()
+    assert code == 200
+    assert body["response_type"] == "ephemeral"
+    assert dispatcher.runner.handled[0][1] == "C1"
+
+
+# -- HTTP -----------------------------------------------------------------
+
+
+@pytest.fixture
+def server(dispatcher):
+    from http.server import ThreadingHTTPServer
+
+    httpd = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(dispatcher))
+    thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+    thread.start()
+    yield httpd, dispatcher
+    httpd.shutdown()
+    httpd.server_close()
+
+
+def post(httpd, path, body: bytes, *, signed=True, timestamp=None):
+    # The default has to be *now*: the server checks freshness against the real
+    # clock, so a fixed timestamp would make these tests fail with age.
+    timestamp = timestamp or str(int(time.time()))
+    headers = {"Content-Type": "application/json"}
+    if signed:
+        headers["X-Slack-Request-Timestamp"] = timestamp
+        headers["X-Slack-Signature"] = sign(body, timestamp)
+    request = urllib.request.Request(
+        f"http://127.0.0.1:{httpd.server_port}{path}",
+        data=body,
+        headers=headers,
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=5) as response:
+            return response.status, response.read()
+    except urllib.error.HTTPError as exc:
+        return exc.code, exc.read()
+
+
+def test_healthz(server):
+    httpd, _ = server
+    with urllib.request.urlopen(
+        f"http://127.0.0.1:{httpd.server_port}/healthz", timeout=5
+    ) as response:
+        assert json.loads(response.read())["ok"] is True
+
+
+def test_an_unsigned_request_is_rejected_without_being_parsed(server):
+    httpd, dispatcher = server
+    status, _ = post(httpd, "/slack/events", json.dumps(event()).encode(), signed=False)
+    assert status == 401
+    dispatcher.join(timeout=1)
+    assert dispatcher.runner.handled == []
+
+
+def test_a_stale_signature_is_rejected(server):
+    httpd, dispatcher = server
+    status, _ = post(
+        httpd, "/slack/events", json.dumps(event()).encode(), timestamp="1"
+    )
+    assert status == 401
+    assert dispatcher.runner.handled == []
+
+
+def test_a_signed_event_is_acknowledged(server):
+    httpd, dispatcher = server
+    status, body = post(httpd, "/slack/events", json.dumps(event()).encode())
+    assert status == 200
+    dispatcher.join()
+    assert dispatcher.runner.handled[0][0].verb == "design"
+
+
+def test_url_verification_over_http(server):
+    httpd, _ = server
+    payload = json.dumps({"type": "url_verification", "challenge": "xyz"}).encode()
+    status, body = post(httpd, "/slack/events", payload)
+    assert status == 200
+    assert json.loads(body)["challenge"] == "xyz"
+
+
+def test_a_signed_but_non_json_body_is_a_400(server):
+    httpd, _ = server
+    assert post(httpd, "/slack/events", b"not json")[0] == 400
+
+
+def test_a_slash_command_form_body_is_parsed(server):
+    httpd, dispatcher = server
+    body = b"channel_id=C1&user_id=U9&text=design+a+rail"
+    status, _ = post(httpd, "/slack/commands", body)
+    assert status == 200
+    dispatcher.join()
+    assert dispatcher.runner.handled[0][0].intent == "a rail"
+
+
+def test_unknown_routes_are_404(server):
+    httpd, _ = server
+    assert post(httpd, "/slack/nope", b"{}")[0] == 404
+
+
+def test_an_oversized_body_is_refused(server):
+    httpd, _ = server
+    assert post(httpd, "/slack/events", b"x" * (2 << 20))[0] == 413
+
+
+def test_make_server_binds(monkeypatch):
+    httpd = make_server(Config(bot_token="t", signing_secret="s", port=0))
+    try:
+        assert httpd.server_port > 0
+    finally:
+        httpd.server_close()

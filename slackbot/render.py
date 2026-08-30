@@ -147,7 +147,9 @@ def render_png(board, *, title: str = "") -> bytes | None:
     image = Image.new("RGB", (width_px, height_px), BG)
     draw = ImageDraw.Draw(image)
 
-    def box(x: float, y: float, w: float, h: float) -> tuple[float, float, float, float]:
+    def box(
+        x: float, y: float, w: float, h: float
+    ) -> tuple[float, float, float, float]:
         """Millimetres, Y up -> pixels, Y down. The one flip, again once."""
         left = (x + MARGIN_MM) * scale
         top = (board_h + MARGIN_MM - (y + h)) * scale

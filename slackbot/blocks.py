@@ -67,9 +67,7 @@ def escape_mrkdwn(text: str) -> str:
     the pipeline having lost the finding rather than the formatter having eaten
     it.
     """
-    return (
-        str(text).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
-    )
+    return str(text).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 
 
 def truncate(text: str, limit: int = MAX_SECTION_CHARS) -> str:
@@ -116,7 +114,10 @@ def error_blocks(title: str, detail: str = "", hint: str = "") -> list[dict[str,
 def accepted_blocks(intent: str, user_id: str = "") -> list[dict[str, Any]]:
     who = f" for <@{user_id}>" if user_id else ""
     return [
-        section(f":gear: *Working on it*{who}\n>{escape_mrkdwn(truncate(intent, 400))}"),
+        section(
+            f":gear: *Working on it*{who}\n"
+            f">{escape_mrkdwn(truncate(intent, 400))}"
+        ),
         context("Placement uses CP-SAT and takes a few seconds; the model calls "
                 "take longer. I'll post the board and the files here when it's done."),
     ]
@@ -155,7 +156,8 @@ def _finding_line(finding: Finding) -> str:
     if finding.citation:
         line += f"\n_cited:_ {escape_mrkdwn(truncate(finding.citation, 300))}"
     if finding.suggested_fix:
-        line += f"\n_suggested fix:_ {escape_mrkdwn(truncate(finding.suggested_fix, 400))}"
+        fix = escape_mrkdwn(truncate(finding.suggested_fix, 400))
+        line += f"\n_suggested fix:_ {fix}"
     return line
 
 
@@ -193,7 +195,8 @@ def result_blocks(
     width, height = board.size_mm
     blocks: list[dict[str, Any]] = [
         section(
-            f":white_check_mark: *Board ready*\n>{escape_mrkdwn(truncate(result.intent, 400))}"
+            ":white_check_mark: *Board ready*\n"
+            f">{escape_mrkdwn(truncate(result.intent, 400))}"
         ),
         section(
             f"*{result.spec.part_count()}* parts · *{result.spec.net_count()}* nets · "

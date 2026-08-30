@@ -127,7 +127,9 @@ class Runner:
                 channel,
                 thread_ts,
                 str(exc),
-                B.error_blocks("I couldn't run that", str(exc), "Try `@silkscreen help`."),
+                B.error_blocks(
+                    "I couldn't run that", str(exc), "Try `@silkscreen help`."
+                ),
             )
         except SlackError:
             # Slack itself failed; there is no channel left to complain into.
@@ -135,6 +137,37 @@ class Runner:
         except Exception as exc:  # noqa: BLE001 - a run must not kill the worker
             log.exception("run failed: %s", command.verb)
             self._report_failure(channel, thread_ts, exc)
+
+    def report_error(self, channel: str, thread_ts: str, message: str) -> None:
+        """Relay a message that never became a command, e.g. a parse error."""
+        try:
+            self._post(
+                channel,
+                thread_ts,
+                message,
+                B.error_blocks(
+                    "I couldn't run that", message, "Try `@silkscreen help`."
+                ),
+            )
+        except SlackError:
+            log.exception("could not report a parse error to %s", channel)
+
+    def report_busy(self, channel: str, thread_ts: str) -> None:
+        """Say the bot is saturated, rather than dropping the request quietly."""
+        try:
+            self._post(
+                channel,
+                thread_ts,
+                "silkscreen is busy",
+                B.error_blocks(
+                    "I'm at capacity",
+                    f"{self._config.max_concurrent_runs} run(s) are already in "
+                    "flight and this one waited too long for a slot.",
+                    "Ask again when the runs above have finished.",
+                ),
+            )
+        except SlackError:
+            log.exception("could not report saturation to %s", channel)
 
     # -- verbs ------------------------------------------------------------
 

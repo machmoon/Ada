@@ -12,6 +12,7 @@ against a recorded transport instead of the network.
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import hmac
 import json
@@ -245,20 +246,17 @@ class SlackClient:
     def add_reaction(self, channel: str, ts: str, name: str) -> None:
         """React to a message. A failure here is cosmetic, so it is swallowed:
         losing an emoji must never lose a run."""
-        try:
+        with contextlib.suppress(SlackError):
             self._call(
                 "reactions.add", {"channel": channel, "timestamp": ts, "name": name}
             )
-        except SlackError:
-            pass
 
     def remove_reaction(self, channel: str, ts: str, name: str) -> None:
-        try:
+        with contextlib.suppress(SlackError):
             self._call(
-                "reactions.remove", {"channel": channel, "timestamp": ts, "name": name}
+                "reactions.remove",
+                {"channel": channel, "timestamp": ts, "name": name},
             )
-        except SlackError:
-            pass
 
     # -- files ------------------------------------------------------------
 
@@ -335,5 +333,5 @@ def _multipart(boundary: str, filename: str, content: bytes) -> bytes:
         f"--{boundary}\r\n"
         f'Content-Disposition: form-data; name="file"; filename="{safe}"\r\n'
         "Content-Type: application/octet-stream\r\n\r\n"
-    ).encode("utf-8")
+    ).encode()
     return head + content + f"\r\n--{boundary}--\r\n".encode()
