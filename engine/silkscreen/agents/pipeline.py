@@ -342,6 +342,8 @@ def generate_pcb(
     placed_board_path: Path | None = None
     out_path = Path(output) if output is not None else None
     if out_path is not None and emit_stages:
+        enter("schematic")
+        emit({"event": "stage.start", "stage": "schematic"})
         stem = out_path.name[: -len("".join(out_path.suffixes))] or out_path.stem
         sheet = build_schematic(
             spec,

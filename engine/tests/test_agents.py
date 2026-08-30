@@ -335,10 +335,15 @@ def test_events_trace_every_stage_and_model_call(tmp_path):
         "stage.start", "read.part", "model.call", "stage.done",
         "stage.start", "model.call", "stage.done",
         "stage.start", "stage.done",
+        "stage.start", "stage.done",
+        "stage.start", "stage.done",
         "stage.start", "model.call", "stage.done",
     ]
+    # Schematic and route are stages like any other: each opens and closes, so
+    # a client ticking a stage list never sees a close it has no open for.
     assert [e["stage"] for e in events if e["event"].startswith("stage.")] == [
-        "read", "read", "propose", "propose", "place", "place", "review", "review",
+        "read", "read", "propose", "propose", "place", "place",
+        "schematic", "schematic", "route", "route", "review", "review",
     ]
     assert all(isinstance(e["t_s"], (int, float)) for e in events)
     assert len([e for e in events if e["event"] == "model.call"]) == len(model.calls)

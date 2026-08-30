@@ -97,9 +97,7 @@ def board_pads_from_file(brd: Board):
     """
     pads = []
     for fp in brd.footprints:
-        ref = next(
-            (p.value for p in fp.properties if p.key == "Reference"), fp.libraryNickname
-        )
+        ref = fp.properties.get("Reference", fp.libraryNickname)
         assert fp.position.angle in (None, 0), "fixture must not be rotated"
         for pad in fp.pads:
             layer = "B.Cu" if any("B.Cu" in v for v in pad.layers) else "F.Cu"

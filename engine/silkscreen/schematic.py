@@ -31,6 +31,7 @@ here may flip a sign.
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -177,6 +178,46 @@ def _polyline(points: list[tuple[int, int]], *, width_nm: int = mm(0.254)) -> st
     return f"(polyline (pts {pts}) {_stroke(width_nm)} (fill (type none)))"
 
 
+def _humps(*, count: int, span_nm: int, radius_nm: int) -> list[tuple[int, int]]:
+    """A chain of semicircular bumps up the Y axis, for the inductor body.
+
+    Polyline-approximated rather than drawn with ``arc``: a polyline is one
+    primitive with no centre/mid-point convention to get wrong, and at this size
+    the flats are invisible.
+    """
+    points: list[tuple[int, int]] = []
+    steps = 8
+    for hump in range(count):
+        y0 = -span_nm + (2 * span_nm * hump) // count
+        y1 = -span_nm + (2 * span_nm * (hump + 1)) // count
+        for step in range(steps + 1):
+            if hump and step == 0:
+                continue  # the previous hump already ended here
+            t = step / steps
+            angle = math.pi * t
+            points.append(
+                (
+                    int(round(radius_nm * math.sin(angle))),
+                    int(round(y0 + (y1 - y0) * t)),
+                )
+            )
+    return points
+
+
+#: Library symbol name per passive type, following KiCad's own designators.
+#: Spelled out rather than derived from the first letter of the type name,
+#: which collides: "capacitor" and "crystal" both start with C, and since one
+#: definition is emitted per distinct ``lib_id``, every crystal on the sheet
+#: would be drawn -- and read -- as a capacitor.
+_SYMBOL_NAME: dict[PassiveType, str] = {
+    PassiveType.RESISTOR: "R",
+    PassiveType.CAPACITOR: "C",
+    PassiveType.INDUCTOR: "L",
+    PassiveType.DIODE: "D",
+    PassiveType.CRYSTAL: "Y",
+}
+
+
 def _passive_shape(ptype: PassiveType) -> SymbolShape:
     """A two-terminal symbol, pin 1 at the top and pin 2 at the bottom.
 
@@ -187,8 +228,13 @@ def _passive_shape(ptype: PassiveType) -> SymbolShape:
     y = _PASSIVE_PIN_Y_NM
     graphics: list[str]
 
-    if ptype in (PassiveType.RESISTOR, PassiveType.INDUCTOR):
+    if ptype is PassiveType.RESISTOR:
         graphics = [_rect(-w, -h, w, h)]
+    elif ptype is PassiveType.INDUCTOR:
+        # Four humps up the vertical axis, KiCad's own inductor. Sharing the
+        # resistor's rectangle would draw a part that is not the one specified,
+        # which is the failure the per-type glyphs exist to prevent.
+        graphics = [_polyline(_humps(count=4, span_nm=h, radius_nm=w))]
     elif ptype is PassiveType.CAPACITOR:
         plate = mm(2.54)
         gap = mm(0.508)
@@ -212,7 +258,7 @@ def _passive_shape(ptype: PassiveType) -> SymbolShape:
         ]
 
     return SymbolShape(
-        lib_id=f"{_ICON_LIB}:{ptype.value[:1].upper()}",
+        lib_id=f"{_ICON_LIB}:{_SYMBOL_NAME[ptype]}",
         pins=[
             SymbolPin("1", "~", 0, y, 270),
             SymbolPin("2", "~", 0, -y, 90),
@@ -408,9 +454,13 @@ _FONT = "(effects (font (size 1.27 1.27)))"
 
 def _lib_symbol(shape: SymbolShape, *, ref_prefix: str) -> list[str]:
     """The ``lib_symbols`` entry for one generated symbol."""
+    # KiCad keys a lib_symbols entry by the **full** ``Lib:Name`` and names the
+    # unit sub-symbols after the bare name. Writing the bare name on the outer
+    # entry leaves every instance's lib_id unresolved, which is exactly the
+    # "opens without our library" promise this module makes.
     name = shape.lib_id.split(":", 1)[1]
     out = [
-        f'    (symbol "{_esc(name)}"'
+        f'    (symbol "{_esc(shape.lib_id)}"'
         + (" (pin_numbers hide)" if shape.hide_pin_numbers else ""),
         "      (pin_names (offset 0.508))",
         "      (exclude_from_sim no) (in_bom yes) (on_board yes)",
