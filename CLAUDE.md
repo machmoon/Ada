@@ -16,7 +16,6 @@ PORT=8081 python -m service.app                      # serve API + built web UI 
 cd web && npm install && npm run dev                 # frontend dev server on :5173, proxies /generate to 127.0.0.1:8081
 cd web && npm test                                   # Vitest over web/src/lib (CI's `web` job runs this before the build)
 cd web && npm run build                              # build web/dist, which service/app.py serves at /
-cd web && npm test                                   # Vitest over web/src/lib (CI runs it before the build)
 ```
 
 The web toolchain needs **Node 22 or newer** (`node --version`); CI pins 22, and Vite 8 refuses to start on anything older.
