@@ -107,20 +107,136 @@ _CONTENT_TYPES = {
 _DEFAULT_CONTENT_TYPE = "application/octet-stream"
 
 
-def _finding_dict(finding) -> dict[str, Any]:
+def _refs_by_spec_name(spec, board) -> dict[str, str]:
+    """Spec part names to the reference designators the board gave them.
+
+    A finding names parts the way the *spec* does -- ``AMS1117-3.3``,
+    ``c_bulk_vin`` -- because review_circuit validates them against the spec.
+    The board names the same parts ``U1`` and ``C1``. Without this map a client
+    that highlights by ref matches nothing at all, which looks exactly like a
+    finding about no part rather than a lookup failure.
+
+    ``build_board`` assigns refs by walking devices then passives in spec
+    order, so the two lists pair up positionally. The device half is checked
+    against the value it carries; if anything about that pairing stops holding,
+    an empty map is the honest answer, because a wrong ref highlights the
+    wrong part.
+    """
+    names = [d.name for d in spec.devices] + [p.name for p in spec.passives]
+    parts = list(board.parts)
+    if len(names) != len(parts):
+        return {}
+    for device, part in zip(spec.devices, parts, strict=False):
+        if part.value != device.name:
+            return {}
+    return {name: part.ref for name, part in zip(names, parts, strict=True)}
+
+
+def _finding_dict(finding, refs: dict[str, str] | None = None) -> dict[str, Any]:
     """One review finding, whole.
 
     ``blockers`` flattens a finding to a single string, dropping the severity,
     the detail, the citation and the suggested fix -- everything a reader needs
     in order to act on it.
+
+    ``parts`` keeps the spec's names, which is the vocabulary the title and
+    detail are written in; ``refs`` carries the same parts as they are labelled
+    on the board, so a reader can point at them without guessing.
     """
+    refs = refs or {}
     return {
         "severity": finding.severity.value,
         "title": finding.title,
         "detail": finding.detail,
         "parts": list(finding.parts),
+        "refs": [refs[p] for p in finding.parts if p in refs],
         "citation": finding.citation,
         "suggested_fix": finding.suggested_fix,
+    }
+
+
+def _rect_mm(x_nm: int, y_nm: int, w_nm: int, h_nm: int) -> list[float]:
+    """A rectangle as ``[x, y, w, h]`` in millimetres, min-corner first."""
+    return [
+        round(to_mm(x_nm), 3),
+        round(to_mm(y_nm), 3),
+        round(to_mm(w_nm), 3),
+        round(to_mm(h_nm), 3),
+    ]
+
+
+def _placements_dict(board) -> dict[str, Any]:
+    """Every rectangle a renderer needs, with rotation already applied.
+
+    ``parts`` in the response names refs and footprints only, which is enough
+    to list a board and not enough to draw one. This carries the geometry: the
+    courtyard each part occupies and every pad inside it, absolute, in the
+    solver's Y-up frame.
+
+    Rotation is resolved here rather than on the wire. A rotated part's box and
+    pads arrive already transformed, so a client's only coordinate work is the
+    single Y flip its own frame needs -- the repository's rule that exactly one
+    place owns each frame change, applied across the HTTP boundary.
+    """
+    parts: list[dict[str, Any]] = []
+    for part in board.parts:
+        fp = part.footprint
+        cw, ch = fp.courtyard_w_nm, fp.courtyard_h_nm
+        # x_nm/y_nm are the courtyard's bottom-left corner, Y up; the
+        # footprint's own pad coordinates are centred on its anchor. A
+        # 90-degree rotation is about the box, so its extents swap.
+        box_w, box_h = (2 * ch, 2 * cw) if part.rotated else (2 * cw, 2 * ch)
+
+        pads: list[dict[str, Any]] = []
+        for pad in fp.pads:
+            # Offsets from that same bottom-left corner. A footprint's own pad
+            # coordinates are KiCad's, so Y counts downward from the anchor --
+            # the same flip kicad.py performs on the read side, and the one
+            # emit_kicad_pcb relies on when it writes these pads out verbatim.
+            # Skipping it mirrors every multi-row package inside its own
+            # courtyard, silently disagreeing with the board file we serve
+            # alongside. Rotation then maps (ox, oy) to (height - oy, ox),
+            # exactly as the solver models it.
+            ox, oy = pad.x_nm + cw, ch - pad.y_nm
+            if part.rotated:
+                ox, oy = 2 * ch - oy, ox
+                pw, ph = pad.h_nm, pad.w_nm
+            else:
+                pw, ph = pad.w_nm, pad.h_nm
+            pads.append(
+                {
+                    "number": pad.number,
+                    "net": pad.net or None,
+                    "rect_mm": _rect_mm(
+                        part.x_nm + ox - pw // 2,
+                        part.y_nm + oy - ph // 2,
+                        pw,
+                        ph,
+                    ),
+                }
+            )
+
+        parts.append(
+            {
+                "ref": part.ref,
+                "footprint": fp.name,
+                "value": part.value or None,
+                "layer": str(part.layer),
+                "rotated": bool(part.rotated),
+                "x_mm": round(to_mm(part.x_nm), 3),
+                "y_mm": round(to_mm(part.y_nm), 3),
+                "courtyard_mm": _rect_mm(part.x_nm, part.y_nm, box_w, box_h),
+                "pads": pads,
+            }
+        )
+
+    return {
+        "board_mm": [
+            round(to_mm(board.width_nm), 3),
+            round(to_mm(board.height_nm), 3),
+        ],
+        "frame": "solver-y-up",
+        "parts": parts,
     }
 
 
@@ -232,12 +348,21 @@ def generate(
             unusable.append(part)
             to_read[part] = datasheets[part]
 
+    # Coerce here, not in the route handler: float() raises TypeError on a
+    # JSON null and ValueError on a string, and both are this caller's error.
+    # Naming the field keeps the route's except clause narrow, so a genuine
+    # internal TypeError still surfaces as a 500 with an error id.
+    try:
+        time_limit_s = float(payload.get("time_limit_s", DEFAULT_TIME_LIMIT))
+    except (TypeError, ValueError):
+        raise ValueError("'time_limit_s' must be a number") from None
+
     result = generate_pcb(
         model,
         intent,
         datasheets=to_read,
         preloaded_facts=preloaded,
-        time_limit_s=float(payload.get("time_limit_s", DEFAULT_TIME_LIMIT)),
+        time_limit_s=time_limit_s,
         review=bool(payload.get("review", True)),
     )
 
@@ -247,6 +372,7 @@ def generate(
             store.put(part, fact.to_dict())
 
     board = result.board
+    refs = _refs_by_spec_name(result.spec, board)
     response: dict[str, Any] = {
         "intent": intent,
         "board_mm": [round(to_mm(board.width_nm), 3), round(to_mm(board.height_nm), 3)],
@@ -255,7 +381,7 @@ def generate(
         "kicad_pcb": emit_kicad_pcb(board),
         "repair_rounds": result.repair_rounds,
         "blockers": [str(b) for b in result.blockers],
-        "findings": [_finding_dict(f) for f in result.findings],
+        "findings": [_finding_dict(f, refs) for f in result.findings],
         "duration_s": round(time.monotonic() - started, 3),
         "warnings": list(board.warnings),
         "nets": list(board.nets),
@@ -282,6 +408,14 @@ def generate(
             "unusable": sorted(unusable),
         },
         "served_by": getattr(model, "last_provider", None),
+        # Geometry, resolved server-side. Additive: nothing above changes
+        # shape, so a client that only reads "parts" keeps working.
+        "placements": _placements_dict(board),
+        "wirelength_mm": (
+            None
+            if board.wirelength_nm is None
+            else round(to_mm(board.wirelength_nm), 3)
+        ),
     }
 
     if payload.get("ground") is True:
@@ -393,6 +527,23 @@ class Handler(BaseHTTPRequestHandler):
             return None
         return resolved if resolved.is_file() else None
 
+    def _is_fingerprinted(self, path: Path) -> bool:
+        """True only for files the build named with a content hash.
+
+        The bundler puts those in ``assets/``. Everything else -- index.html,
+        and anything copied verbatim from ``web/public`` -- keeps a fixed name
+        across deploys, so an immutable year on it is a cache entry with no
+        way to be busted short of a new URL.
+        """
+        root = self.web_root
+        if root is None:
+            return False
+        try:
+            relative = path.resolve().relative_to(root.resolve())
+        except (OSError, ValueError):
+            return False
+        return len(relative.parts) > 1 and relative.parts[0] == "assets"
+
     def _send_file(self, path: Path) -> None:
         try:
             body = path.read_bytes()
@@ -405,13 +556,10 @@ class Handler(BaseHTTPRequestHandler):
             _CONTENT_TYPES.get(path.suffix.lower(), _DEFAULT_CONTENT_TYPE),
         )
         self.send_header("Content-Length", str(len(body)))
-        # index.html names the fingerprinted assets, so caching it would pin a
-        # client to the previous deploy. Everything else carries a content hash
-        # in its filename and can never go stale under it.
-        if path.name == "index.html":
-            self.send_header("Cache-Control", "no-cache")
-        else:
+        if self._is_fingerprinted(path):
             self.send_header("Cache-Control", "public, max-age=31536000, immutable")
+        else:
+            self.send_header("Cache-Control", "no-cache")
         self.end_headers()
         self.wfile.write(body)
 
@@ -478,6 +626,10 @@ class Handler(BaseHTTPRequestHandler):
                 embedder_factory=self.embedder_factory,
             )
         except ValueError as exc:
+            # Deliberately narrow: generate() converts field-level failures
+            # (including float(None)'s TypeError) into ValueError, so a
+            # TypeError arriving here is an internal bug and falls through to
+            # the 500 handler with its error id and logged traceback.
             self._send(400, {"error": str(exc)})
         except (AllProvidersFailed, GroundingError, ModelError) as exc:
             # Upstream is down, not the caller's fault: 502, not 500.

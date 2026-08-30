@@ -51,13 +51,16 @@ FEATURES
  ----- Ops polish: client reuse, document env var      [OPEN]        USE_FIRESTORE undocumented today
  9   Web review UI                                     [PARTIAL]
  ----- Review page, served by the service at /         [DONE]        web/ Svelte SPA; same origin, so no CORS
- ----- Board well (Option B), placements in the API    [NOT BUILT]   derivable from BoardResult; no engine change
+ ----- Board well (Option B), placements in the API    [DONE]        service resolves the geometry; SVG flips Y once
+ ----- Findings cross-highlight, review <-> board      [DONE]        a selected finding lights up its parts
+ ----- Grounding toggle on the intent form             [DONE]        sends "ground" only when a datasheet is given
+ ----- Download the emitted .kicad_pcb                 [DONE]        from the board well and the review results
  ----- Voice: spoken intent, findings read aloud       [NOT BUILT]   the last phase, by instruction; Whisper
 
 OPEN WORK, SUMMARISED
 ---------------------
 Everything actionable reduces to: feature 2 in full (parallel reads, an SDK
 thread-pool task), feature 6 in full (confirmation gates), the deploy and
-smoke check under 7, the ops polish under 8, and the board well then voice
-under 9 -- in that order, voice last. The [IDEA] rows under 4 and 5 are
-ideas, not commitments.
+smoke check under 7, the ops polish under 8, and voice under 9. The board
+well shipped, so voice is all that is left of 9 and stays last. The [IDEA]
+rows under 4 and 5 are ideas, not commitments.

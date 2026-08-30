@@ -39,6 +39,9 @@ export function normalizeRequest(request) {
     datasheets,
     time_limit_s: clampTimeLimit(request.time_limit_s),
     review: request.review !== false,
+    // Grounding is opt-in and only sent when it was asked for: an absent flag
+    // is the service's default, so a stray `ground: false` would say nothing.
+    ...(request.ground === true ? { ground: true } : {}),
   }
 }
 

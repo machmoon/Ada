@@ -17,6 +17,12 @@
   --rule: #B5B5B5;
   --rule-soft: #D6D3C8;
 
+  /* the board well, from design/Board.dc.html. Only the two the stylesheet
+     needs live here; the layer colours are SVG attribute values and belong to
+     src/lib/board.js, which maps a layer name to one. */
+  --well-bg: #001023;
+  --well-text: #5B7291;
+
   /* KiCad symbol colours */
   --oxblood: #840000;
   --teal: #006464;
