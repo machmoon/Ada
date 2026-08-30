@@ -418,10 +418,10 @@ def _lib_symbol(shape: SymbolShape, *, ref_prefix: str) -> list[str]:
         f"(at 0 {_f(shape.extent_h_nm + mm(1.27))} 0) {_FONT})",
         f'      (property "Value" "{_esc(name)}" '
         f"(at 0 {_f(-shape.extent_h_nm - mm(1.27))} 0) {_FONT})",
-        f'      (property "Footprint" "" (at 0 0 0) '
-        f"(effects (font (size 1.27 1.27)) hide))",
-        f'      (property "Datasheet" "" (at 0 0 0) '
-        f"(effects (font (size 1.27 1.27)) hide))",
+        '      (property "Footprint" "" (at 0 0 0) '
+        "(effects (font (size 1.27 1.27)) hide))",
+        '      (property "Datasheet" "" (at 0 0 0) '
+        "(effects (font (size 1.27 1.27)) hide))",
         f'      (symbol "{_esc(name)}_0_1"',
     ]
     out += [f"        {g}" for g in shape.graphics]
@@ -550,13 +550,13 @@ def emit_kicad_pro(project_name: str = "silkscreen") -> str:
         '  "board": {"design_settings": {"defaults": {}}},\n'
         '  "boards": [],\n'
         '  "libraries": {"pinned_footprint_libs": [], "pinned_symbol_libs": []},\n'
-        '  "meta": {"filename": "%s.kicad_pro", "version": 1},\n'
+        f'  "meta": {{"filename": "{project_name}.kicad_pro", "version": 1}},\n'
         '  "net_settings": {"classes": [{"name": "Default"}]},\n'
         '  "pcbnew": {"page_layout_descr_file": ""},\n'
         '  "schematic": {"legacy_lib_dir": "", "legacy_lib_list": []},\n'
-        '  "sheets": [["%s", "Root"]],\n'
+        f'  "sheets": [["{sheet_uuid}", "Root"]],\n'
         '  "text_variables": {}\n'
-        "}\n" % (project_name, sheet_uuid)
+        "}\n"
     )
 
 

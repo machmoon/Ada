@@ -239,10 +239,12 @@ def route(
 
     for pad in sorted(pads, key=lambda p: (p.net, p.ref, p.number, p.x_nm, p.y_nm)):
         layer = Layer.TOP if pad.layer is not Layer.BOTTOM else Layer.BOTTOM
-        lo_i = int(math.floor((pad.x_nm - pad.w_nm / 2 - pad_margin - min_x_nm) / grid_nm))
-        hi_i = int(math.ceil((pad.x_nm + pad.w_nm / 2 + pad_margin - min_x_nm) / grid_nm))
-        lo_j = int(math.floor((pad.y_nm - pad.h_nm / 2 - pad_margin - min_y_nm) / grid_nm))
-        hi_j = int(math.ceil((pad.y_nm + pad.h_nm / 2 + pad_margin - min_y_nm) / grid_nm))
+        half_w = pad.w_nm / 2 + pad_margin
+        half_h = pad.h_nm / 2 + pad_margin
+        lo_i = int(math.floor((pad.x_nm - half_w - min_x_nm) / grid_nm))
+        hi_i = int(math.ceil((pad.x_nm + half_w - min_x_nm) / grid_nm))
+        lo_j = int(math.floor((pad.y_nm - half_h - min_y_nm) / grid_nm))
+        hi_j = int(math.ceil((pad.y_nm + half_h - min_y_nm) / grid_nm))
         for i in range(max(0, lo_i), min(nx - 1, hi_i) + 1):
             for j in range(max(0, lo_j), min(ny - 1, hi_j) + 1):
                 reserve(layer, (i, j), pad.net or _CONTESTED)
@@ -533,7 +535,7 @@ def _to_tracks(
     for run in runs:
         start = run[0]
         heading: tuple[int, int] | None = None
-        for prev, node in zip(run, run[1:]):
+        for prev, node in zip(run, run[1:], strict=False):
             step = (_sign(node[1] - prev[1]), _sign(node[2] - prev[2]))
             if heading is not None and step != heading:
                 segment(start, prev)
