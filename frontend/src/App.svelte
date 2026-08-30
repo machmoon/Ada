@@ -6,6 +6,7 @@
   import PipelineFeed from './components/PipelineFeed.svelte'
   import ReviewResults from './components/ReviewResults.svelte'
   import RunProgress from './components/RunProgress.svelte'
+  import SchematicWell from './components/SchematicWell.svelte'
   import SideRail from './components/SideRail.svelte'
   import StatusBar from './components/StatusBar.svelte'
   import TitleBar from './components/TitleBar.svelte'
@@ -14,6 +15,7 @@
   import { pcbText } from './lib/download.js'
   import { logEvent } from './lib/log.js'
   import { failRun, finishRun, resetRun, run, stageEvent, startRun } from './lib/run.js'
+  import { highlightSchematicParts, readSchematic } from './lib/schematic.js'
   import { resolveTab } from './lib/tabs.js'
 
   // The tab lives in the hash fragment; App is the only thing that reads it,
@@ -48,8 +50,10 @@
   const reviewed = $derived($run.request ? $run.request.review !== false : true)
 
   const placements = $derived($run.phase === 'done' ? readPlacements($run.result) : null)
+  const schematic = $derived($run.phase === 'done' ? readSchematic($run.result) : null)
   const boardEnabled = $derived(placements !== null)
-  const tab = $derived(resolveTab(hash, { board: boardEnabled }))
+  const schematicEnabled = $derived(schematic !== null)
+  const tab = $derived(resolveTab(hash, { schematic: schematicEnabled, board: boardEnabled }))
   const pcb = $derived($run.result ? pcbText($run.result) : '')
 
   const findings = $derived($run.result ? $run.result.findings : [])
@@ -58,6 +62,7 @@
   // is written in, and filtered against the parts actually placed — see
   // highlightRefs for why an unmatched list is worse than an empty one.
   const highlightedRefs = $derived(highlightRefs(selectedFinding, placements))
+  const highlightedSchematicIds = $derived(highlightSchematicParts(selectedFinding, schematic))
 
   // Plain let, not $state: the effect below both reads and writes it, and a
   // reactive one would wake the effect it just settled.
@@ -70,7 +75,12 @@
     if (to === lastTab) return
     const from = lastTab
     lastTab = to
-    logEvent('ui.tab', `tab ${from || 'none'} → ${to}`, { from, to, board_enabled: boardEnabled })
+    logEvent('ui.tab', `tab ${from || 'none'} → ${to}`, {
+      from,
+      to,
+      schematic_enabled: schematicEnabled,
+      board_enabled: boardEnabled,
+    })
   })
 
   function goTab(name) {
@@ -96,6 +106,12 @@
     selected = index
     logEvent('ui.show-on-board', `finding ${index} shown on the board`, { index })
     goTab('board')
+  }
+
+  function showOnSchematic(index) {
+    selected = index
+    logEvent('ui.show-on-schematic', `finding ${index} shown on the schematic`, { index })
+    goTab('schematic')
   }
 
   function newBoard() {
@@ -125,7 +141,20 @@
       {:else if $run.phase === 'error'}
         <ErrorPanel error={$run.error} onretry={retry} ondismiss={resetRun} />
       {:else if $run.phase === 'done'}
-        {#if tab === 'board' && placements}
+        {#if tab === 'schematic' && schematic}
+          <div class="hint" data-testid="app-hint">
+            {#if selectedFinding}
+              <span class="lbl">{highlightedSchematicIds.length ? 'showing' : 'no schematic part for'}</span>
+              <span class="hint-title" data-testid="app-hint-title">{selectedFinding.title}</span>
+              <button type="button" class="clear" data-testid="app-clear-selection" onclick={() => (selected = -1)}>
+                Clear selection
+              </button>
+            {:else}
+              <span class="lbl">validated connections · select a finding in the review to highlight one</span>
+            {/if}
+          </div>
+          <SchematicWell {schematic} highlightedIds={highlightedSchematicIds} />
+        {:else if tab === 'board' && placements}
           <div class="hint" data-testid="app-hint">
             {#if selectedFinding}
               <span class="lbl">{highlightedRefs.length ? 'showing' : 'no placed part for'}</span>
@@ -144,8 +173,10 @@
             request={$run.request}
             onnew={newBoard}
             {selected}
+            {schematicEnabled}
             {boardEnabled}
             onselect={selectFinding}
+            onshowschematic={showOnSchematic}
             onshowboard={showOnBoard}
           />
         {/if}
@@ -167,6 +198,7 @@
     findings={$run.result ? $run.result.findings : null}
     {reviewed}
     {tab}
+    {schematicEnabled}
     {boardEnabled}
     {debugOpen}
     ondebug={() => (debugOpen = !debugOpen)}

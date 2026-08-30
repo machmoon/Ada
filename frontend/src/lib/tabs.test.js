@@ -35,12 +35,17 @@ describe('resolveTab', () => {
     expect(resolveTab('#board')).toBe('review')
   })
 
-  it('never resolves the schematic tab, which is not built', () => {
-    expect(resolveTab('#schematic', { board: true })).toBe('review')
+  it('shows the schematic once a run carries validated topology', () => {
+    expect(resolveTab('#schematic', { schematic: true })).toBe('schematic')
+  })
+
+  it('falls back to review when there is no schematic to show', () => {
+    expect(resolveTab('#schematic', { schematic: false, board: true })).toBe('review')
+    expect(resolveTab('#schematic')).toBe('review')
   })
 
   it('defaults to the review for an empty or unknown hash', () => {
-    expect(resolveTab('', { board: true })).toBe('review')
-    expect(resolveTab('#nowhere', { board: true })).toBe('review')
+    expect(resolveTab('', { schematic: true, board: true })).toBe('review')
+    expect(resolveTab('#nowhere', { schematic: true, board: true })).toBe('review')
   })
 })

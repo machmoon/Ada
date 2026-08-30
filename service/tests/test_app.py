@@ -20,6 +20,13 @@ from silkscreen.units import to_mm
 from service.app import Handler, make_server
 from service.cache import MemoryFactStore
 
+try:
+    import google.adk  # noqa: F401
+
+    _HAS_ADK = True
+except ImportError:  # a base install has no google.adk; the ADK test skips
+    _HAS_ADK = False
+
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
 CIRCUIT = {
@@ -208,6 +215,56 @@ def test_generate_returns_a_board(server):
     assert body["kicad_pcb"].startswith("(kicad_pcb")
     assert [p["ref"] for p in body["parts"]] == ["U1", "C1", "C2"]
     assert body["board_mm"][0] > 0
+
+
+@pytest.mark.skipif(not _HAS_ADK, reason="the 'adk' extra is not installed")
+def test_the_adk_engine_answers_with_the_same_contract(monkeypatch, server):
+    """Which driver ran is an implementation detail; the response is not.
+
+    ``SILKSCREEN_ENGINE`` is read inside ``generate_pcb``, and the handler runs
+    in a thread of this process, so setting it here picks the driver for the
+    next request. Both halves are set, not just the second: an exported
+    ``SILKSCREEN_ENGINE`` would otherwise decide the baseline, and a developer
+    running the suite with the workflow already selected would be comparing
+    ADK against ADK and asserting nothing.
+
+    The counter is what proves the workflow ran at all. Every assertion below
+    holds trivially if both requests took the same driver, so the run is
+    observed directly rather than inferred from a response that is designed
+    not to distinguish them. The key set is compared against the SDK body
+    rather than against a literal list: the response is additive-only, and a
+    hand-written list would go stale the next time a field is added to it.
+    """
+    import silkscreen.agents.adk.runner as adk_runner
+
+    ran = []
+    workflow_driver = adk_runner.generate_pcb_adk
+
+    def counting(*args, **kwargs):
+        ran.append(1)
+        return workflow_driver(*args, **kwargs)
+
+    # ``generate_pcb`` does ``from .adk.runner import generate_pcb_adk`` inside
+    # the call, so the name is looked up on this module every time and patching
+    # the attribute here intercepts the dispatcher.
+    monkeypatch.setattr(adk_runner, "generate_pcb_adk", counting)
+
+    payload = {"intent": "a 3.3V regulator", "time_limit_s": 5}
+    monkeypatch.setenv("SILKSCREEN_ENGINE", "sdk")
+    sdk_status, sdk_body = post(server, payload)
+    assert ran == [], "the baseline request went through the ADK workflow"
+
+    monkeypatch.setenv("SILKSCREEN_ENGINE", "adk")
+    status, body = post(server, payload)
+    assert ran == [1], "the second request never reached the ADK workflow"
+
+    assert sdk_status == 200 and status == 200
+    assert set(body) == set(sdk_body)
+    assert body["kicad_pcb"].startswith("(kicad_pcb")
+    assert [p["ref"] for p in body["parts"]] == [p["ref"] for p in sdk_body["parts"]]
+    assert body["board_mm"] == sdk_body["board_mm"]
+    assert body["findings"] == sdk_body["findings"]
+    assert body["blockers"] == sdk_body["blockers"]
 
 
 def test_intent_is_required(server):
@@ -427,6 +484,61 @@ def test_findings_carry_board_refs_not_only_spec_names(server):
     assert not set(finding["parts"]) & on_board, (
         "the fixture is pointless unless the spec names really do differ"
     )
+
+
+def test_schematic_carries_validated_parts_pins_and_nets(server):
+    """The browser gets topology, not a CircuitSpec serialization accident."""
+    Handler.model_factory = staticmethod(scripted_named)
+    try:
+        status, body = post(server, {"intent": "a 3.3V regulator", "time_limit_s": 5})
+    finally:
+        Handler.model_factory = staticmethod(scripted)
+    assert status == 200
+
+    schematic = body["schematic"]
+    assert set(schematic) == {"version", "parts", "nets"}
+    assert schematic["version"] == 1
+    assert [part["id"] for part in schematic["parts"]] == [
+        "AMS1117-3.3",
+        "c_bulk_vin",
+        "c_dec_vout",
+    ]
+    assert [part["ref"] for part in schematic["parts"]] == ["U1", "C1", "C2"]
+
+    by_id = {part["id"]: part for part in schematic["parts"]}
+    assert set(by_id["AMS1117-3.3"]) == {
+        "id",
+        "ref",
+        "kind",
+        "value",
+        "symbol",
+        "pins",
+    }
+    assert by_id["AMS1117-3.3"]["kind"] == "device"
+    assert by_id["AMS1117-3.3"]["pins"] == [
+        {"name": "1", "number": "GND"},
+        {"name": "2", "number": "VOUT"},
+        {"name": "3", "number": "VIN"},
+    ]
+    assert by_id["c_bulk_vin"]["kind"] == "capacitor"
+    assert by_id["c_bulk_vin"]["value"] == "10uF"
+    assert by_id["c_bulk_vin"]["pins"] == [
+        {"name": "1", "number": "1"},
+        {"name": "2", "number": "2"},
+    ]
+
+    declared = {net["name"] for net in schematic["nets"]}
+    assert declared == set(NAMED_CIRCUIT["nets"])
+    for net in schematic["nets"]:
+        assert set(net) == {"name", "endpoints"}
+        assert len(net["endpoints"]) >= 2
+        for endpoint in net["endpoints"]:
+            assert set(endpoint) == {"part_id", "ref", "pin", "number"}
+            part = by_id[endpoint["part_id"]]
+            assert endpoint["ref"] == part["ref"]
+            assert {"name": endpoint["pin"], "number": endpoint["number"]} in part[
+                "pins"
+            ]
 
 
 def test_blockers_stay_flattened_strings(server):
@@ -930,6 +1042,7 @@ def test_placements_are_additive(server):
         "datasheets",
         "cache",
         "served_by",
+        "schematic",
     ):
         assert key in body, f"{key} disappeared from the response"
     assert all(set(p) == {"ref", "footprint"} for p in body["parts"]), (
