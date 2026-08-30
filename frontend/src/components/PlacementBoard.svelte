@@ -56,7 +56,7 @@
   .head > span.legal { color: var(--green); }
   .well { padding: 12px; background: var(--well-bg); }
   svg { display: block; width: 100%; max-height: 360px; }
-  .edge { fill: #0B3157; stroke: var(--board-edge-cuts); stroke-width: .35; }
+  .edge { fill: var(--board-fill); stroke: var(--board-edge-cuts); stroke-width: .35; }
   g rect { fill: rgba(200, 52, 52, .55); stroke: var(--board-courtyard); stroke-width: .28; }
   g rect.power { fill: rgba(77, 127, 196, .7); }
   g rect.fixed { stroke: var(--board-silkscreen); stroke-width: .5; }
