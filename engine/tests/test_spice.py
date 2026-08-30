@@ -1328,3 +1328,26 @@ def test_the_deck_that_ran_is_attached_to_the_result():
     result = simulate(divider_spec(), bench)
     assert "R1" in result.deck and ".control" in result.deck
     assert result.simulator.startswith("ngspice")
+
+
+def test_spice_refs_match_the_schematic_and_board_refs():
+    """The deck, the schematic and the board must agree on what ``C1`` is.
+
+    All three emitters number parts through ``CircuitSpec.assign_refs`` rather
+    than counting themselves. If they drifted, a simulation result would be
+    about a part the person reading the schematic cannot find -- three files
+    describing different circuits while all looking plausible.
+    """
+    from silkscreen.schematic import build_schematic
+
+    spec = rc_spec()
+    deck = build_deck(spec, Testbench(analysis=OperatingPoint()))
+    schematic = build_schematic(spec)
+
+    schematic_refs = {symbol.ref for symbol in schematic.symbols}
+    assert schematic_refs == set(deck.refs.values())
+    # And the deck actually uses them as element names.
+    for ref in schematic_refs:
+        assert any(
+            line.startswith(ref + " ") for line in deck.text.splitlines()
+        ), f"{ref} is in the schematic but not in the SPICE deck"
