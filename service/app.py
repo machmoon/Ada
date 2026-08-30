@@ -26,6 +26,7 @@ import traceback
 import urllib.parse
 import uuid
 from collections.abc import Callable
+from dataclasses import fields
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
@@ -52,6 +53,14 @@ from silkscreen.agents.resilience import (  # noqa: E402
 )
 from silkscreen.agents.retrieval import GeminiEmbedder  # noqa: E402
 from silkscreen.board import emit_kicad_pcb  # noqa: E402
+from silkscreen.fab import fab_files  # noqa: E402
+from silkscreen.order import (  # noqa: E402
+    OrderOptions,
+    SolderMaskColour,
+    SurfaceFinish,
+    order_manifest,
+    preflight,
+)
 from silkscreen.units import to_mm  # noqa: E402
 
 from .cache import FactStore, MemoryFactStore  # noqa: E402
@@ -234,6 +243,62 @@ def _rect_mm(x_nm: int, y_nm: int, w_nm: int, h_nm: int) -> list[float]:
         round(to_mm(w_nm), 3),
         round(to_mm(h_nm), 3),
     ]
+
+
+_ORDER_ENUMS = {
+    "surface_finish": SurfaceFinish,
+    "mask_colour": SolderMaskColour,
+}
+
+
+def order_options(raw: Any) -> OrderOptions:
+    """Build :class:`OrderOptions` from a request body, or refuse it.
+
+    Unknown keys are rejected rather than ignored: a client that misspells
+    ``quantity`` is asking for a different order than the one it would get,
+    and silently shipping five boards instead of fifty is the expensive
+    failure mode here.
+    """
+    if not isinstance(raw, dict):
+        raise ValueError("'order' must be an object of order options")
+    known = {f.name for f in fields(OrderOptions)}
+    unknown = sorted(set(raw) - known)
+    if unknown:
+        raise ValueError(
+            f"unknown order option(s): {', '.join(unknown)}; "
+            f"supported: {', '.join(sorted(known))}"
+        )
+    kwargs = dict(raw)
+    for field_name, enum in _ORDER_ENUMS.items():
+        if field_name in kwargs:
+            try:
+                kwargs[field_name] = enum(kwargs[field_name])
+            except ValueError:
+                allowed = ", ".join(m.value for m in enum)
+                raise ValueError(
+                    f"{field_name} must be one of {allowed}, "
+                    f"got {kwargs[field_name]!r}"
+                ) from None
+    return OrderOptions(**kwargs)
+
+
+def _order_block(board, spec, options: OrderOptions) -> dict[str, Any]:
+    """Preflight, manifest and fab files for one board.
+
+    The files are small enough to inline -- a dozen text artefacts totalling a
+    few kilobytes -- so the client gets everything it needs to show, zip or
+    download an order in the same response that produced the board.
+    """
+    pre = preflight(board, spec=spec, options=options)
+    return {
+        "manifest": order_manifest(board, options, pre),
+        "issues": [issue.as_dict() for issue in pre.issues],
+        "orderable": pre.orderable,
+        "files": [
+            {"filename": layer.filename, "content": layer.content}
+            for layer in fab_files(board)
+        ],
+    }
 
 
 def _placements_dict(board) -> dict[str, Any]:
@@ -435,6 +500,12 @@ def generate(
         raise ValueError("'datasheets' must be an object of {part: url}")
     if any(not isinstance(u, str) or not u for u in datasheets.values()):
         raise ValueError("each datasheet value must be a non-empty URL string")
+    order_opts = None
+    if payload.get("order") is not None:
+        # Validated here, before the pipeline spends a model call: a rejected
+        # option is the caller's to fix and should cost them nothing.
+        order_opts = order_options(payload["order"])
+
     if payload.get("ground") is True:
         if not datasheets:
             raise ValueError("'ground' requires 'datasheets'")
@@ -543,6 +614,9 @@ def generate(
             else round(to_mm(board.wirelength_nm), 3)
         ),
     }
+
+    if order_opts is not None:
+        response["order"] = _order_block(board, result.spec, order_opts)
 
     if payload.get("ground") is True:
         if not result.findings:

@@ -29,7 +29,7 @@ Every stage is a real KiCad file you can open and inspect on its own, so you can
 where a design went wrong instead of only seeing the last artifact.
 
 ```
-412 passed — no network, no API key, no KiCad install
+490 passed — no network, no API key, no KiCad install
 ```
 
 ---
@@ -82,7 +82,7 @@ that consumes the file. Install it if you are a person who wants to see a board.
 |---|---|
 | `kicad.py` — `.kicad_pcb` read/write | **Working** · 28 tests |
 | `packing.py` — CP-SAT placer | **Working** · 43 tests |
-| `netlist.py` — validated circuit IR | **Working** · 18 tests |
+| `netlist.py` — validated circuit IR | **Working** · 21 tests |
 | `schematic.py` — `.kicad_sch` + `.kicad_pro` emission | **Working** · 20 tests · KiCad ERC clean |
 | `routing.py` — two-layer grid autorouter | **Working, partial by design** · 20 tests — see below |
 | `footprints.py` + `board.py` — land patterns, board emission | **Working** · 20 tests |
@@ -90,8 +90,10 @@ that consumes the file. Install it if you are a person who wants to see a board.
 | `agents/adk/` — ADK dynamic-workflow driver for the pipeline | **Working** · 18 tests |
 | `agents/retrieval.py` — page-cited datasheet retrieval | **Working** · 15 tests |
 | `agents/resilience.py` — provider failover | **Working** · 14 tests |
+| `fab.py` — Gerber, Excellon, BOM, pick-and-place | **Working** · fab package export |
+| `order.py` — order options, manufacturability preflight | **Working** · blocks an unrouted board |
 | `mcp/` — MCP server over stdio | **Working** · 23 tests |
-| `service/` — Cloud Run + Firestore cache | **Working** · 83 tests |
+| `service/` — Cloud Run + Firestore cache | **Working** · 99 tests |
 | `frontend/` — Svelte review UI, served by the service | **Working** · review, schematic and board tabs, with an in-app debug console for log export |
 | Overlay UI, guided cursor | Not built (mockups only) |
 
@@ -252,7 +254,7 @@ treats the board file as the interface.
 | Requires KiCad running | Yes | **No** |
 | Headless / CI | Hard | **Native** |
 | Platform lock | KiCad's plugin loader | **None — pure Python** |
-| Testable without KiCad | No | **Yes, all 412 tests** |
+| Testable without KiCad | No | **Yes, all 490 tests** |
 
 ### What it reads
 
@@ -506,7 +508,7 @@ engine/
       stages.py     the six stage bodies, shared by both drivers
       pipeline.py   prompt -> PCB
       adk/          ADK dynamic workflow over the same stage bodies
-  tests/          412 tests — no network, no API keys, no KiCad
+  tests/          490 tests — no network, no API keys, no KiCad
     fixtures/     ref.kicad_pcb -- 11-footprint board fixture
 scripts/
   demo.py         end-to-end: read -> place -> write -> verify
@@ -586,10 +588,10 @@ docker build .                                      # the `docker` job
 
 ### Expected output
 
-**1. Test suite** — 412 tests, no warnings (four key-gated live-model tests skip unless `GOOGLE_API_KEY` is set):
+**1. Test suite** — 490 tests, no warnings (four key-gated live-model tests skip unless `GOOGLE_API_KEY` is set):
 
 ```
-412 passed in 190.85s
+490 passed in 190.85s
 ```
 
 The suite is dominated by the 20-second solver budget in a handful of placement
