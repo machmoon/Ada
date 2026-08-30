@@ -13,7 +13,7 @@ python -m silkscreen "a 3.3V motor driver around an STM32F103" -o board.kicad_pc
 ```
 
 ```
-309 passed — no network, no API key, no KiCad install
+310 passed — no network, no API key, no KiCad install
 ```
 
 ---
@@ -52,9 +52,9 @@ that consumes the file. Install it if you are a person who wants to see a board.
 | `agents/retrieval.py` — page-cited datasheet retrieval | **Working** · 15 tests |
 | `agents/resilience.py` — provider failover | **Working** · 14 tests |
 | `mcp/` — MCP server over stdio | **Working** · 23 tests |
-| `service/` — Cloud Run + Firestore cache | **Working** · 59 tests |
-| `web/` — Svelte review UI, served by the service | **Working** · design review page |
-| Board well, overlay UI, guided cursor | Not built (mockups only) |
+| `service/` — Cloud Run + Firestore cache | **Working** · 69 tests |
+| `web/` — Svelte review UI, served by the service | **Working** · review and board tabs |
+| Overlay UI, guided cursor | Not built (mockups only) |
 
 ---
 
@@ -157,7 +157,7 @@ treats the board file as the interface.
 | Requires KiCad running | Yes | **No** |
 | Headless / CI | Hard | **Native** |
 | Platform lock | KiCad's plugin loader | **None — pure Python** |
-| Testable without KiCad | No | **Yes, all 309 tests** |
+| Testable without KiCad | No | **Yes, all 310 tests** |
 
 ### What it reads
 
@@ -269,8 +269,9 @@ UI at `/`, same origin as `/generate`, so there is no CORS anywhere.
 
 ### Running the web UI
 
-The UI is a Svelte SPA in `web/`. In development it runs on Vite's dev server,
-which proxies `/generate` and `/healthz` to the Python service — two terminals:
+The UI is a Svelte SPA in `web/`, and it needs Node 22 or newer (`node --version`).
+In development it runs on Vite's dev server, which proxies `/generate` and
+`/healthz` to the Python service — two terminals:
 
 ```bash
 PORT=8081 python -m service.app       # terminal 1: the API
@@ -283,6 +284,18 @@ For the production path, build the bundle and let the service serve it itself:
 cd web && npm run build    # writes web/dist/
 python -m service.app      # http://localhost:8080 serves both the UI and the API
 ```
+
+The UI has its own suite, which CI runs before the build:
+
+```bash
+cd web && npm test         # Vitest over web/src/lib
+```
+
+A run lands on the review, and the **Board** tab draws the board the placer
+actually produced — courtyard outlines, copper pads, and part refs, straight
+from the `placements` the service returns. Selecting a finding highlights the
+parts it names on that board, and either pane will hand you the emitted
+`.kicad_pcb` as a download.
 
 ### As an MCP server
 
@@ -389,7 +402,7 @@ engine/
       propose.py    intent -> circuit, with a bounded repair loop
       review.py     adversarial design review
       pipeline.py   prompt -> PCB
-  tests/          309 tests — no network, no API keys, no KiCad
+  tests/          310 tests — no network, no API keys, no KiCad
     fixtures/     ref.kicad_pcb -- 11-footprint board fixture
 scripts/
   demo.py         end-to-end: read -> place -> write -> verify
@@ -445,7 +458,7 @@ python3 -m venv .venv
 ./.venv/bin/pip install -e ".[dev,agents,cloud]"
 ```
 
-Then run the same four checks CI runs, in the same order:
+Then run the same four Python checks CI runs, in the same order:
 
 ```bash
 ./.venv/bin/python -m pytest -q                            # 1. tests     (~2 min)
@@ -459,12 +472,20 @@ Check 3 re-counts the suite and fails if any number quoted in this README or in
 
 On Windows, use `.venv\Scripts\python.exe` in place of `./.venv/bin/python`.
 
+CI runs two more jobs that need Node 22 and Docker rather than Python, so they
+are not in the list above:
+
+```bash
+cd web && npm ci && npm test && npm run build   # the `web` job
+docker build .                                  # the `docker` job
+```
+
 ### Expected output
 
-**1. Test suite** — 309 tests, no warnings (four key-gated live-model tests skip unless `GOOGLE_API_KEY` is set):
+**1. Test suite** — 310 tests, no warnings (four key-gated live-model tests skip unless `GOOGLE_API_KEY` is set):
 
 ```
-309 passed in 190.85s
+310 passed in 190.85s
 ```
 
 The suite is dominated by the 20-second solver budget in a handful of placement
