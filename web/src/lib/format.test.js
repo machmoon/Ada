@@ -5,6 +5,7 @@ import {
   formatCount,
   formatDuration,
   formatParts,
+  formatWirelength,
   joinDot,
 } from './format.js'
 
@@ -150,6 +151,27 @@ describe('formatBoard', () => {
 
   it('ignores anything past the first two dimensions', () => {
     expect(formatBoard([20, 30, 1.6])).toBe(`20.0 ${TIMES} 30.0 mm`)
+  })
+})
+
+describe('formatWirelength', () => {
+  it('names the measure and rounds it to one decimal place', () => {
+    expect(formatWirelength(52.44)).toBe('wirelength 52.4 mm')
+    expect(formatWirelength(52)).toBe('wirelength 52.0 mm')
+  })
+
+  it('renders a zero-length result rather than treating it as missing', () => {
+    expect(formatWirelength(0)).toBe('wirelength 0.0 mm')
+  })
+
+  it('returns an empty string when the response reported none', () => {
+    expect(formatWirelength(null)).toBe('')
+    expect(formatWirelength(undefined)).toBe('')
+  })
+
+  it('returns an empty string rather than printing NaN', () => {
+    expect(formatWirelength('long')).toBe('')
+    expect(formatWirelength(Infinity)).toBe('')
   })
 })
 

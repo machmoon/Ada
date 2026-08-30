@@ -1,8 +1,19 @@
 <script>
   import FindingCard from './FindingCard.svelte'
+  import { downloadPcb, pcbText } from '../lib/download.js'
   import { formatBoard, formatCount, joinDot } from '../lib/format.js'
 
-  let { result, request = null, onnew } = $props()
+  let {
+    result,
+    request = null,
+    onnew,
+    selected = -1,
+    boardEnabled = false,
+    onselect = null,
+    onshowboard = null,
+  } = $props()
+
+  const pcb = $derived(pcbText(result))
 
   const skipped = $derived(request ? request.review === false : false)
   const findings = $derived(result.findings)
@@ -18,7 +29,15 @@
 </script>
 
 <section class="results">
-  <div class="mono summary">{summary}</div>
+  <div class="summary">
+    <span class="mono">{summary}</span>
+    <span class="spacer"></span>
+    {#if pcb}
+      <button type="button" class="download" onclick={() => downloadPcb(pcb)}>
+        Download .kicad_pcb
+      </button>
+    {/if}
+  </div>
 
   <!-- Gated on the list, not on the status: the placer attaches a warning to
        every FEASIBLE solve, which is the ordinary outcome on a real board. -->
@@ -72,7 +91,13 @@
   {:else}
     <div class="cards">
       {#each findings as finding, i (i)}
-        <FindingCard {finding} />
+        <FindingCard
+          {finding}
+          {boardEnabled}
+          selected={selected === i}
+          onselect={onselect ? () => onselect(i) : null}
+          onshowboard={onshowboard ? () => onshowboard(i) : null}
+        />
       {/each}
     </div>
   {/if}
@@ -82,9 +107,26 @@
 
 <style>
   .summary {
+    display: flex;
+    align-items: center;
+    gap: 14px;
     font-size: var(--fs-mono-sm);
     color: var(--ink-soft);
     margin-bottom: 16px;
+    max-width: var(--measure-detail);
+  }
+  .spacer { flex-grow: 1; }
+
+  /* Secondary, like the suggested-fix buttons: saving the board file is an
+     exit, not the point of the page. */
+  .download {
+    font-size: 12px;
+    padding: 6px 13px;
+    background: transparent;
+    color: var(--ink-mid);
+    border: 1px solid var(--rule);
+    border-radius: var(--radius);
+    white-space: nowrap;
   }
 
   .warnings {

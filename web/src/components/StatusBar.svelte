@@ -2,13 +2,13 @@
   import { countBySeverity } from '../lib/severity.js'
   import { formatCount, joinDot } from '../lib/format.js'
 
-  let { findings = null, reviewed = true } = $props()
+  let { findings = null, reviewed = true, tab = 'review', boardEnabled = false } = $props()
 
   const count = $derived(findings ? findings.length : 0)
   const counts = $derived(countBySeverity(findings || []))
 
   // "Review · 0" would read as a clean review; a skipped one has to say so.
-  const tab = $derived(
+  const reviewTab = $derived(
     findings ? (reviewed ? `Review · ${count}` : 'Review · not run') : 'Review',
   )
 
@@ -24,11 +24,25 @@
 </script>
 
 <footer class="bar">
-  <!-- Schematic and Board are the Option B seam. They are hash fragments so a
-       tab switch never reaches the server, and both stay inert until built. -->
+  <!-- Tabs are hash fragments, so a switch never reaches the server. Schematic
+       is not built; Board wakes up only once a run carries placements. -->
   <span class="lbl tab" aria-disabled="true">Schematic</span>
-  <span class="lbl tab" aria-disabled="true">Board</span>
-  <a class="lbl tab current" href="#review" aria-current="page">{tab}</a>
+  {#if boardEnabled}
+    <a
+      class="lbl tab"
+      class:current={tab === 'board'}
+      href="#board"
+      aria-current={tab === 'board' ? 'page' : undefined}
+    >Board</a>
+  {:else}
+    <span class="lbl tab" aria-disabled="true" title="Run a board to see it placed">Board</span>
+  {/if}
+  <a
+    class="lbl tab"
+    class:current={tab === 'review'}
+    href="#review"
+    aria-current={tab === 'review' ? 'page' : undefined}
+  >{reviewTab}</a>
   <div class="spacer"></div>
   {#if breakdown}<span class="mono breakdown">{breakdown}</span>{/if}
 </footer>

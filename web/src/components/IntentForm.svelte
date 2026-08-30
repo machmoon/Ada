@@ -13,6 +13,7 @@
   let intent = $state(seed.intent ?? '')
   let timeLimit = $state(seed.time_limit_s ?? 20)
   let review = $state(seed.review !== false)
+  let ground = $state(seed.ground === true)
   let showDatasheets = $state(seedSheets.length > 0)
   let rows = $state(
     seedSheets.length ? seedSheets.map(([part, url]) => ({ part, url })) : [{ part: '', url: '' }],
@@ -20,11 +21,18 @@
 
   let textarea = $state(null)
 
+  // Grounding retrieves against datasheet pages, so with no datasheet it has
+  // nothing to ground on and is never sent, however the box was left.
+  const hasDatasheets = $derived(
+    rows.some((r) => String(r.part ?? '').trim() && String(r.url ?? '').trim()),
+  )
+
   const request = $derived({
     intent,
     datasheets: Object.fromEntries(rows.map((r) => [r.part, r.url])),
     time_limit_s: timeLimit,
     review,
+    ground: ground && hasDatasheets,
   })
 
   // The service rejects oversize bodies with 413; blocking here keeps the user
@@ -105,6 +113,17 @@
       <span>Run the adversarial design review</span>
     </label>
 
+    <label
+      class="control checkbox"
+      class:off={!hasDatasheets}
+      title={hasDatasheets
+        ? 'Findings are retrieved against the pages of the datasheets above'
+        : 'Add a datasheet above — there is nothing to ground findings against'}
+    >
+      <input type="checkbox" bind:checked={ground} disabled={!hasDatasheets} />
+      <span>Ground findings against datasheet pages</span>
+    </label>
+
     <div class="spacer"></div>
     <MicButton />
     <button type="submit" class="run" disabled={!canSubmit}>
@@ -173,6 +192,7 @@
   }
   .control { display: flex; align-items: center; gap: 8px; }
   .checkbox { font-size: var(--fs-ui); color: var(--ink-mid); cursor: pointer; }
+  .checkbox.off { color: var(--ink-faint); cursor: default; }
   .unit { font-size: var(--fs-ui); color: var(--ink-soft); }
 
   .budget {

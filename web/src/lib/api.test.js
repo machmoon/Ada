@@ -140,6 +140,32 @@ describe('normalizeRequest', () => {
 
     expect(Object.keys(request).sort()).toEqual(['datasheets', 'intent', 'review', 'time_limit_s'])
   })
+
+  it('passes grounding through when it was asked for', () => {
+    expect(normalizeRequest({ ground: true }).ground).toBe(true)
+  })
+
+  it('omits grounding entirely rather than sending false, which claims nothing', () => {
+    expect(normalizeRequest({}).ground).toBeUndefined()
+    expect(normalizeRequest({ ground: false }).ground).toBeUndefined()
+    expect(normalizeRequest({ ground: undefined }).ground).toBeUndefined()
+    expect('ground' in normalizeRequest({ ground: false })).toBe(false)
+  })
+
+  it('sends grounding only for a literal true, not for anything merely truthy', () => {
+    expect(normalizeRequest({ ground: 'yes' }).ground).toBeUndefined()
+    expect(normalizeRequest({ ground: 1 }).ground).toBeUndefined()
+  })
+
+  it('adds the grounding field to the emitted set only when it is on', () => {
+    expect(Object.keys(normalizeRequest({ intent: 'x', ground: true })).sort()).toEqual([
+      'datasheets',
+      'ground',
+      'intent',
+      'review',
+      'time_limit_s',
+    ])
+  })
 })
 
 describe('requestBytes', () => {

@@ -20,6 +20,14 @@ export function formatBoard(boardMm) {
   return `${w.toFixed(1)} × ${h.toFixed(1)} mm`
 }
 
+/** Half-perimeter wirelength, the placer's objective. Absent on a response
+    that carried no board, so a missing value renders as nothing at all. */
+export function formatWirelength(mm) {
+  const n = Number(mm)
+  if (mm == null || !Number.isFinite(n)) return ''
+  return `wirelength ${n.toFixed(1)} mm`
+}
+
 /** requirements/pins arrive as either a count or the list itself. */
 export function countOf(value) {
   if (Array.isArray(value)) return value.length
