@@ -28,7 +28,9 @@ Pytest config lives in `pyproject.toml` (`testpaths = engine/tests, service/test
 
 Four people push to `main` concurrently — the local checkout goes stale fast. Run `git fetch` and check `git status` / `git log origin/main` before starting work and again before any commit or push, and rebase rather than letting the histories diverge. During long working sessions, poll the remote every few minutes (e.g. `/loop 5m`) and surface new teammate commits to the user as they land.
 
-Lane ownership: RAG/retrieval work belongs to Leo (`agents/retrieval.py` is the starting point) — do not pick it up without coordinating. The open feature work is tracked in `TODO.txt` (feature table with sub-features and statuses).
+Lane ownership: RAG/retrieval work belongs to Leo (`agents/retrieval.py` and `agents/grounding.py`) — do not pick it up without coordinating. The open feature work is tracked in `TODO.txt` (feature table with sub-features and statuses).
+
+Features land through PRs against `main` (established with PRs #1–#5 on 2026-08-29), and a Greptile bot reviews every PR automatically. Its P1 findings have a real hit rate — both P1s on PR #5 were genuine — so answer them: fix, or refute with evidence on the thread, or record in TODO.txt, but never ignore silently.
 
 ## Architecture
 
@@ -77,11 +79,13 @@ Found in a verification pass over the docs and recent commits; left open on purp
 1. `engine/silkscreen/agents/model.py:111` passes `media_resolution="high"`, which matches no member of the SDK's `MediaResolution` enum (values are `MEDIA_RESOLUTION_HIGH` etc.), so high-resolution datasheet reading is likely silently not applied.
 2. ~~The Firestore fact cache is a placeholder~~ — resolved in `4249c5b`: the write-back stores real facts and cache hits feed `preloaded_facts` into the pipeline, with service tests.
 3. `.env.example` documents `GOOGLE_CLOUD_LOCATION`, which nothing reads (no Vertex AI path exists); `USE_FIRESTORE` is read by `service/app.py` but documented nowhere (documentation half now tracked as the ops-polish row under TODO.txt feature 8).
-4. ~~No test, even a key-gated one, exercises the live `GeminiModel`~~ — resolved on the `web-tdd` branch by `engine/tests/test_live_model.py`: one gated call to `CHEAP_MODEL` asserts the response is non-empty text carrying a requested marker, plus an ungated test that construction without `GOOGLE_API_KEY` raises `ModelError`. The live tests skip unless `GOOGLE_API_KEY` is set, so the default suite stays offline and free.
+4. ~~No test, even a key-gated one, exercises the live `GeminiModel`~~ — resolved by `engine/tests/test_live_model.py`: one gated call to `CHEAP_MODEL` asserts the response is non-empty text carrying a requested marker, plus an ungated test that construction without `GOOGLE_API_KEY` raises `ModelError`. The live tests skip unless `GOOGLE_API_KEY` is set, so the default suite stays offline and free.
 5. `build_store()` constructs a fresh Firestore client per request in production (also tracked as the ops-polish row under TODO.txt feature 8).
 6. The `google-genai>=1.0` pin is unbounded upward; PyPI is at 2.x and a breaking 3.0 has been announced.
 7. `engine/silkscreen/mcp/server.py`'s docstring says "four useful operations"; `TOOLS` defines five.
 8. Nothing in the repo performs a deploy (CI only lints and tests) and no deployed URL is recorded, so a live Cloud Run instance cannot be verified from the repo (tracked as the deploy and smoke-check rows under TODO.txt feature 7).
+9. `engine/silkscreen/board.py`'s `emit_kicad_pcb` misplaces a rotated footprint's anchor by exactly `(ch-cw, cw-ch)` — it does not swap the courtyard half-extents at 90° — so a rotated part's pads land offset in the written board file (found 2026-08-29 in the PR #5 review). Unreachable today because nothing sets `allow_rotation`, and the service's `placements` serializer is internally consistent with the solver; this is an engine-lane fix.
+10. `do_POST` answers any `ValueError` from the pipeline as a 400 with the raw message, so an internal `ValueError` from board generation or packing leaks its text and loses the 500's `error_id`/traceback. The fix is a dedicated request-error type raised only for field validation (tracked as TODO.txt feature 10, from the PR #5 review).
 
 ## Documentation discipline
 
