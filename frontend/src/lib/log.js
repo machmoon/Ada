@@ -38,6 +38,13 @@ const SECRET_PARAM =
   /([?&#][^?&=\s]*(?:key|token|secret|password|signature|sig|auth|credential)[^?&=\s]*=)[^&\s#"'<>]*/gi
 /** An `Authorization: Bearer …` value, wherever it was stringified from. */
 const BEARER = /\bBearer\s+[A-Za-z0-9._~+\/-]+=*/g
+/** The three schemes a browser extension's own code is served from. An injected
+    script (MetaMask's inpage.js is the one everyone meets) warns and rejects
+    from inside the page, so its output lands in this buffer looking like ours
+    -- but its stack, its resource urls and its error messages all name one of
+    these. No `g` flag: a shared regex carrying lastIndex between entries would
+    start missing every other match. */
+const EXTENSION_URL = /(?:chrome|moz|safari-web)-extension:\/\//
 const UNSERIALIZABLE = '[unserializable]'
 /** Svelte's dev build logs proxies as a doubled `%c[snapshot]` pair, and it
     always leads the line. Anchored on purpose: an app message that merely
@@ -105,6 +112,15 @@ export function scrubText(text) {
   const value = String(text ?? '')
   if (!value) return value
   return value.replace(SECRET_PARAM, '$1[redacted]').replace(BEARER, 'Bearer [redacted]')
+}
+
+/** Whether an entry is a browser extension talking to itself through our page.
+    Pure, and deliberately narrow: only a capture from the page can be flagged,
+    because an app line is ours by definition and one that merely quotes an
+    extension url -- a triage note, this file's own tests -- is still ours. */
+export function isExtensionNoise(src, msg, json) {
+  if (src !== 'console' && src !== 'window') return false
+  return EXTENSION_URL.test(String(msg ?? '')) || EXTENSION_URL.test(String(json ?? ''))
 }
 
 /** One value, reduced to something JSON can hold and a human can read. Never
@@ -294,6 +310,9 @@ function append(entry) {
   const msg = scrubClip(preview, MAX_ARG_BYTES)
 
   let json = safeStringify(data)
+  // Read before the truncation below, so an extension url deep in a long stack
+  // is still seen: what the backstop keeps is only the head of this string.
+  const ext = isExtensionNoise(src, msg, json)
   if (overBytes(json, MAX_ENTRY_BYTES)) {
     // Per-argument truncation caps one value, not how many there are; this is
     // the backstop for an object that is merely wide.
@@ -307,7 +326,7 @@ function append(entry) {
 
   seq += 1
   const bytes = byteLength(msg) + byteLength(event) + byteLength(json) + 64
-  entries.push({ seq, ts, level, src, event, msg, run, data, bytes })
+  entries.push({ seq, ts, level, src, event, msg, run, data, ext, bytes })
   totalBytes += bytes
 
   while (entries.length && (entries.length > LOG_CAPACITY || totalBytes > MAX_TOTAL_BYTES)) {
@@ -485,6 +504,7 @@ export function toNdjson(entries = liveEntries(), now = Date.now()) {
         msg: entry.msg,
         run: entry.run,
         seq: entry.seq,
+        ext: Boolean(entry.ext),
         data: entry.data ?? null,
       }),
     )
