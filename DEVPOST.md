@@ -117,8 +117,8 @@ the difference between automating a beginner out of the loop and bringing them i
 
 ## How we built it
 
-**STATUS:** the ADK driver ships behind `SILKSCREEN_ENGINE=adk`; the default flips once
-the pre-deadline live-run gate passes.
+**STATUS:** the ADK driver is the default engine; `SILKSCREEN_ENGINE=sdk` keeps the
+straight-line driver one environment variable away.
 
 The agent layer is Google's Agent Development Kit. The pipeline — read → propose →
 validate → place → review — is an ADK dynamic **Workflow** in

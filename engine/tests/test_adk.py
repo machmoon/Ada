@@ -422,26 +422,30 @@ def test_the_sdk_engine_is_selectable_by_name(tmp_path):
     assert len(result.board.parts) == 6
 
 
-def test_the_built_in_default_is_the_sdk_driver(monkeypatch, tmp_path):
-    """Unguarded: with no keyword and no variable, the straight line runs.
+@needs_adk
+def test_the_built_in_default_is_the_adk_driver(monkeypatch, tmp_path):
+    """With no keyword and no variable, the ADK workflow runs.
 
     Precedence is keyword, then ``SILKSCREEN_ENGINE``, then a default baked
     into ``generate_pcb`` -- and the last of those is the only one nothing
-    else pins, so a change to it would otherwise land with a green suite. This
-    is the test the commit that flips the default has to edit on purpose,
-    which is the point of writing it: the flip becomes visible.
+    else pins, so a change to it would otherwise land with a green suite.
+    This test flipped from the sdk driver to adk in the same commit that
+    flipped the default, after the 2026-08-30 live-run gate passed; the next
+    flip has to edit it again, on purpose, which is the point of it.
     """
-    from silkscreen.agents import pipeline
+    from silkscreen.agents.adk import runner as adk_runner
 
     monkeypatch.delenv("SILKSCREEN_ENGINE", raising=False)
-    straight_line = pipeline._generate_pcb_sdk
+    workflow_drive = adk_runner.generate_pcb_adk
     ran = []
 
-    def recording_sdk(*args, **kwargs):
+    def recording_adk(*args, **kwargs):
         ran.append(1)
-        return straight_line(*args, **kwargs)
+        return workflow_drive(*args, **kwargs)
 
-    monkeypatch.setattr(pipeline, "_generate_pcb_sdk", recording_sdk)
+    # The dispatcher imports the name from the runner module at call time,
+    # so patching the module attribute intercepts the default path.
+    monkeypatch.setattr(adk_runner, "generate_pcb_adk", recording_adk)
 
     model = ScriptedModel(responses=[json.dumps(GOOD_CIRCUIT)])
     result = generate_pcb(model, "x", output=tmp_path / "b.kicad_pcb",

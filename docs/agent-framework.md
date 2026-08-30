@@ -32,8 +32,10 @@ model-free so the parts that must be _correct_ can be tested without a network."
 
 ### The ADK layer
 
-STATUS: the default engine is currently `sdk`; `SILKSCREEN_ENGINE=adk` selects the ADK
-driver, and the default flips once the pre-deadline live run gate passes.
+STATUS: the default engine is `adk` — flipped 2026-08-30 after the live-run gate passed
+(one end-to-end run through the SPA against the live Gemini API, with an observed
+provider failover). `SILKSCREEN_ENGINE=sdk` selects the straight-line driver as the
+kill switch.
 
 `generate_pcb` in `engine/silkscreen/agents/pipeline.py` is now a dispatcher. Its `engine`
 parameter chooses which driver executes the run, and everything else about the function —
@@ -432,10 +434,11 @@ is strong evidence for this version and weaker evidence for ADK in general: a la
 release could change any of it without contradicting anything cited here, which is what the
 `<3` upper bound is for.
 
-The ADK path has been exercised offline against `ScriptedModel`, including the parity suite.
-It has not been run end to end against the live Gemini API. That gap is exactly what the
-STATUS line at the top of this document refers to, and it is why the default engine is still
-`sdk`.
+The ADK path has been exercised offline against `ScriptedModel`, including the parity suite,
+and once end to end against the live Gemini API (2026-08-30: an AMS1117-3.3 intent through
+the SPA, streamed stage events, an `optimal` placement, and a `FallbackModel` failover to the
+cheap tier surfacing in `served_by` — the semantics the parity suite exists to protect). That
+run is what flipped the default engine to `adk`.
 
 The model identifiers `gemini-3.7-flash` and `gemini-3.5-flash-lite` in `model.py` were read
 from the source but were not verified against a current Gemini model list, so this document

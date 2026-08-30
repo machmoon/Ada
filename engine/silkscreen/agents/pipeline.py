@@ -314,8 +314,10 @@ def generate_pcb(
             in this module, ``"adk"`` for the Google ADK workflow in
             :mod:`silkscreen.agents.adk`. Both call the same stage bodies and
             emit the same events. Empty means read ``SILKSCREEN_ENGINE`` from
-            the environment, falling back to ``"sdk"``; an explicit argument
-            always wins over the variable.
+            the environment, falling back to ``"adk"`` -- the default since
+            the 2026-08-30 live-run gate passed; an explicit argument always
+            wins over the variable, and ``SILKSCREEN_ENGINE=sdk`` is the kill
+            switch back to the straight line.
 
     Raises:
         ProposalError: no valid circuit emerged within the repair budget.
@@ -323,7 +325,7 @@ def generate_pcb(
         RuntimeError: the engine name is unknown, or ``"adk"`` was asked for
             without the ``adk`` extra installed.
     """
-    chosen = engine or os.environ.get("SILKSCREEN_ENGINE", "") or "sdk"
+    chosen = engine or os.environ.get("SILKSCREEN_ENGINE", "") or "adk"
     if chosen == "sdk":
         return _generate_pcb_sdk(
             model,

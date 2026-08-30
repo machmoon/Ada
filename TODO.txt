@@ -113,8 +113,8 @@ feature is tracked under feature 12.
  ----- R7 engine dispatcher, default "sdk"             [DONE]        kwarg > SILKSCREEN_ENGINE > default
  ----- R8 parity suite, test_adk.py                    [DONE]        same events and same result on both engines
  ----- R12 Dockerfile + setup gain the adk extra       [DONE]        image, CI and setup all install the extra
- ----- R10 default engine flips to adk                 [GATED]       gated on one clean manual SPA run with a
-                                                                     real key
+ ----- R10 default engine flips to adk                 [DONE]        gate passed 2026-08-30: live SPA run,
+                                                                     optimal placement, failover observed
  ----- R9 agents dir for adk web and /docs             [NOT BUILT]   a dev surface only, off the request path
  ----- R11 parallel reads via asyncio.gather           [NOT BUILT]   closes feature 2; needs an order-independent
                                                                      event test
@@ -144,9 +144,9 @@ check under 7, the ops polish under 8, voice under 9, the error taxonomy under
 review). The board well shipped, so voice is all that is left of 9 and stays
 last. The [IDEA] rows under 4 and 5 are ideas, not commitments.
 
-The ADK lane runs alongside that. Feature 12 is live, and R12 has landed: the
-image, CI and setup all install the adk extra. What is left of the flip is R10
-alone — the default engine going from "sdk" to "adk" — and it is gated on one
-clean manual SPA run with a real key. Everything else under 12 queues behind
-that gate: R9 and R11, then R13 through R16, with R17 and R18 as ideas. Under
-13, D5 is the last docs step, a check_docs --fix once the test counts settle.
+The ADK lane runs alongside that. Feature 12 is live and the flip is done: the
+default engine has been "adk" since the 2026-08-30 gate run, with
+SILKSCREEN_ENGINE=sdk as the kill switch, and the image, CI and setup all
+install the adk extra. What remains under 12 is the queue behind the flip —
+R9 and R11, then R13 through R16, with R17 and R18 as ideas. Feature 13 is
+complete, D5 included (check_docs --fix ran once the counts settled).
