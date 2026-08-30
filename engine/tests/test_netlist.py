@@ -159,3 +159,39 @@ def test_error_message_lists_every_problem():
         spec.validate()
     # C1.2 is floating.
     assert any("C1" in e for e in exc.value.errors)
+
+
+def test_rejects_a_pin_that_joins_two_nets():
+    """One pin, one net. Two nets sharing a pin are electrically one net.
+
+    Nothing downstream raises on this: CircuitSpec.nets_of keeps the last net
+    it sees, the schematic labels the pin one way, and the board's pad-to-net
+    map can resolve it another. Two self-consistent files, different circuits.
+    """
+    data = _good_spec_dict()
+    data["nets"]["VDD_ALT"] = ["U1.VDD", "R1.2"]  # U1.VDD is already on VDD
+    with pytest.raises(ValidationError, match=r"pin 'U1\.VDD' is on 2 nets"):
+        parse_circuit_spec(data)
+
+
+def test_a_pin_repeated_inside_one_net_is_not_an_error():
+    """Redundant, not ambiguous: there is still only one net on that pin."""
+    data = _good_spec_dict()
+    data["nets"]["VDD"] = ["U1.VDD", "U1.VDD", "C1.1", "R1.1"]
+    assert parse_circuit_spec(data).net_count() == 3
+
+
+def test_rejects_two_pin_names_on_one_pin_number():
+    """The number is what reaches the footprint and the symbol.
+
+    A second name on the same number silently overwrites the first, so one
+    specified connection disappears from both emitted files without raising.
+    """
+    data = _good_spec_dict()
+    data["devices"]["U1"]["pins"]["VDDA"] = "1"  # VDD is already pin 1
+    with pytest.raises(ValidationError) as exc:
+        parse_circuit_spec(data)
+    # Exactly this rule, and only this rule: an unconnected device pin is not
+    # itself an error, so nothing else here should fire.
+    assert [e for e in exc.value.errors if "pin number '1'" in e]
+    assert len(exc.value.errors) == 1

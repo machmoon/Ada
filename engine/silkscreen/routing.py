@@ -166,6 +166,15 @@ def _disc(radius_nm: int, grid_nm: int) -> tuple[tuple[int, int], ...]:
     return tuple(sorted(offsets))
 
 
+def _terminal_counts(pads: list[RoutePad]) -> dict[str, int]:
+    """How many pads each named net has. Unnetted pads are obstacles, not nets."""
+    counts: dict[str, int] = {}
+    for pad in pads:
+        if pad.net:
+            counts[pad.net] = counts.get(pad.net, 0) + 1
+    return counts
+
+
 def route(
     pads: list[RoutePad],
     *,
@@ -199,19 +208,30 @@ def route(
         module is written to avoid.
     """
     result = RouteResult(track_width_nm=track_width_nm)
-    if max_x_nm <= min_x_nm or max_y_nm <= min_y_nm:
-        result.warnings.append("board area is empty; nothing routed")
+
+    # Every net that would have been routed had the run got that far. Refusing
+    # to route is still a result about these nets, and a refusal that named
+    # none of them reported 0/0 -- which ``completion`` reads as 100% and
+    # ``summary`` prints as "0/0 nets routed" on a board with no copper at all.
+    # Naming them here is the same contract the per-net failures keep.
+    def refuse(reason: str) -> RouteResult:
+        for net, count in _terminal_counts(pads).items():
+            if count >= 2:
+                result.unrouted[net] = reason
+        result.warnings.append(reason)
         return result
+
+    if max_x_nm <= min_x_nm or max_y_nm <= min_y_nm:
+        return refuse("board area is empty; nothing routed")
 
     nx = int((max_x_nm - min_x_nm) // grid_nm) + 1
     ny = int((max_y_nm - min_y_nm) // grid_nm) + 1
     layers = _LAYERS if two_layer else (Layer.TOP,)
     if nx * ny * len(layers) > _MAX_NODES:
-        result.warnings.append(
+        return refuse(
             f"routing grid would be {nx}x{ny} nodes, over the {_MAX_NODES} node "
             f"budget; skipped routing (raise grid_nm to route this board)"
         )
-        return result
 
     def node_x(i: int) -> int:
         return min_x_nm + i * grid_nm

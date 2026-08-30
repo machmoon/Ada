@@ -345,6 +345,11 @@ def test_a_rotated_part_refuses_to_route_rather_than_guessing():
     assert result.tracks == []
     assert any("rotated" in w for w in result.warnings)
     assert any("rotated" in w for w in board.warnings)
+    # And the refusal names the nets it covers, on the board as well as in the
+    # result -- otherwise route_completion reads a board with no copper as 100%.
+    assert result.unrouted and set(board.unrouted_nets) == set(result.unrouted)
+    assert board.route_completion == 0.0
+    assert not board.is_routed
 
 
 def test_a_single_terminal_net_is_reported_not_silently_skipped():
@@ -381,3 +386,38 @@ def test_a_grid_too_coarse_for_the_pads_says_so_instead_of_shorting():
         grid_nm=mm(1.0),
     )
     assert "too coarse" in result.unrouted["A"]
+
+
+def test_a_refused_route_names_the_nets_it_gave_up_on():
+    """A refusal is still a result about those nets.
+
+    Naming none of them left routed and unrouted both empty, which
+    RouteResult.completion reads as 1.0 -- a board with no copper at all
+    reporting as fully routed, the exact class this module exists to prevent.
+    """
+    pads = [
+        RoutePad(net="A", x_nm=mm(10.0), y_nm=mm(10.0), w_nm=mm(1.0), h_nm=mm(1.0)),
+        RoutePad(net="A", x_nm=mm(300.0), y_nm=mm(300.0), w_nm=mm(1.0), h_nm=mm(1.0)),
+        RoutePad(net="B", x_nm=mm(20.0), y_nm=mm(20.0), w_nm=mm(1.0), h_nm=mm(1.0)),
+        RoutePad(net="B", x_nm=mm(280.0), y_nm=mm(280.0), w_nm=mm(1.0), h_nm=mm(1.0)),
+        # One terminal only: nothing to route, so nothing to report.
+        RoutePad(net="LONE", x_nm=mm(50.0), y_nm=mm(50.0), w_nm=mm(1.0), h_nm=mm(1.0)),
+    ]
+    result = route(
+        pads, min_x_nm=0, min_y_nm=0, max_x_nm=mm(400.0), max_y_nm=mm(400.0)
+    )
+
+    assert not result.tracks
+    assert sorted(result.unrouted) == ["A", "B"]
+    assert all("node budget" in reason for reason in result.unrouted.values())
+    assert result.completion == 0.0
+
+
+def test_an_empty_board_area_names_its_nets_too():
+    pads = [
+        RoutePad(net="A", x_nm=mm(1.0), y_nm=mm(1.0), w_nm=mm(1.0), h_nm=mm(1.0)),
+        RoutePad(net="A", x_nm=mm(2.0), y_nm=mm(2.0), w_nm=mm(1.0), h_nm=mm(1.0)),
+    ]
+    result = route(pads, min_x_nm=0, min_y_nm=0, max_x_nm=0, max_y_nm=0)
+    assert list(result.unrouted) == ["A"]
+    assert result.completion == 0.0

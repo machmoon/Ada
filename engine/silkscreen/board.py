@@ -14,6 +14,7 @@ if KiCad's own parser cannot read what we wrote, the tests fail.
 
 from __future__ import annotations
 
+from collections import Counter
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -101,6 +102,12 @@ class BoardResult:
 
     @property
     def route_completion(self) -> float:
+        """Fraction of routable nets finished.
+
+        1.0 with both lists empty means there was nothing to route, not that a
+        refusal succeeded: :func:`route_board` names every net a refusal covers
+        in ``unrouted_nets``, so a skipped route reads 0.0 rather than 100%.
+        """
         total = len(self.routed_nets) + len(self.unrouted_nets)
         return 1.0 if total == 0 else len(self.routed_nets) / total
 
@@ -323,12 +330,19 @@ def route_board(
     rotated = [p.ref for p in board.parts if p.rotated]
     if rotated:
         result = RouteResult()
-        result.warnings.append(
+        reason = (
             "not routed: rotated footprints "
             f"({', '.join(sorted(rotated))}) have a known anchor bug in the "
             "board emitter, so their pad coordinates cannot be trusted"
         )
+        # Name every net the refusal covers, not just the refusal. An empty
+        # unrouted map reads as "nothing left to route" to route_completion.
+        for net, count in Counter(p.net for p in board_pads(board) if p.net).items():
+            if count >= 2:
+                result.unrouted[net] = reason
+        result.warnings.append(reason)
         board.warnings.extend(result.warnings)
+        board.unrouted_nets = dict(result.unrouted)
         return result
 
     result = route(

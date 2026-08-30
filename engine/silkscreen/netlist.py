@@ -185,6 +185,43 @@ class CircuitSpec:
                         f"part {part!r}"
                     )
 
+        # One physical pin, one net. Two nets sharing a pin are electrically
+        # one net, so every consumer downstream has to guess which name wins:
+        # nets_of() keeps the last, the schematic's labels disagree with each
+        # other, and the board's pad-to-net map takes a third answer. Nothing
+        # raises and the two files describe different circuits. Caught here so
+        # the repair loop sends it back to the model, which is the only place
+        # that knows which net was meant.
+        pin_nets: dict[str, list[str]] = {}
+        for conn in self.connections:
+            for ep in conn.endpoints:
+                nets = pin_nets.setdefault(ep, [])
+                if conn.net not in nets:
+                    nets.append(conn.net)
+        for ep, nets in pin_nets.items():
+            if len(nets) > 1:
+                errors.append(
+                    f"pin {ep!r} is on {len(nets)} nets ({', '.join(sorted(nets))}); "
+                    f"a pin joins exactly one net -- if these are the same node, "
+                    f"merge them into one net"
+                )
+
+        # Two pin names on one pin number is the same ambiguity one level down:
+        # the number is what reaches the footprint and the symbol, so the
+        # second name silently overwrites the first and one specified
+        # connection disappears from both files.
+        for dev in self.devices:
+            by_number: dict[str, list[str]] = {}
+            for pin_name, number in dev.pins.items():
+                by_number.setdefault(str(number), []).append(pin_name)
+            for number, names in by_number.items():
+                if len(names) > 1:
+                    errors.append(
+                        f"device {dev.name!r} maps {len(names)} pin names "
+                        f"({', '.join(sorted(names))}) to pin number {number!r}; "
+                        f"each pin number names one physical pin"
+                    )
+
         # A passive wired on only one leg is almost always a model error, and
         # the original silently emitted these as floating parts.
         for passive in self.passives:
