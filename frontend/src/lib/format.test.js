@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import {
   countOf,
   formatBoard,
+  formatClock,
   formatCount,
   formatDuration,
   formatParts,
@@ -62,6 +63,31 @@ describe('formatDuration', () => {
 
   it('accepts a numeric string, since JSON numbers arrive loosely typed', () => {
     expect(formatDuration('12')).toBe('12 s')
+  })
+})
+
+describe('formatClock', () => {
+  it('renders a bare second count below one minute', () => {
+    expect(formatClock(0)).toBe('0 s')
+    expect(formatClock(3.4)).toBe('3 s')
+    expect(formatClock(59)).toBe('59 s')
+  })
+
+  it('switches to m:ss at exactly sixty seconds and zero-pads the seconds', () => {
+    expect(formatClock(60)).toBe('1:00')
+    expect(formatClock(65)).toBe('1:05')
+    expect(formatClock(125)).toBe('2:05')
+  })
+
+  it('renders nothing for a time the server never sent', () => {
+    expect(formatClock(null)).toBe('')
+    expect(formatClock(undefined)).toBe('')
+    expect(formatClock('')).toBe('')
+    expect(formatClock('soon')).toBe('')
+  })
+
+  it('clamps a negative time to zero rather than rendering a minus sign', () => {
+    expect(formatClock(-2)).toBe('0 s')
   })
 })
 

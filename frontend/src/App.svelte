@@ -3,16 +3,17 @@
   import DebugConsole from './components/DebugConsole.svelte'
   import ErrorPanel from './components/ErrorPanel.svelte'
   import IntentForm from './components/IntentForm.svelte'
+  import PipelineFeed from './components/PipelineFeed.svelte'
   import ReviewResults from './components/ReviewResults.svelte'
   import RunProgress from './components/RunProgress.svelte'
   import SideRail from './components/SideRail.svelte'
   import StatusBar from './components/StatusBar.svelte'
   import TitleBar from './components/TitleBar.svelte'
-  import { ApiError, generate, normalizeRequest } from './lib/api.js'
+  import { ApiError, generateStream, normalizeRequest } from './lib/api.js'
   import { highlightRefs, readPlacements } from './lib/board.js'
   import { pcbText } from './lib/download.js'
   import { logEvent } from './lib/log.js'
-  import { failRun, finishRun, resetRun, run, startRun } from './lib/run.js'
+  import { failRun, finishRun, resetRun, run, stageEvent, startRun } from './lib/run.js'
   import { resolveTab } from './lib/tabs.js'
 
   // The tab lives in the hash fragment; App is the only thing that reads it,
@@ -34,7 +35,9 @@
     selected = -1
     startRun(request)
     try {
-      finishRun(await generate(request))
+      // Streamed, with a one-shot fallback inside generateStream for a service
+      // that has no streaming endpoint: stageEvent is simply never called there.
+      finishRun(await generateStream(request, stageEvent))
     } catch (err) {
       failRun(err instanceof ApiError ? err : new ApiError('internal', String(err)))
     }
@@ -118,6 +121,7 @@
     <main class="centre" data-testid="app-main">
       {#if $run.phase === 'running'}
         <RunProgress />
+        <PipelineFeed />
       {:else if $run.phase === 'error'}
         <ErrorPanel error={$run.error} onretry={retry} ondismiss={resetRun} />
       {:else if $run.phase === 'done'}
