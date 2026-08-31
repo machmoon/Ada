@@ -366,7 +366,6 @@ def test_fast_policy_resolves_to_best_configured_backend(available, expected):
 
 
 def test_tinker_is_advertised_only_with_a_promoted_checkpoint(monkeypatch):
-    monkeypatch.setenv("SILKSCREEN_EXPERIMENTAL_PLACEMENT", "1")
     monkeypatch.setenv("TINKER_API_KEY", "test-key")
     monkeypatch.setenv("TINKER_PLACEMENT_MODEL", "unfinished-local-name")
 
@@ -407,7 +406,6 @@ def test_fast_policy_runtime_failure_falls_back_safely(server, monkeypatch):
     monkeypatch.delenv("GOOGLE_API_KEY", raising=False)
     monkeypatch.delenv("TINKER_API_KEY", raising=False)
     monkeypatch.delenv("TINKER_PLACEMENT_MODEL", raising=False)
-    monkeypatch.setenv("SILKSCREEN_EXPERIMENTAL_PLACEMENT", "1")
     monkeypatch.setenv("OLLAMA_PLACEMENT_URL", "http://offline.invalid")
     monkeypatch.setattr("service.app.build_ollama_model", OfflinePolicy)
 
@@ -444,7 +442,6 @@ def test_fast_policy_provider_specific_failure_falls_back(server, monkeypatch):
     monkeypatch.delenv("GOOGLE_API_KEY", raising=False)
     monkeypatch.delenv("TINKER_API_KEY", raising=False)
     monkeypatch.delenv("TINKER_PLACEMENT_MODEL", raising=False)
-    monkeypatch.setenv("SILKSCREEN_EXPERIMENTAL_PLACEMENT", "1")
     monkeypatch.setenv("OLLAMA_PLACEMENT_URL", "http://offline.invalid")
     monkeypatch.setattr("service.app.build_ollama_model", BrokenPolicy)
 
@@ -476,7 +473,6 @@ def test_fast_policy_unusable_output_falls_back(server, monkeypatch):
     monkeypatch.delenv("GOOGLE_API_KEY", raising=False)
     monkeypatch.delenv("TINKER_API_KEY", raising=False)
     monkeypatch.delenv("TINKER_PLACEMENT_MODEL", raising=False)
-    monkeypatch.setenv("SILKSCREEN_EXPERIMENTAL_PLACEMENT", "1")
     monkeypatch.setenv("OLLAMA_PLACEMENT_URL", "http://offline.invalid")
     monkeypatch.setattr("service.app.build_ollama_model", EmptyPolicy)
 
@@ -565,7 +561,6 @@ def test_placement_rejects_unknown_profile(server):
 def test_placement_tinker_policy_is_unavailable_without_a_promoted_checkpoint(
     server, monkeypatch
 ):
-    monkeypatch.setenv("SILKSCREEN_EXPERIMENTAL_PLACEMENT", "1")
     monkeypatch.delenv("TINKER_API_KEY", raising=False)
     monkeypatch.delenv("TINKER_PLACEMENT_MODEL", raising=False)
 
@@ -583,9 +578,10 @@ def test_placement_tinker_policy_is_unavailable_without_a_promoted_checkpoint(
     assert "not available" in body["error"]
 
 
-def test_experimental_placement_requires_the_server_switch(server, monkeypatch):
-    monkeypatch.delenv("SILKSCREEN_EXPERIMENTAL_PLACEMENT", raising=False)
-
+def test_experimental_placement_uses_the_request_switch(server, monkeypatch):
+    monkeypatch.delenv("TINKER_API_KEY", raising=False)
+    monkeypatch.delenv("TINKER_PLACEMENT_MODEL", raising=False)
+    monkeypatch.delenv("OLLAMA_PLACEMENT_URL", raising=False)
     status, body = post(
         server,
         {
@@ -596,10 +592,9 @@ def test_experimental_placement_requires_the_server_switch(server, monkeypatch):
         path="/placement/repair",
     )
 
-    assert status == 400
-    assert body["error"] == (
-        "experimental placement features are disabled on this server"
-    )
+    assert status == 200
+    assert body["requested_policy"] == "fast"
+    assert body["policy"] == "deterministic"
 
 
 def test_direct_placement_provider_failure_is_reported_as_upstream(
@@ -607,7 +602,6 @@ def test_direct_placement_provider_failure_is_reported_as_upstream(
 ):
     import service.app as app
 
-    monkeypatch.setenv("SILKSCREEN_EXPERIMENTAL_PLACEMENT", "1")
     monkeypatch.setenv("OLLAMA_PLACEMENT_URL", "http://offline.invalid")
 
     def unavailable(*args, **kwargs):
@@ -640,7 +634,6 @@ def test_policy_failures_are_consent_aware_training_traces(server, monkeypatch):
     monkeypatch.setattr(
         "service.app.build_tinker_model", lambda: RejectingPolicy()
     )
-    monkeypatch.setenv("SILKSCREEN_EXPERIMENTAL_PLACEMENT", "1")
     monkeypatch.setenv("TINKER_API_KEY", "test-key")
     monkeypatch.setenv("TINKER_PLACEMENT_MODEL", "tinker://test-checkpoint")
     trace_store = Handler.failure_trace_store
@@ -2196,7 +2189,6 @@ def post_stream(srv, payload, path="/generate/stream", content_length="auto"):
 
 
 def test_models_lists_the_server_catalog(server, monkeypatch):
-    monkeypatch.delenv("SILKSCREEN_EXPERIMENTAL_PLACEMENT", raising=False)
     monkeypatch.delenv("GOOGLE_API_KEY", raising=False)
     monkeypatch.delenv("GEMINI_API_KEY", raising=False)
     monkeypatch.delenv("TINKER_API_KEY", raising=False)
@@ -2221,7 +2213,7 @@ def test_models_lists_the_server_catalog(server, monkeypatch):
     assert catalog["default"] == "auto"
     assert catalog["models"][0]["id"] == "gemini-test"
     assert catalog["placement"] == {
-        "experimental_enabled": False,
+        "experimental_enabled": True,
         "profiles": ["compact-control", "thermal-first"],
         "policies": {
             "deterministic": True,
@@ -2247,7 +2239,6 @@ def test_main_generate_preserves_the_requested_fast_policy(server, monkeypatch):
     monkeypatch.delenv("GOOGLE_API_KEY", raising=False)
     monkeypatch.delenv("TINKER_API_KEY", raising=False)
     monkeypatch.delenv("TINKER_PLACEMENT_MODEL", raising=False)
-    monkeypatch.setenv("SILKSCREEN_EXPERIMENTAL_PLACEMENT", "1")
     monkeypatch.setenv("OLLAMA_PLACEMENT_URL", "http://localhost:11434")
     monkeypatch.setattr(app, "build_ollama_model", LocalPolicy)
 

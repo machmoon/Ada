@@ -16,9 +16,9 @@ surface underneath that flow.
 Deterministic repair is the default product path and needs no model call. Gemini
 is a stable comparison policy when the configured key advertises it. Ollama,
 Tinker, hybrid, automatic experimental selection, and trace capture appear only
-after the user turns on **Experimental features** and only when the service was
-started with `SILKSCREEN_EXPERIMENTAL_PLACEMENT=1`. Backend names remain visible
-in the run receipt.
+after the user turns on **Experimental features**. Provider-specific choices are
+selectable only when their server-side credentials or endpoint are configured.
+Backend names remain visible in the run receipt.
 
 Generated boards cross an explicit adapter boundary: canonical placement stays
 in integer nanometres, verifier geometry uses bounded millimetres, and accepted

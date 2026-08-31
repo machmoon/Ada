@@ -571,15 +571,6 @@ def build_fast_placement_model():
     return build_ollama_model()
 
 
-def experimental_placement_enabled() -> bool:
-    return os.getenv("SILKSCREEN_EXPERIMENTAL_PLACEMENT", "").strip().lower() in {
-        "1",
-        "true",
-        "yes",
-        "on",
-    }
-
-
 def _tinker_configured() -> bool:
     checkpoint = os.getenv("TINKER_PLACEMENT_MODEL", "").strip()
     return bool(os.getenv("TINKER_API_KEY") and checkpoint.startswith("tinker://"))
@@ -589,18 +580,13 @@ def _experimental_requested(payload: dict[str, Any]) -> bool:
     value = payload.get("experimental_placement", False)
     if not isinstance(value, bool):
         raise ValueError("experimental_placement must be a boolean")
-    if value and not experimental_placement_enabled():
-        raise ValueError(
-            "experimental placement features are disabled on this server"
-        )
     return value
 
 
 def placement_policy_status(*, experimental: bool = False) -> dict[str, bool]:
     gemini = bool(os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY"))
-    enabled = experimental and experimental_placement_enabled()
-    tinker = enabled and _tinker_configured()
-    ollama = enabled and bool(os.getenv("OLLAMA_PLACEMENT_URL"))
+    tinker = experimental and _tinker_configured()
+    ollama = experimental and bool(os.getenv("OLLAMA_PLACEMENT_URL"))
     return {
         "deterministic": True,
         "gemini": gemini,
@@ -1187,7 +1173,9 @@ class Handler(BaseHTTPRequestHandler):
         if route == "/models":
             catalog = dict(self.model_catalog_factory())
             catalog["placement"] = {
-                "experimental_enabled": experimental_placement_enabled(),
+                # The visible request toggle is the opt-in. Individual providers
+                # remain unavailable until their server-side configuration exists.
+                "experimental_enabled": True,
                 "profiles": ["compact-control", "thermal-first"],
                 "policies": placement_policy_status(experimental=True),
             }

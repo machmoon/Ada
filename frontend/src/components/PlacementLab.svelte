@@ -36,9 +36,6 @@
   )
   const accepted = $derived(receipts.filter((item) => item.receipt.accepted))
   const teachRef = $derived(accepted.length ? accepted[0].action.ref : '')
-  const experimentalAvailable = $derived(
-    placementCapabilities?.experimental_enabled === true,
-  )
   const availablePolicies = $derived(placementCapabilities?.policies || {})
 
   function mergeFeedback(current = {}, supplied = {}) {
@@ -104,7 +101,6 @@
   }
 
   function toggleExperimental() {
-    if (!experimentalAvailable) return
     experimental = !experimental
     if (!experimental) {
       policy = 'deterministic'
@@ -190,13 +186,11 @@
             type="button"
             class:active={experimental}
             aria-pressed={experimental}
-            disabled={!experimentalAvailable || busy}
+            disabled={busy}
             onclick={toggleExperimental}
           >Experimental features · {experimental ? 'ON' : 'OFF'}</button>
           {#if experimental}
             <label><input type="checkbox" bind:checked={recordTrace} /> Record failure traces</label>
-          {:else if !experimentalAvailable}
-            <small>Disabled on this service.</small>
           {/if}
         </div>
       </div>

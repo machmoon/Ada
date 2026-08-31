@@ -112,17 +112,7 @@
       && !selectedUnavailable
       && (!constraintsEnabled || (constraintsReady && constraints.approved === true)),
   )
-  const experimentalAvailable = $derived(placementCapabilities?.experimental_enabled === true)
   const placementPolicies = $derived(placementCapabilities?.policies || {})
-
-  $effect(() => {
-    if (experimentalAvailable) return
-    experimentalPlacement = false
-    recordTrace = false
-    if (['fast', 'ollama', 'tinker', 'hybrid'].includes(placementPolicy)) {
-      placementPolicy = 'deterministic'
-    }
-  })
 
   function grow() {
     if (!textarea) return
@@ -230,7 +220,6 @@
   }
 
   function toggleExperimental() {
-    if (!experimentalAvailable) return
     experimentalPlacement = !experimentalPlacement
     if (!experimentalPlacement) {
       recordTrace = false
@@ -546,10 +535,8 @@
         class="experimental-toggle"
         class:active={experimentalPlacement}
         aria-pressed={experimentalPlacement}
-        disabled={!experimentalAvailable || !placementEnabled}
-        title={experimentalAvailable
-          ? 'Reveal Ollama, Tinker, hybrid policy, and trace controls'
-          : 'Set SILKSCREEN_EXPERIMENTAL_PLACEMENT=1 on the service to enable this'}
+        disabled={!placementEnabled}
+        title="Reveal configured Ollama, Tinker, hybrid policy, and trace controls"
         onclick={toggleExperimental}
         data-testid="intent-form-experimental-placement"
       >Experimental features · {experimentalPlacement ? 'ON' : 'OFF'}</button>
@@ -558,8 +545,6 @@
           <input type="checkbox" bind:checked={recordTrace} />
           <span>Record verifier failure traces for later training</span>
         </label>
-      {:else if !experimentalAvailable}
-        <small>Experimental providers are disabled on this service.</small>
       {/if}
     </div>
   </section>
@@ -746,7 +731,6 @@
   .experimental-row { margin-top: 11px; justify-content: flex-start; }
   .experimental-toggle { min-height: 34px; padding: 0 10px; border: 1px solid var(--rule); background: transparent; color: var(--ink-soft); font-size: 11px; }
   .experimental-toggle.active { border-color: var(--navy); color: var(--navy); }
-  .experimental-row small { color: var(--ink-faint); }
 
   .controls {
     display: flex;
