@@ -253,6 +253,7 @@
           onopen={goTab}
           {schematicEnabled}
           {boardEnabled}
+          {reviewed}
         />
       {/if}
     </main>

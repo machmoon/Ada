@@ -23,6 +23,7 @@
     onopen,
     schematicEnabled = false,
     boardEnabled = false,
+    reviewed = true,
   } = $props()
 
   let answer = $state('')
@@ -123,6 +124,7 @@
                   result={entry.result}
                   {schematicEnabled}
                   {boardEnabled}
+                  {reviewed}
                   {onopen}
                 />
               {/if}
