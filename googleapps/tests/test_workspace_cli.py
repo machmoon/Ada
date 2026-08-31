@@ -192,6 +192,27 @@ def test_schedule_creates_the_event_only_because_of_blockers(
     assert "1 blocker(s)" in capsys.readouterr().out
 
 
+def test_a_skipped_review_is_reported_as_skipped_not_clean(
+    configured, monkeypatch, tmp_path, capsys
+):
+    """--no-review means "no blockers" is not a fact we hold; say so."""
+    wire_run(monkeypatch, tmp_path)
+    transport = RecordingTransport()
+    code = cli.main(
+        [
+            "run", "an LDO",
+            "-o", str(tmp_path / "out" / "board.kicad_pcb"),
+            "--no-review", "--schedule", "--attendee", "lead@example.com",
+        ],
+        transport=transport,
+    )
+    assert code == 0
+    assert not transport.called("calendar")
+    out = capsys.readouterr().out
+    assert "review was skipped" in out
+    assert "no blockers" not in out
+
+
 def test_a_marginal_only_review_does_not_schedule(
     configured, monkeypatch, tmp_path
 ):

@@ -140,7 +140,10 @@ def _cmd_run(args: argparse.Namespace, config: Config, transport: Transport) -> 
 
     if args.schedule:
         blockers = list(result.blockers)
-        if not blockers:
+        if args.no_review:
+            # No review ran, so "no blockers" is not a fact we hold.
+            print("review was skipped (--no-review) — no review event was created")
+        elif not blockers:
             print("review found no blockers — no review event was created")
         else:
             try:
