@@ -235,6 +235,81 @@ describe('normalizeRequest', () => {
     expect(normalizeRequest({ ground: true }).ground).toBe(true)
   })
 
+  it('passes the enclosure opt-in through when it was asked for', () => {
+    const request = normalizeRequest({ enclosure: true })
+
+    expect(request.enclosure).toBe(true)
+    expect(request).not.toHaveProperty('enclosure_style')
+  })
+
+  it('omits the enclosure entirely rather than sending false, which claims nothing', () => {
+    expect(normalizeRequest({})).not.toHaveProperty('enclosure')
+    expect(normalizeRequest({ enclosure: false })).not.toHaveProperty('enclosure')
+    expect(normalizeRequest({ enclosure: 'yes' })).not.toHaveProperty('enclosure')
+  })
+
+  it('trims the enclosure style and sends it only alongside the opt-in', () => {
+    const request = normalizeRequest({ enclosure: true, enclosure_style: '  vented lid  ' })
+
+    expect(request.enclosure_style).toBe('vented lid')
+    expect(normalizeRequest({ enclosure_style: 'vented lid' })).not.toHaveProperty(
+      'enclosure_style',
+    )
+  })
+
+  it('drops a whitespace-only enclosure style rather than sending an empty string', () => {
+    expect(normalizeRequest({ enclosure: true, enclosure_style: '   ' })).not.toHaveProperty(
+      'enclosure_style',
+    )
+  })
+
+  it('caps the enclosure style at the 500 characters the service accepts', () => {
+    const request = normalizeRequest({ enclosure: true, enclosure_style: 'x'.repeat(600) })
+
+    expect(request.enclosure_style).toHaveLength(500)
+  })
+
+  it('forwards rigorous fit checks only alongside the enclosure opt-in', () => {
+    const request = normalizeRequest({ enclosure: true, enclosure_rigorous: true })
+
+    expect(request.enclosure_rigorous).toBe(true)
+    expect(normalizeRequest({ enclosure_rigorous: true })).not.toHaveProperty(
+      'enclosure_rigorous',
+    )
+    expect(
+      normalizeRequest({ enclosure: false, enclosure_rigorous: true }),
+    ).not.toHaveProperty('enclosure_rigorous')
+  })
+
+  it('omits rigorous fit checks entirely rather than sending false, which claims nothing', () => {
+    expect(normalizeRequest({ enclosure: true })).not.toHaveProperty('enclosure_rigorous')
+    expect(
+      normalizeRequest({ enclosure: true, enclosure_rigorous: false }),
+    ).not.toHaveProperty('enclosure_rigorous')
+    expect(
+      normalizeRequest({ enclosure: true, enclosure_rigorous: 'yes' }),
+    ).not.toHaveProperty('enclosure_rigorous')
+  })
+
+  it('keeps rigorous fit checks stable through renormalization, so retry and restore cannot drop them', () => {
+    const first = normalizeRequest({ intent: 'a board', enclosure: true, enclosure_rigorous: true })
+    const again = normalizeRequest(first)
+
+    expect(again.enclosure_rigorous).toBe(true)
+  })
+
+  it('keeps the enclosure opt-in stable through renormalization, so retry and restore cannot drop it', () => {
+    const first = normalizeRequest({
+      intent: 'a board',
+      enclosure: true,
+      enclosure_style: '  snap-fit  ',
+    })
+    const again = normalizeRequest(first)
+
+    expect(again.enclosure).toBe(true)
+    expect(again.enclosure_style).toBe('snap-fit')
+  })
+
   it('omits grounding entirely rather than sending false, which claims nothing', () => {
     expect(normalizeRequest({}).ground).toBeUndefined()
     expect(normalizeRequest({ ground: false }).ground).toBeUndefined()

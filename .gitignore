@@ -96,3 +96,13 @@ artifacts/
 # Seeded design canvas — generated from design/*.dc.html, 2MB of bundled editor
 design/silkscreen-ui.html
 .gstack/
+
+# AI CAD / enclosure (docs/ai-cad-plan.md). The OpenSCAD C++ source may be
+# cloned locally as a read-only reference and must NEVER be committed (GPL-2.0
+# stays outside this MIT project -- see vendor/README.md). Render outputs are
+# regenerable from the .scad via the locally installed openscad binary.
+# Deliberately NOT *.scad wholesale: emitted sources and test fixtures must
+# stay trackable.
+vendor/openscad/
+*.stl
+enclosure.png

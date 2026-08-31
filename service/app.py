@@ -135,6 +135,7 @@ TRANSCRIBE_AUDIO_TYPES = frozenset(
 )
 PAGES_COLLECTION = "datasheet_pages"
 MAX_GROUND_PARTS = 25
+MAX_ENCLOSURE_STYLE_CHARS = 500
 
 
 def page_cache_key(part: str, url: str) -> str:
@@ -491,6 +492,33 @@ def transcribe_request(payload: dict[str, Any]) -> tuple[bytes, str, str | None]
         raise ValueError("'language' must be a string")
     language = (language or "").strip() or None
     return audio, base_type, language
+
+
+def _enclosure_dict(enclosure) -> dict[str, Any] | None:
+    """The additive ``enclosure`` response block (docs/ai-cad-plan.md).
+
+    ``None`` is the contract's honest degradation: the stage failed or was
+    skipped, and the board is still the product. On success the ``.scad``
+    rides the JSON exactly as ``kicad_pcb`` does, with the fit receipt's
+    signed per-axis margins converted to mm here -- the one formatting
+    crossing, mirroring ``FitReport.params_mm``. Nothing else is added:
+    the one-shot response must never grow raw model output.
+    """
+    if enclosure is None:
+        return None
+    fit = enclosure.fit
+    return {
+        "scad": enclosure.scad,
+        "params": dict(fit.params_mm),
+        "fit": {
+            "margins_mm": {
+                axis: round(to_mm(value), 3)
+                for axis, value in fit.margins_nm.items()
+            }
+        },
+        "warnings": list(fit.warnings),
+        "repair_rounds": enclosure.repair_rounds,
+    }
 
 
 def caused_by_model_failure(exc: BaseException) -> bool:
@@ -851,6 +879,24 @@ def generate(
     if constraint_manifest is not None:
         model_intent += constraint_manifest.prompt_block()
 
+    # Enclosure opt-in, validated before any cache read or model call spends
+    # time or quota -- field-level failures are the caller's to fix (the
+    # known-issue-10 taxonomy: a plain 400, never a stream frame apology).
+    enclosure_requested = payload.get("enclosure", False)
+    if not isinstance(enclosure_requested, bool):
+        raise ValueError("'enclosure' must be a boolean")
+    enclosure_style = payload.get("enclosure_style", "")
+    if not isinstance(enclosure_style, str):
+        raise ValueError("'enclosure_style' must be a string")
+    if len(enclosure_style) > MAX_ENCLOSURE_STYLE_CHARS:
+        raise ValueError(
+            "'enclosure_style' must be at most "
+            f"{MAX_ENCLOSURE_STYLE_CHARS} characters"
+        )
+    enclosure_rigorous = payload.get("enclosure_rigorous", False)
+    if not isinstance(enclosure_rigorous, bool):
+        raise ValueError("'enclosure_rigorous' must be a boolean")
+
     datasheets = payload.get("datasheets") or {}
     if not isinstance(datasheets, dict):
         raise ValueError("'datasheets' must be an object of {part: url}")
@@ -923,6 +969,20 @@ def generate(
     ):
         raise ValueError("'placement_max_turns' must be an integer")
 
+    # Passed only when opted in, so a default request reaches generate_pcb
+    # with the exact call it always made (and both drivers stay
+    # event-identical by default, per the plan).
+    enclosure_kwargs: dict[str, Any] = (
+        {
+            "enclosure": True,
+            "enclosure_style": enclosure_style.strip(),
+            # Fast by default; the strict repair loop is the caller's opt-in.
+            "enclosure_rigorous": enclosure_rigorous,
+        }
+        if enclosure_requested
+        else {}
+    )
+
     result = generate_pcb(
         model,
         model_intent,
@@ -940,6 +1000,7 @@ def generate(
         placement_model=placement_model,
         placement_fallback_model=placement_fallback_model,
         placement_max_turns=placement_max_turns,
+        **enclosure_kwargs,
     )
 
     for fact in result.facts:
@@ -1039,6 +1100,18 @@ def generate(
                 "artifact_available": True,
             }
         )
+
+    if enclosure_requested:
+        # Additive, and only when opted in. ``getattr`` rather than an
+        # attribute read: enclosure failure inside the stage already means
+        # ``None`` (board still delivered), and the visible warning keeps the
+        # degradation honest in the one-shot response, where the
+        # ``enclosure.failed`` stream event cannot be seen.
+        response["enclosure"] = _enclosure_dict(getattr(result, "enclosure", None))
+        if response["enclosure"] is None:
+            response["warnings"].append(
+                "enclosure generation failed; the board is delivered without a case"
+            )
 
     if result.route is not None:
         response["routing"] = {

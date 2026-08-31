@@ -392,6 +392,55 @@ describe('describeStageEvent', () => {
     ).toBe('review: no findings')
   })
 
+  it('describes a starting enclosure stage', () => {
+    expect(describeStageEvent({ event: 'stage.start', stage: 'enclosure' })).toBe(
+      'drawing the printable case…',
+    )
+  })
+
+  it('summarises a finished enclosure from the frozen stage.done fields', () => {
+    expect(
+      describeStageEvent({
+        event: 'stage.done',
+        stage: 'enclosure',
+        cutouts: 3,
+        lid: 'sliding',
+        wall_mm: 2,
+        repair_rounds: 1,
+        rendered: true,
+      }),
+    ).toBe('printable case generated: 3 cutouts, sliding lid, 2 mm walls, after 1 repair round, rendered')
+  })
+
+  it('drops the enclosure clauses that were not reported rather than inventing zeros', () => {
+    expect(
+      describeStageEvent({ event: 'stage.done', stage: 'enclosure', cutouts: 1, repair_rounds: 0 }),
+    ).toBe('printable case generated: 1 cutout')
+  })
+
+  it('reports an enclosure repair round with its error tally', () => {
+    expect(
+      describeStageEvent({
+        event: 'enclosure.round',
+        round: 2,
+        errors: 3,
+        first_error: 'cutout off the board edge',
+      }),
+    ).toBe('case proposal round 2 rejected: 3 validation errors (first: cutout off the board edge)')
+    expect(describeStageEvent({ event: 'enclosure.round', round: 1, errors: 1 })).toBe(
+      'case proposal round 1 rejected: 1 validation error',
+    )
+  })
+
+  it('describes an enclosure failure with its error and the delivered board', () => {
+    expect(
+      describeStageEvent({ event: 'enclosure.failed', error: 'repair budget exhausted' }),
+    ).toBe('case generation failed: repair budget exhausted — the board is still delivered')
+    expect(describeStageEvent({ event: 'enclosure.failed' })).toBe(
+      'case generation failed — the board is still delivered',
+    )
+  })
+
   it('reports a model call that answered', () => {
     expect(
       describeStageEvent({
@@ -640,6 +689,8 @@ describe('describeStageEvent', () => {
       'stage.done',
       'read.part',
       'propose.round',
+      'enclosure.round',
+      'enclosure.failed',
       'model.call',
       'model.request',
       'model.response',
@@ -659,7 +710,7 @@ describe('describeStageEvent', () => {
     ]
 
     for (const event of events) {
-      for (const stage of [undefined, 'read', 'propose', 'place', 'review']) {
+      for (const stage of [undefined, 'read', 'propose', 'place', 'review', 'enclosure']) {
         const gutted = {
           event,
           stage,

@@ -163,6 +163,16 @@ across the interface to the exact control it means, so "add a net class" becomes
 something you watch once and can then do yourself. The tool teaches its own UI. This is
 the difference between automating a beginner out of the loop and bringing them into it.
 
+**8. A case for the board. [not yet built]**
+AI CAD: a 3D-printable OpenSCAD enclosure generated from the placed board's *measured*
+geometry. The model chooses style within bounds — lid type, wall thickness, which
+connector gets a cutout — as validated JSON; deterministic code injects every board
+millimetre, and an offline verifier signs off the fit with per-axis signed margins
+before anything is shown. The `.scad` source, the parameter table, and the fit receipt
+land in a **Case** tab in the SPA; rendering to STL/PNG happens only through a locally
+installed `openscad` binary, never on the server. The plan is `docs/ai-cad-plan.md`;
+a failed case never fails the board run.
+
 ---
 
 ## How we built it
@@ -319,6 +329,15 @@ yet. Nothing in `engine/`, `service/`, or `scripts/` imports from it, it is
 excluded from lint and tests, and it contributes nothing to the 884 tests or to
 any figure quoted in this document. Everything else in the repository was
 written during the submission period.
+
+**Third-party tools.** The enclosure feature (item 8 above) optionally shells out to a
+locally installed [OpenSCAD](https://openscad.org/) CLI to render STL/PNG previews —
+the same arms-length, exec-only relationship the SPICE verifier has with ngspice.
+OpenSCAD is GPL-2.0 and is **not** vendored, linked, imported, or shipped in the
+Docker image; without the binary the render tests skip and everything else works,
+the `.scad` text itself being emitted by our own MIT-licensed Python. A local
+reference clone at `vendor/openscad/` is gitignored and never committed (see
+`vendor/README.md`).
 
 ---
 

@@ -1,6 +1,7 @@
 <script>
   import { get } from 'svelte/store'
   import BoardWell from './components/BoardWell.svelte'
+  import CaseTab from './components/CaseTab.svelte'
   import ConversationView from './components/ConversationView.svelte'
   import DebugConsole from './components/DebugConsole.svelte'
   import GuidePointer from './components/GuidePointer.svelte'
@@ -13,6 +14,7 @@
   import TitleBar from './components/TitleBar.svelte'
   import { ApiError, chatStream, normalizeRequest } from './lib/api.js'
   import { highlightRefs, readPlacements } from './lib/board.js'
+  import { readEnclosure } from './lib/enclosure.js'
   import { readPlacementRepair } from './lib/placement.js'
   import { resetGuide } from './lib/guide.js'
   import { pcbText } from './lib/download.js'
@@ -93,14 +95,20 @@
   const placement = $derived(
     $run.phase === 'done' ? readPlacementRepair($run.result) : null,
   )
+  const enclosure = $derived($run.phase === 'done' ? readEnclosure($run.result) : null)
   const boardEnabled = $derived(placements !== null)
   const schematicEnabled = $derived(schematic !== null)
   const placementEnabled = $derived(placement !== null)
+  // Enabled whenever a run finished, with or without a case: `enclosure: null`
+  // is the contract's honest degradation, and the tab says so rather than
+  // greying out and hiding that anything was skipped or failed.
+  const caseEnabled = $derived($run.phase === 'done')
   const tab = $derived(
     resolveTab(hash, {
       schematic: schematicEnabled,
       placement: placementEnabled,
       board: boardEnabled,
+      case: caseEnabled,
       review: $run.phase === 'done',
     }),
   )
@@ -245,6 +253,12 @@
           <BoardWell {placements} {highlightedRefs} {pcb} />
       {:else if tab === 'placement' && placement}
           <PlacementResults {placement} />
+      {:else if tab === 'case' && caseEnabled}
+          <CaseTab
+            {enclosure}
+            stage={$run.stages?.enclosure || null}
+            requested={$run.request?.enclosure === true}
+          />
       {:else if tab === 'review' && $run.phase === 'done' && $run.result}
           <ReviewResults
             result={$run.result}
@@ -294,6 +308,7 @@
     {schematicEnabled}
     {placementEnabled}
     {boardEnabled}
+    {caseEnabled}
     {debugOpen}
     ondebug={() => (debugOpen = !debugOpen)}
   />

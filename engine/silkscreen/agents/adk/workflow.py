@@ -4,9 +4,10 @@ One orchestrator node runs read, propose, place, placement repair, schematic,
 route, and review in order, each as its own child node. The nodes hold no logic
 of their own: every one of them calls the matching body in
 :mod:`silkscreen.agents.stages`, which is what keeps the two drivers emitting
-the same events. ``placement_repair``, ``schematic``, ``route``, and ``review``
-are always run -- each stage body owns the decision to do nothing when its
-feature is off, so the graph never has to branch.
+the same events. ``placement_repair``, ``schematic``, ``route``,
+``enclosure``, and ``review`` are always run -- each stage body owns the
+decision to do nothing when its feature is off, so the graph never has to
+branch.
 
 Each node is handed the run token as ``node_input`` and returns it, so the token
 is the only value ADK ever sees; the rest is looked up from the registry in
@@ -19,6 +20,7 @@ from google.adk import Context, Workflow
 from google.adk.workflow import node
 
 from ..stages import (
+    enclosure_stage,
     place_stage,
     placement_repair_stage,
     propose_stage,
@@ -123,6 +125,24 @@ def route(node_input: str) -> str:
     return node_input
 
 
+@node(name="enclosure")
+def enclosure(node_input: str) -> str:
+    run = run_context(node_input)
+    with recording(run):
+        run.enclosure_result = enclosure_stage(
+            run.agent_model,
+            run.board,
+            enclosure=run.enclosure,
+            enclosure_style=run.enclosure_style,
+            rigorous=run.enclosure_rigorous,
+            output=run.output,
+            emit_stages=run.emit_stages,
+            emit=run.emit,
+            enter=run.enter,
+        )
+    return node_input
+
+
 @node(name="review")
 def review(node_input: str) -> str:
     run = run_context(node_input)
@@ -143,7 +163,9 @@ def review(node_input: str) -> str:
 @node(name="silkscreen", rerun_on_resume=True)
 async def silkscreen(ctx: Context, token: str) -> str:
     """The whole pipeline, in order. ``token`` binds from session state."""
-    for stage in (read, propose, place, placement_repair, schematic, route, review):
+    for stage in (
+        read, propose, place, placement_repair, schematic, route, enclosure, review,
+    ):
         await ctx.run_node(stage, node_input=token)
     return token
 

@@ -56,13 +56,16 @@ describe('material surface contract', () => {
       ['../components/MetricHelp.svelte', /class="tooltip"[^>]+data-material="popover"/],
       ['../components/PlacementLab.svelte', /class="controls"[^>]+data-material="panel"/],
       ['../components/PlacementLab.svelte', /class="trace"[^>]+data-material="panel"/],
+      ['../components/CaseTab.svelte', /class="receipt" data-material="panel"/],
+      ['../components/CaseTab.svelte', /class="empty" data-material="panel"/],
     ]
 
     for (const [file, pattern] of [...chrome, ...content]) {
       expect(source(file), `${file} is missing its material role`).toMatch(pattern)
     }
 
-    expect(source('../components/ArtifactCards.svelte').match(/data-material="panel"/g)).toHaveLength(4)
+    // One per artifact card: schematic, board, placement, case, review.
+    expect(source('../components/ArtifactCards.svelte').match(/data-material="panel"/g)).toHaveLength(5)
   })
 
   it('marks both drawing wells as intentional canvas exemptions', () => {

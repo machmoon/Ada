@@ -12,6 +12,7 @@
     ['placement_repair', 'verify placement'],
     ['route', 'route copper'],
     ['review', 'review'],
+    ['enclosure', 'printable case'],
   ]
 
   const QUIET = ['model.request', 'model.call', 'model.response']
@@ -92,6 +93,8 @@
   .stages li[data-state='running'] { color: var(--ink); }
   .stages li[data-state='running'] .box { border-color: var(--ink); }
   .stages li[data-state='done'] .box { background: var(--ink-mid); border-color: var(--ink-mid); }
+  .stages li[data-state='failed'] { color: var(--sev-blocker-fg); }
+  .stages li[data-state='failed'] .box { background: var(--sev-blocker-fg); border-color: var(--sev-blocker-fg); }
 
   .feed { list-style: none; margin: 0; padding: 0 13px; max-height: 390px; overflow: auto; }
   .feed li { padding: 7px 0; font-size: var(--fs-ui); }

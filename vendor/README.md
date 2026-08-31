@@ -1,9 +1,8 @@
 # Vendored third-party code
 
-Code in this directory was **not written for Silkscreen**. It is included as a
-working reference for the guided-cursor overlay described in `DEVPOST.md`,
-which is not built yet. Nothing in `engine/`, `service/`, or `scripts/`
-imports from here, and nothing here runs in CI.
+Code in this directory was **not written for Silkscreen**. It holds read-only
+references for features described in `DEVPOST.md`. Nothing in `engine/`,
+`service/`, or `scripts/` imports from here, and nothing here runs in CI.
 
 ## mudriknow/
 
@@ -26,3 +25,29 @@ yourself.
 The MIT licence permits use, modification and redistribution provided the
 copyright notice is kept. It has been kept. Upstream copyright remains with the
 MudrikNow contributors.
+
+## openscad/ — NOT vendored, never committed
+
+| | |
+|---|---|
+| Upstream | https://github.com/openscad/openscad |
+| Revision | none — this directory is **gitignored** and holds no committed code |
+| License | GPL-2.0 (with the OpenCSG/CGAL exceptions upstream documents) |
+| Stack | C++, CGAL, Qt |
+| Role | read-only local reference for the AI CAD enclosure feature |
+
+Unlike `mudriknow/`, OpenSCAD is **not** part of this repository. `vendor/openscad/`
+is listed in `.gitignore`; if a clone exists on your machine it is yours alone, made
+for reading, and must never be committed, built, linked against, or imported from.
+GPL-2.0 code stays outside this MIT project. To make a local reference clone:
+
+```bash
+git clone --depth 1 https://github.com/openscad/openscad vendor/openscad
+```
+
+The only interaction the project has with OpenSCAD is exec-ing a **user-installed
+binary** (`openscad` on PATH) from `engine/silkscreen/enclosure/render.py` to render
+locally-gated STL/PNG previews — the same arms-length boundary the SPICE layer keeps
+with ngspice. The emitted `.scad` text is produced by our own Python; no OpenSCAD
+code runs on the service path or ships in the Docker image. See
+`docs/ai-cad-plan.md` (decision 4) and the disclosure in `DEVPOST.md`.

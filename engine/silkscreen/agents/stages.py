@@ -1,7 +1,7 @@
-"""The seven pipeline stages, as standalone bodies.
+"""The pipeline stages, as standalone bodies.
 
 Each function is one stage of prompt-to-PCB: read, propose, place, placement
-repair, schematic, route, and review. They hold the whole of a stage -- its
+repair, schematic, route, enclosure, and review. They hold the whole of a stage -- its
 model calls, its guards, and the exact events it emits -- so that more than one
 driver can run the same stages. The straight line in
 :mod:`silkscreen.agents.pipeline` and the ADK workflow in
@@ -16,19 +16,26 @@ here imports :mod:`silkscreen.agents.pipeline` -- that import runs the other way
 
 from __future__ import annotations
 
+import tempfile
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any, NamedTuple
 
 from ..board import BoardResult, build_board, route_board, write_board
+from ..enclosure.board_shape import board_envelope
+from ..enclosure.emit import emit_scad
+from ..enclosure.errors import EnclosureError
+from ..enclosure.ir import EnclosureSpec
+from ..enclosure.verify import FitReport
 from ..netlist import CircuitSpec
 from ..placement.adapter import GeneratedPlacement, repair_generated_board
 from ..placement.agent import TextModel
 from ..placement.pcb_repair import evaluate
 from ..routing import RouteResult
 from ..schematic import build_schematic, write_project, write_schematic
-from ..units import NM_PER_MM
+from ..units import NM_PER_MM, to_mm
 from .datasheet import PartFacts, read_datasheet
+from .enclosure import propose_enclosure
 from .model import Model
 from .propose import ProposalAttempt, propose_circuit
 from .review import Finding, Severity, review_circuit
@@ -40,9 +47,11 @@ __all__ = [
     "placement_repair_stage",
     "schematic_stage",
     "route_stage",
+    "enclosure_stage",
     "review_stage",
     "SchematicArtifacts",
     "NO_ARTIFACTS",
+    "EnclosureResult",
 ]
 
 Emit = Callable[[dict[str, Any]], None]
@@ -345,6 +354,113 @@ def route_stage(
         }
     )
     return result
+
+
+class EnclosureResult(NamedTuple):
+    """What the enclosure stage produced (docs/ai-cad-plan.md, frozen)."""
+
+    spec: EnclosureSpec
+    scad: str
+    fit: FitReport
+    repair_rounds: int
+    rendered: bool  # always False on the service path in v1
+    #: Where ``enclosure.scad`` was written, or None when nothing was (no
+    #: ``output``, or ``emit_stages`` off). Additive with a default so every
+    #: existing consumer of the frozen five-field shape keeps working.
+    scad_path: Path | None = None
+
+
+def enclosure_stage(
+    agent_model: Model,
+    board: BoardResult,
+    *,
+    enclosure: bool,
+    enclosure_style: str,
+    rigorous: bool = False,
+    output: str | Path | None,
+    emit_stages: bool,
+    emit: Emit,
+    enter: Enter,
+) -> EnclosureResult | None:
+    """Propose, verify, and emit a case for the routed board. Opt-in.
+
+    No-ops silently when the run did not ask for an enclosure (the
+    ``route_stage`` pattern). Runs after routing so the board it measures is
+    the board the run delivers, and before review so the run's critic still
+    closes the stream.
+
+    The stage measures the board by writing it to a scratch file and reading
+    it back through :func:`~silkscreen.enclosure.board_shape.board_envelope`
+    -- the envelope is derived from ``.kicad_pcb`` text, the same artifact the
+    caller receives, not from in-memory state the file might not carry.
+
+    ``rigorous`` selects the proposal loop's temperament (default fast: one
+    repair round, fit failures downgraded to warnings on the receipt;
+    ``True`` restores the strict verify-and-repair loop -- see
+    :func:`~silkscreen.agents.enclosure.propose_enclosure`).
+
+    ``enclosure.scad`` is written beside the project only when ``output`` is
+    set and ``emit_stages`` is on (the ``schematic_stage`` filesystem rule --
+    ``--board-only`` promises only the routed board); the text itself is
+    always returned so the service can ship it without touching a disk.
+
+    Failure never fails the run (plan decision 5): any
+    :class:`~silkscreen.enclosure.errors.EnclosureError` -- an exhausted
+    repair budget included -- as well as a ``ValueError`` from measuring the
+    board and an ``OSError`` from writing the ``.scad`` is caught here,
+    surfaced as a visible ``enclosure.failed`` event, and answered with
+    ``None``; the board is still the product. Everything else, callback
+    exceptions and :class:`~silkscreen.agents.model.ModelError` included,
+    propagates as it does from every other stage.
+    """
+    if not enclosure:
+        return None
+    enter("enclosure")
+    emit({"event": "stage.start", "stage": "enclosure"})
+    scad_path: Path | None = None
+    try:
+        with tempfile.TemporaryDirectory(prefix="silkscreen-enclosure-") as tmp:
+            measured = write_board(board, Path(tmp) / "board.kicad_pcb")
+            envelope = board_envelope(measured)
+        # The loop's report is the receipt, board-derived warnings included,
+        # so the stage never re-verifies what was already verified. Fast mode
+        # (the default) never lets a fit failure block; ``rigorous`` restores
+        # the strict repair loop.
+        spec, fit, repair_rounds = propose_enclosure(
+            agent_model,
+            envelope,
+            style_hint=enclosure_style,
+            rigorous=rigorous,
+            on_event=emit,
+        )
+        scad = emit_scad(spec, envelope)
+        if output is not None and emit_stages:
+            scad_path = Path(output).with_name("enclosure.scad")
+            scad_path.parent.mkdir(parents=True, exist_ok=True)
+            scad_path.write_text(scad, encoding="utf-8")
+    except (EnclosureError, ValueError, OSError) as exc:
+        emit({"event": "enclosure.failed", "error": str(exc)[:160]})
+        return None
+
+    emit(
+        {
+            "event": "stage.done",
+            "stage": "enclosure",
+            "cutouts": len(spec.cutouts),
+            "lid": spec.lid,
+            "wall_mm": round(to_mm(spec.wall_nm), 3),
+            "repair_rounds": repair_rounds,
+            "rendered": False,
+        }
+    )
+    return EnclosureResult(
+        spec=spec,
+        scad=scad,
+        fit=fit,
+        repair_rounds=repair_rounds,
+        rendered=False,
+        scad_path=scad_path,
+    )
 
 
 def review_stage(

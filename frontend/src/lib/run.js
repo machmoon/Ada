@@ -209,6 +209,13 @@ const DONE_SUMMARY = {
     routed_nets: countOf(e.routed_nets),
     unrouted_nets: countOf(e.unrouted_nets),
   }),
+  enclosure: (e) => ({
+    cutouts: countOf(e.cutouts),
+    lid: String(e.lid ?? ''),
+    wall_mm: finiteOrNull(e.wall_mm),
+    repair_rounds: countOf(e.repair_rounds),
+    rendered: e.rendered === true,
+  }),
   review: (e) => ({ findings: countOf(e.findings), blockers: countOf(e.blockers) }),
 }
 
@@ -224,6 +231,8 @@ const LEVEL_OF = {
   'tool.error': 'error',
   'model.retry': 'warn',
   'client.badframe': 'warn',
+  // The run continues without a case — degraded, not dead, so warn not error.
+  'enclosure.failed': 'warn',
 }
 
 let feedSeq = 0
@@ -404,6 +413,13 @@ function nextStages(stages, name, evt) {
       next.validate = { state: 'done', t_s: at, rounds: roundsIn(stages) }
     }
     return next
+  }
+
+  // The enclosure degrades instead of failing the run, so no stage.done ever
+  // arrives for it — this event is the stage row's only ending, and it has to
+  // say "failed" rather than leaving the row running forever.
+  if (name === 'enclosure.failed') {
+    return { ...stages, enclosure: { state: 'failed', t_s: at, error: String(evt.error ?? '') } }
   }
 
   // A rejected proposal is the one thing that proves the repair loop is turning.

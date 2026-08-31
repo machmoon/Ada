@@ -19,6 +19,8 @@ export const REQUEST_TIMEOUT_MS = 300000
 export const MAX_REQUEST_BYTES = 1024 * 1024
 export const MIN_TIME_LIMIT_S = 5
 export const MAX_TIME_LIMIT_S = 120
+// service/app.py's MAX_ENCLOSURE_STYLE_CHARS: a longer style is a plain 400.
+export const MAX_ENCLOSURE_STYLE_CHARS = 500
 
 /** kind is what the UI switches on; status is kept for the error panel's footer. */
 export class ApiError extends Error {
@@ -63,6 +65,25 @@ export function normalizeRequest(request) {
     // Grounding is opt-in and only sent when it was asked for: an absent flag
     // is the service's default, so a stray `ground: false` would say nothing.
     ...(request.ground === true ? { ground: true } : {}),
+    // The case is opt-in the same way grounding is: an absent flag is the
+    // service's default, so `enclosure: false` is never sent. The style rides
+    // along only when a case was asked for and the text says something, capped
+    // at the 500 characters service/app.py accepts.
+    ...(request.enclosure === true
+      ? {
+          enclosure: true,
+          // Rigorous fit checking is a second opt-in on top of the case itself:
+          // absent means the service's fast default, so false is never sent.
+          ...(request.enclosure_rigorous === true ? { enclosure_rigorous: true } : {}),
+          ...(String(request.enclosure_style ?? '').trim()
+            ? {
+                enclosure_style: String(request.enclosure_style ?? '')
+                  .trim()
+                  .slice(0, MAX_ENCLOSURE_STYLE_CHARS),
+              }
+            : {}),
+        }
+      : {}),
     ...(request.constraints && typeof request.constraints === 'object' && !Array.isArray(request.constraints)
       ? { constraints: normalizeConstraintManifest(request.constraints) }
       : {}),

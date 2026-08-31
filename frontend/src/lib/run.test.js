@@ -631,6 +631,46 @@ describe('stageEvent: the stage list', () => {
     expect(get(run).stages.review).toEqual({ state: 'done', t_s: 9, findings: 3, blockers: 1 })
   })
 
+  it('summarises a finished enclosure with the frozen stage.done fields', () => {
+    startRun({ intent: 'x' })
+
+    stageEvent({ event: 'stage.start', stage: 'enclosure', t_s: 10 })
+    expect(get(run).stages.enclosure).toEqual({ state: 'running', t_s: 10 })
+
+    stageEvent({
+      event: 'stage.done',
+      stage: 'enclosure',
+      t_s: 14,
+      cutouts: 2,
+      lid: 'friction',
+      wall_mm: 2.0,
+      repair_rounds: 1,
+      rendered: false,
+    })
+    expect(get(run).stages.enclosure).toEqual({
+      state: 'done',
+      t_s: 14,
+      cutouts: 2,
+      lid: 'friction',
+      wall_mm: 2.0,
+      repair_rounds: 1,
+      rendered: false,
+    })
+  })
+
+  it('marks the enclosure failed on enclosure.failed — the row must not run forever', () => {
+    startRun({ intent: 'x' })
+
+    stageEvent({ event: 'stage.start', stage: 'enclosure', t_s: 10 })
+    stageEvent({ event: 'enclosure.failed', t_s: 12, error: 'repair budget exhausted' })
+
+    expect(get(run).stages.enclosure).toEqual({
+      state: 'failed',
+      t_s: 12,
+      error: 'repair budget exhausted',
+    })
+  })
+
   it('reports an absent time as nothing rather than as zero', () => {
     startRun({ intent: 'x' })
 
@@ -889,6 +929,14 @@ describe('stageEvent: what it writes to the debug log', () => {
     const entries = await flushed()
     expect(lastEvent(entries, 'pipeline.model.retry').level).toBe('warn')
     expect(lastEvent(entries, 'pipeline.run.error').level).toBe('error')
+  })
+
+  it('records a degraded enclosure at warn, not error — the run continues', async () => {
+    startRun({ intent: 'x' })
+
+    stageEvent({ event: 'enclosure.failed', t_s: 12, error: 'repair budget exhausted' })
+
+    expect(lastEvent(await flushed(), 'pipeline.enclosure.failed').level).toBe('warn')
   })
 
   it('names an event carrying no name rather than writing a bare prefix', async () => {
