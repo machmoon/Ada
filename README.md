@@ -101,7 +101,7 @@ Every stage is a real KiCad file you can open and inspect on its own, so you can
 where a design went wrong instead of only seeing the last artifact.
 
 ```
-998 tests collected — no network, no API key, no KiCad install
+1077 tests collected — no network, no API key, no KiCad install
 ```
 
 **Next:** [full install guide and troubleshooting](docs/install.md) ·
@@ -172,7 +172,7 @@ Platform-by-platform commands are in [docs/install.md](docs/install.md#kicad-opt
 | `agents/retrieval.py` — page-cited datasheet retrieval | **Working** · 15 tests |
 | `agents/resilience.py` — provider failover | **Working** · 15 tests |
 | `fab.py` — Gerber, Excellon, BOM, pick-and-place, fab notes | **Working** · 35 tests |
-| `order.py` — order options, manufacturability preflight | **Working** · 30 tests · blocks an unrouted board |
+| `order.py` — order options, manufacturability preflight | **Working** · 41 tests · blocks an unrouted board |
 | `fabhouse.py` — OSH Park / JLCPCB / PCBWay limits and pricing | **Working** · 24 tests · one real quote, two honest refusals |
 | `gate.py` — the twelve-check pre-flight gate | **Working** · 26 tests |
 | `approval.py` — the prepared order, and the human it stops at | **Working** · 19 tests · no submission path, by design |
@@ -441,7 +441,7 @@ treats the board file as the interface.
 | Requires KiCad running | Yes | **No** |
 | Headless / CI | Hard | **Native** |
 | Platform lock | KiCad's plugin loader | **None — pure Python** |
-| Testable without KiCad | No | **Yes, all 998 tests** |
+| Testable without KiCad | No | **Yes, all 1077 tests** |
 
 ### What it reads
 
@@ -998,7 +998,7 @@ engine/
       pipeline.py   prompt -> PCB
       adk/          ADK dynamic workflow over the same stage bodies
     audit/        optional visual review of a finished board
-  tests/          998 tests — no network, no API keys, no KiCad
+  tests/          1077 tests — no network, no API keys, no KiCad
     fixtures/     ref.kicad_pcb -- 11-footprint board fixture
 scripts/
   demo.py         end-to-end: read -> place -> write -> verify
