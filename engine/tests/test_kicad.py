@@ -582,3 +582,100 @@ def test_footprint_without_a_reference_is_still_moved(tmp_path):
 
     assert moved == len(new_infos)
     assert before != (fp.position.X, fp.position.Y)
+
+
+# --- Which side of the board a footprint is on -------------------------------
+#
+# The solver enforces no-overlap *per side*: a part on the back may sit directly
+# under one on the front, which is the entire point of a two-sided board. That
+# only works if the side survives the trip in from the file.
+
+
+def _flip_to_back(board, refs):
+    """Move ``refs`` to the back, the way KiCad stores a flipped footprint."""
+    for fp in board.footprints:
+        if footprint_ref(fp) in refs:
+            fp.layer = "B.Cu"
+            for item in fp.graphicItems:
+                layer = getattr(item, "layer", "") or ""
+                if layer.startswith("F."):
+                    item.layer = "B." + layer[2:]
+
+
+def test_front_footprints_are_read_as_top_side(infos):
+    from silkscreen.packing import Layer
+
+    assert all(info.side is Layer.TOP for info in infos)
+
+
+def test_back_footprints_are_read_as_bottom_side():
+    from silkscreen.packing import Layer
+
+    board = load_board(FIXTURE)
+    _flip_to_back(board, {"C1", "C2"})
+    sides = {i.ref: i.side for i in extract_parts(board)}
+
+    assert sides["C1"] is Layer.BOTTOM
+    assert sides["C2"] is Layer.BOTTOM
+    assert sides["U1"] is Layer.TOP
+
+
+def test_side_reaches_the_placer():
+    """A FootprintInfo that knows its side is no use if to_parts drops it."""
+    from silkscreen.packing import Layer
+
+    board = load_board(FIXTURE)
+    _flip_to_back(board, {"C1", "C2"})
+    by_ref = {p.ref: p for p in to_parts(extract_parts(board))}
+
+    assert by_ref["C1"].layer is Layer.BOTTOM
+    assert by_ref["U1"].layer is Layer.TOP
+
+
+def test_back_side_parts_may_share_xy_with_front_side_parts():
+    """The regression, in the only terms that matter: board area.
+
+    Calling every footprint top-side makes the placer reserve a separate slot
+    for parts that never collided, so the board comes out far larger than the
+    design needs -- measured at +83% on this fixture.
+    """
+    from dataclasses import replace
+
+    from silkscreen.packing import Layer
+
+    board = load_board(FIXTURE)
+    flipped = {"C1", "C2", "C3", "C4"}
+    _flip_to_back(board, flipped)
+
+    infos = extract_parts(board)
+    wires = extract_wires(infos)
+    honest = to_parts(infos)
+    # What the boundary produced before it read the side at all.
+    all_top = [replace(p, layer=Layer.TOP) for p in honest]
+
+    area = lambda r: r.board_width_nm * r.board_height_nm  # noqa: E731
+    two_sided = pack(honest, wires, time_limit_s=20.0)
+    one_sided = pack(all_top, wires, time_limit_s=20.0)
+
+    assert area(two_sided) < area(one_sided), (
+        "two-sided board should pack tighter than the all-top assumption: "
+        f"{area(two_sided) / 1e12:.1f} vs {area(one_sided) / 1e12:.1f} mm^2"
+    )
+
+
+def test_placement_onto_the_other_side_is_refused_not_written():
+    """Flipping means mirroring every pad and graphic, which this writer does
+    not do. Writing the position anyway yields a board whose geometry silently
+    contradicts the solve it came from."""
+    from silkscreen.packing import Layer, Placement
+
+    board = load_board(FIXTURE)
+    infos = extract_parts(board)
+    target = infos[0]
+    assert target.side is Layer.TOP
+
+    moved_to_back = [
+        Placement(ref=target.ref, x_nm=0, y_nm=0, layer=Layer.BOTTOM)
+    ]
+    with pytest.raises(ValueError, match="not supported"):
+        apply_placements(board, infos, moved_to_back, 40_000_000)

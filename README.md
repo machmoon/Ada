@@ -100,7 +100,11 @@ Every stage is a real KiCad file you can open and inspect on its own, so you can
 where a design went wrong instead of only seeing the last artifact.
 
 ```
-722 tests collected — no network, no API key, no KiCad install
+<<<<<<< HEAD
+727 tests collected — no network, no API key, no KiCad install
+=======
+727 tests collected — no network, no API key, no KiCad install
+>>>>>>> origin/main
 ```
 
 **Next:** [full install guide and troubleshooting](docs/install.md) ·
@@ -160,7 +164,7 @@ Platform-by-platform commands are in [docs/install.md](docs/install.md#kicad-opt
 
 | Component | State |
 |---|---|
-| `kicad.py` — `.kicad_pcb` read/write | **Working** · 28 tests |
+| `kicad.py` — `.kicad_pcb` read/write | **Working** · 33 tests |
 | `packing.py` — CP-SAT placer | **Working** · 44 tests |
 | `netlist.py` — validated circuit IR | **Working** · 21 tests |
 | `schematic.py` — `.kicad_sch` + `.kicad_pro` emission | **Working** · 22 tests · KiCad ERC clean |
@@ -374,7 +378,11 @@ treats the board file as the interface.
 | Requires KiCad running | Yes | **No** |
 | Headless / CI | Hard | **Native** |
 | Platform lock | KiCad's plugin loader | **None — pure Python** |
-| Testable without KiCad | No | **Yes, all 722 tests** |
+<<<<<<< HEAD
+| Testable without KiCad | No | **Yes, all 727 tests** |
+=======
+| Testable without KiCad | No | **Yes, all 727 tests** |
+>>>>>>> origin/main
 
 ### What it reads
 
@@ -452,8 +460,8 @@ motor-driver fixture in `engine/tests/fixtures/`:
 ```
 11 footprints, 6 nets
 status     : feasible
-board size : 19.60 x 15.05 mm  (295.0 mm²)
-HPWL       : 52.4 mm
+board size : 18.25 x 18.00 mm  (328.5 mm²)
+HPWL       : 53.0 mm
 placed 11/11 -> placed.kicad_pcb  (~43.9 kB, reparses clean)
 ```
 
@@ -721,7 +729,11 @@ engine/
       pipeline.py   prompt -> PCB
       adk/          ADK dynamic workflow over the same stage bodies
     audit/        optional visual review of a finished board
-  tests/          722 tests — no network, no API keys, no KiCad
+<<<<<<< HEAD
+  tests/          727 tests — no network, no API keys, no KiCad
+=======
+  tests/          727 tests — no network, no API keys, no KiCad
+>>>>>>> origin/main
     fixtures/     ref.kicad_pcb -- 11-footprint board fixture
 scripts/
   demo.py         end-to-end: read -> place -> write -> verify
@@ -809,7 +821,11 @@ docker build .                                      # the `docker` job
 
 ### Expected output
 
-**1. Test suite** — 722 tests (live-model and local-simulator cases skip when
+<<<<<<< HEAD
+**1. Test suite** — 727 tests (live-model and local-simulator cases skip when
+=======
+**1. Test suite** — 727 tests (live-model and local-simulator cases skip when
+>>>>>>> origin/main
 their optional dependency is unavailable):
 
 ```
@@ -855,7 +871,7 @@ All checks passed!
 **3. Doc drift** — re-counts the suite and checks every figure quoted in the docs:
 
 ```
-docs ok: 20 claim(s) across 2 files match a suite of 703
+docs ok: 20 claim(s) across 2 files match a suite of 706
 ```
 
 **4. End-to-end demo** — reads the 11-footprint fixture board, places it, writes a
@@ -865,15 +881,15 @@ real `.kicad_pcb`, and re-parses it to prove the round-trip:
 3. Solve (OR-Tools CP-SAT)
 --------------------------------------------------------------
   status     : feasible
-  board size : 19.60 x 15.05 mm  (295.0 mm^2)
-  HPWL       : 52.4 mm
+  board size : 18.25 x 18.00 mm  (328.5 mm^2)
+  HPWL       : 53.0 mm
   solve time : 20.00 s
   warning    : Time limit reached; solution is feasible but not proven
-               optimal (gap bound 669000 vs 1740000).
+               optimal (gap bound 696000 vs 1785000).
 
 4. Write a real .kicad_pcb
 --------------------------------------------------------------
-  placed 11/11 -> placed.kicad_pcb  (43,933 bytes)
+  placed 11/11 -> placed.kicad_pcb  (43,936 bytes)
 
 5. Prove the round-trip
 --------------------------------------------------------------
