@@ -222,6 +222,19 @@ feature is tracked under feature 12.
  ----- Device models for ICs                          [OPEN]        use a trusted server-side model registry; never
                                                                      execute raw model programs supplied over MCP
  ----- Wire simulation into the agent loop            [OPEN]        future propose -> simulate -> repair feedback
+ 17  Datasheet -> machine-readable constraints         [PARTIAL]     engine/silkscreen/constraints/; the schema is
+                                                                     the compounding artifact (versioned, provenance
+                                                                     mandatory, needs_review gate, confirmed is
+                                                                     human-only)
+ ----- Versioned schema + provenance + trust gate     [DONE]        schema.py, extract.py; quotes verified against
+                                                                     pypdf page text, gate only ever adds reasons
+ ----- Board checker bridge into audit Findings       [DONE]        check.py; decoupling + strap pins; the rest is
+                                                                     returned as unchecked, never dropped
+ ----- Ground truth: 2-3 real datasheets, hand-checked [OPEN]       extraction accuracy must be measured against
+                                                                     the PDFs and reported honestly before the
+                                                                     schema is trusted at all
+ ----- Constraint library + pipeline integration      [IDEA]        checked-in verified sets per part; feed
+                                                                     review.py and the repair loop from them
 
 OPEN WORK, SUMMARISED
 ---------------------
