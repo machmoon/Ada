@@ -249,6 +249,46 @@ feature is tracked under feature 12.
  ----- Integrated placement view and JSON download    [DONE]        generated boards, receipts and session export
  ----- Synthetic behavior-cloning trajectory export  [DONE]        no trained checkpoint claimed
 
+ 18  Google Meet front end (transcript -> board)       [PARTIAL]     meetings/; Meet REST API v2, read after the
+                                                                     conference ends
+ ----- Meet REST API v2 client, stdlib only            [DONE]        meet.py; conference records, transcripts and
+                                                                     entries, paging capped at 50 pages
+ ----- No headless browser, no fake participant        [DONE]        deliberate: every open-source meeting bot joins
+                                                                     as a bot; this reads the finished transcript
+ ----- Transport Protocol seam, offline tests          [DONE]        the one HTTP GET is behind a protocol, the same
+                                                                     seam as Model/ScriptedModel
+ ----- Config validated at construction                [DONE]        config.py: MEET_ACCESS_TOKEN, MEET_SPACES,
+                                                                     MEET_API_BASE, MEET_MAX_AGE_HOURS,
+                                                                     MEET_MAX_RUNS_PER_POLL; https api_base enforced
+ ----- Runner: transcript -> requests -> board         [DONE]        runner.py; generate_pcb imported lazily, and one
+                                                                     failing request never sinks the others
+ ----- Quoted-evidence and confidence gates            [DONE]        a request not quotable from the transcript is
+                                                                     dropped; below the 0.6 floor it is recorded, not
+                                                                     built
+ ----- Skipped requests always reported                [DONE]        MeetingReport.considered is separate from runs, so
+                                                                     a skipped request cannot go invisible
+ ----- Nothing is ever ordered from a meeting          [DONE]        a board a meeting merely implied is exactly the
+                                                                     wrong thing to spend money on
+ ----- meetings/intent.py (extract_requests)           [DONE]        intent.py; the model's answer is validated like
+                                                                     any other, and a request it cannot quote from
+                                                                     the transcript is dropped
+ ----- Tests for the package                           [DONE]        meetings/tests; all offline, against a recorded
+                                                                     transport and ScriptedModel
+ ----- Run against a real Workspace / live Meet        [OPEN]        unverified live: no call has ever left the
+                                                                     machine; every test drives a recorded transport
+ ----- OAuth token acquisition and refresh             [NOT BUILT]   deliberate: the host supplies MEET_ACCESS_TOKEN
+                                                                     with the read-only scope. An expired token
+                                                                     surfaces as a 401 with no recovery path
+ ----- Durable seen-conference store                   [OPEN]        poll_once mutates a caller-owned in-memory set;
+                                                                     honest for one process, obviously wrong for two
+ ----- Poll loop, entry point or scheduler             [OPEN]        poll_once exists; nothing calls it on a schedule
+                                                                     and there is no console script
+ ----- Live listening during a meeting                 [NOT BUILT]   would need the Meet Media API, a different and
+                                                                     much larger piece of work
+ ----- Transcription must be on for any of this        [NOT BUILT]   not fixable here: Meet stores no transcript unless
+                                                                     the organiser enabled it. The run says so rather
+                                                                     than reporting an empty meeting
+
 OPEN WORK, SUMMARISED
 ---------------------
 Everything actionable reduces to: feature 2 in full (parallel reads, now the
@@ -271,6 +311,14 @@ Features 14 and 15 landed with PR #10 and changed what a run produces: a whole
 KiCad project rather than one placed board file. What is left of them is the
 web UI catching up (the SPA shows neither the schematic nor the tracks) and the
 router's two honest limits, rip-up-and-retry and fine-pitch packages.
+
+Feature 18, the Google Meet front end, is new: the REST client, the config, the
+intent extraction, the runner and its two gates are done and tested offline, but
+nothing calls poll_once on a schedule, the seen-conference set lives in memory,
+and there is no OAuth acquisition or refresh — the host supplies
+MEET_ACCESS_TOKEN. Most importantly it is unverified live: it has never run
+against a real Google Workspace account or the live Meet API, and it can only
+ever see meetings whose organiser enabled transcription, after they end.
 
 Worth knowing for anything touching the emitters: KiCad 8.0.9 is installed
 locally and `kicad-cli sch erc` / `pcb drc` are now the strongest check the
