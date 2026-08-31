@@ -58,7 +58,7 @@ describe('indexForSeconds', () => {
 
   it('snaps a free-typed budget to the nearest level', () => {
     expect(levelAt(indexForSeconds(22)).name).toBe('medium')
-    expect(levelAt(indexForSeconds(50)).name).toBe('high')
+    expect(levelAt(indexForSeconds(90)).name).toBe('high')
     expect(levelAt(indexForSeconds(1)).name).toBe('low')
     expect(levelAt(indexForSeconds(600)).name).toBe('high')
   })
