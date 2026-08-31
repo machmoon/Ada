@@ -100,7 +100,7 @@ Every stage is a real KiCad file you can open and inspect on its own, so you can
 where a design went wrong instead of only seeing the last artifact.
 
 ```
-706 tests collected — no network, no API key, no KiCad install
+782 tests collected — no network, no API key, no KiCad install
 ```
 
 **Next:** [full install guide and troubleshooting](docs/install.md) ·
@@ -166,11 +166,14 @@ Platform-by-platform commands are in [docs/install.md](docs/install.md#kicad-opt
 | `agents/adk/` — ADK dynamic-workflow driver for the pipeline | **Working** · 18 tests |
 | `agents/retrieval.py` — page-cited datasheet retrieval | **Working** · 15 tests |
 | `agents/resilience.py` — provider failover | **Working** · 15 tests |
-| `fab.py` — Gerber, Excellon, BOM, pick-and-place | **Working** · fab package export |
-| `order.py` — order options, manufacturability preflight | **Working** · blocks an unrouted board |
+| `fab.py` — Gerber, Excellon, BOM, pick-and-place, fab notes | **Working** · 34 tests |
+| `order.py` — order options, manufacturability preflight | **Working** · 30 tests · blocks an unrouted board |
+| `fabhouse.py` — OSH Park / JLCPCB / PCBWay limits and pricing | **Working** · 23 tests · one real quote, two honest refusals |
+| `gate.py` — the twelve-check pre-flight gate | **Working** · 24 tests |
+| `approval.py` — the prepared order, and the human it stops at | **Working** · 19 tests · no submission path, by design |
 | `mcp/` — MCP server over stdio | **Working** · 43 tests |
 | `audit/` — optional visual design review | **Working** · 52 tests |
-| `service/` — Cloud Run + Firestore cache | **Working** · 108 tests · not deployed anywhere yet; no live URL |
+| `service/` — Cloud Run + Firestore cache | **Working** · 113 tests · not deployed anywhere yet; no live URL |
 | `frontend/` — Svelte review UI, served by the service | **Working** · persistent orchestrator chat, expandable model/tool traces, session JSON, review, schematic and board tabs |
 | Voice / talk input | Not built |
 | Overlay UI, guided cursor | Not built (mockups only) |
@@ -370,7 +373,7 @@ treats the board file as the interface.
 | Requires KiCad running | Yes | **No** |
 | Headless / CI | Hard | **Native** |
 | Platform lock | KiCad's plugin loader | **None — pure Python** |
-| Testable without KiCad | No | **Yes, all 706 tests** |
+| Testable without KiCad | No | **Yes, all 782 tests** |
 
 ### What it reads
 
@@ -615,6 +618,125 @@ mistaken for a clean board when it only means a rule never ran.
 
 ---
 
+## Ordering a board
+
+Everything above produces a design. This produces an *order* — and then
+refuses to place it.
+
+```bash
+silkscreen-order circuit.json --quantity 10 --out order/
+silkscreen-order circuit.json --service jlcpcb-2layer --assembly
+silkscreen-order --list-services
+python scripts/order_demo.py          # the whole flow, offline
+```
+
+Exit code is `0` on a GO and `2` on a NO-GO, so a script can branch on the
+verdict — and so the only thing an automated caller can do with a passing
+gate is notice that it passed.
+
+### The pre-flight gate
+
+Twelve checks stand between a placement and an order. They are drawn from
+subsystems that share no code, because a check written in terms of the code it
+checks inherits that code's blind spot:
+
+| # | Check | Answered by |
+|---:|---|---|
+| 1 | The circuit IR still validates | `netlist.py` |
+| 2 | Every net that needs copper has it | the router's own verdict |
+| 3 | The placement is a real, solved layout | CP-SAT's status |
+| 4 | The order options are coherent with the board | `order.py` |
+| 5 | Deterministic design rules, over the written file | `audit/rules.py` |
+| 6 | This house can actually build this board | `fabhouse.py` |
+| 7 | The package contains every file a fab expects | a reader in `gate.py` |
+| 8 | Every Gerber parses and defines what it draws with | a reader in `gate.py` |
+| 9 | Holes are drilled once each, in the right plating class | a reader in `gate.py` |
+| 10 | The BOM matches the board and can be sourced | a reader in `gate.py` |
+| 11 | The files describe the same board | a reader in `gate.py` |
+| 12 | The emitted `.kicad_pcb` reparses | `kiutils` |
+
+Two rules make the verdict mean something:
+
+- **A check that did not run is not a check that passed.** `SKIPPED` blocks
+  exactly as `FAIL` does, with no flag to downgrade it, and a test makes
+  `silkscreen.audit` unimportable to prove it.
+- **Every check carries its measurements**, on a pass as well as a failure. A
+  gate that says "passed" and shows nothing is asking to be trusted.
+
+Nothing short-circuits: being told the board is unrouted *and* that its BOM
+cannot be sourced is one round trip, not three.
+
+### The fab package
+
+```
+silkscreen-F_Cu.GTL  B_Cu.GBL      copper, both sides
+silkscreen-F_Mask.GTS  B_Mask.GBS  soldermask openings (positive)
+silkscreen-F_Paste.GTP  B_Paste.GBP stencil apertures, 1:1
+silkscreen-F_Silkscreen.GTO  .GBO  legend, 0.15 mm pen
+silkscreen-Edge_Cuts.GKO           board profile
+silkscreen-PTH.DRL                 plated holes
+silkscreen-NPTH.DRL                non-plated holes (present, empty)
+silkscreen-drill-report.txt        tool table
+silkscreen-BOM.csv  CPL.csv        materials, pick-and-place
+README-fab.txt                     the fab notes
+```
+
+Both drill programs always ship. Excellon has no per-hole plating field, so
+plating is carried by *which file a hole is in*: a via drilled unplated is an
+open circuit between the layers that passes every visual inspection.
+
+`README-fab.txt` answers, from the board rather than a template, the questions
+a CAM engineer would otherwise email — units, origin, axis direction, mask
+polarity, which drill file is plated, and what the package approximates. It
+also refuses to describe an unrouted board as ready, because a placed board and
+a routed one ship an identical file list.
+
+### The quote
+
+| House | Price | Basis |
+|---|---|---|
+| OSH Park 2 Layer Prototype | $5.00/sq in, 3 copies | **published rule**, computed exactly |
+| OSH Park 2 Layer Super Swift | $10.00/sq in, 3 copies | **published rule**, computed exactly |
+| JLCPCB 2 Layer | *none* | authenticated API only |
+| PCBWay 2 Layer | *none* | authenticated API only |
+
+OSH Park publishes a price *rule*, so a quote is arithmetic over the board's
+own routed outline — margin included, because that is the rectangle the fab
+cuts and bills. JLCPCB and PCBWay quote only through APIs that need a
+registered application's key and secret; this project creates no accounts at
+fabricators, so those houses return a complete order specification, a link to
+their own quote page, and **no numbers at all** — not zeroes, not estimates. A
+zero in a money field is indistinguishable from "free" at a glance.
+
+Their published *capability* limits are used, though, and they earn their
+keep: the router's 0.6/0.3 mm vias leave a 0.15 mm annular ring, which clears
+OSH Park's 5 mil minimum and fails JLCPCB's stated 0.18 mm. The same board is
+buildable at one house and not the other, and the gate says which.
+
+### Where this stops
+
+**Silkscreen prepares orders. It does not place them.**
+
+There is no submit path, no payment path, no stored credential, and no flag,
+argument or environment variable that changes that. `PreparedOrder` exposes no
+`submit`, `confirm`, `place` or `approve` — asserted by a test over its public
+surface, so a future edit that adds one goes red. The one function anybody
+would reach for, `fabhouse.submit_order`, exists solely to raise.
+
+The reasoning is in `fabhouse.SUBMISSION_BOUNDARY`, and it is not squeamishness
+about automation. The gate proves what it measures and says so; it cannot prove
+the circuit is the circuit the buyer meant. An agent that clears its own checks
+and then buys the board has converted every remaining class of design error — a
+wrong part value, a misread datasheet pin, a topology that validates and does
+not work — into money, silently and at machine speed. That is a categorically
+different failure from a misplaced footprint, and more checking does not make
+it the same one.
+
+So the last step is a person: the package, the evidence and the price, handed
+over.
+
+---
+
 ## The placer
 
 CP-SAT. Variables are each part's bottom-left corner on an integer grid;
@@ -704,6 +826,12 @@ engine/
     schematic.py  emit a .kicad_sch and the .kicad_pro that ties them
     routing.py    two-layer A* copper router
     kicad.py      read/modify an existing .kicad_pcb via kiutils
+    fab.py        Gerber, Excellon, BOM, pick-and-place, fab notes
+    order.py      order options, manufacturability preflight, packaging
+    fabhouse.py   real fabs: published limits, prices, and no submit path
+    gate.py       the twelve-check pre-flight gate and its evidence
+    approval.py   the prepared order a human reviews
+    ordercli.py   silkscreen-order
     ids.py        stable UUIDs, so two runs diff cleanly
     cli.py        python -m silkscreen "..."
     spice/        typed testbenches, deck building, simulators, measurements
@@ -717,11 +845,12 @@ engine/
       pipeline.py   prompt -> PCB
       adk/          ADK dynamic workflow over the same stage bodies
     audit/        optional visual review of a finished board
-  tests/          706 tests — no network, no API keys, no KiCad
+  tests/          782 tests — no network, no API keys, no KiCad
     fixtures/     ref.kicad_pcb -- 11-footprint board fixture
 scripts/
   demo.py         end-to-end: read -> place -> write -> verify
   simulate_demo.py closed-form RC checks through a real ngspice run
+  order_demo.py   place -> route -> gate -> quote -> stop
   check_docs.py   fails CI if a quoted test count goes stale
 frontend/
   src/
@@ -805,7 +934,7 @@ docker build .                                      # the `docker` job
 
 ### Expected output
 
-**1. Test suite** — 706 tests (live-model and local-simulator cases skip when
+**1. Test suite** — 782 tests (live-model and local-simulator cases skip when
 their optional dependency is unavailable):
 
 ```
@@ -819,14 +948,17 @@ its experimental JSON-schema function-declaration feature.
 | File | Tests | Covers |
 |---|---:|---|
 | `test_spice.py` | 99 | Deck construction, rawfile parsing, measurements, assertions, and closed-form ngspice checks |
-| `test_app.py` | 99 | Cloud Run HTTP surface, the NDJSON stream, and the served UI bundle, over a real socket |
+| `test_app.py` | 106 | Cloud Run HTTP surface, the NDJSON stream, and the served UI bundle, over a real socket |
 | `test_grounding.py` | 73 | Datasheet grounding — SSRF-guarded PDF fetch, page extraction, page-cache sharding, citation corroboration |
 | `test_audit.py` | 52 | Deterministic and model-assisted design review |
 | `test_packing.py` | 43 | CP-SAT model: no-overlap, clearance, edge pinning, rotation, symmetry breaking, keepouts, pinned parts, fallback, determinism |
 | `test_mcp.py` | 43 | MCP protocol and tools, including the bounded SPICE boundary |
 | `test_agents.py` | 34 | Datasheet extraction, proposal repair loop, review — against a scripted model |
 | `test_order.py` | 30 | Order options and manufacturability preflight |
-| `test_fab.py` | 29 | Gerber, drill, BOM, and pick-and-place export |
+| `test_fab.py` | 34 | Gerber, drill plating, BOM, pick-and-place, and fab notes |
+| `test_gate.py` | 24 | The pre-flight gate — every check, and attacks on each |
+| `test_fabhouse.py` | 23 | Fab capability limits, published-rule pricing, the submission refusal |
+| `test_approval.py` | 19 | The prepared order, its package, and the CLI |
 | `test_kicad.py` | 28 | Board read/write, coordinate conversion, round-trip |
 | `test_schematic.py` | 22 | Schematic generation and KiCad validation |
 | `test_netlist.py` | 21 | Circuit IR validation — every rejection rule |
@@ -840,7 +972,7 @@ its experimental JSON-schema function-declaration feature.
 | `test_models.py` | 22 | Gemini discovery, model/thinking selection, and request-pace policy |
 | `test_orchestrator.py` | 4 | Root clarification, tool dispatch, ADK thinking, and pre-call pacing hook |
 | `test_quota.py` | 5 | Shared request spacing, Auto behavior, and invalid pace rejection |
-| **Total** | **703** | |
+| **Total** | **782** | |
 
 **2. Lint:**
 
