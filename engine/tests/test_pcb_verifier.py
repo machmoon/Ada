@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import json
 import math
+import re
+import threading
 from dataclasses import dataclass, field
 from types import SimpleNamespace
 
@@ -53,6 +55,25 @@ class QueueModel:
     def generate(self, prompt: str, **kwargs) -> str:
         self.calls.append({"prompt": prompt, **kwargs})
         return self.responses.pop(0)
+
+
+@dataclass
+class ParallelLaneModel:
+    responses: dict[int, str]
+    width: int = 3
+    calls: list[int] = field(default_factory=list)
+
+    def __post_init__(self) -> None:
+        self.barrier = threading.Barrier(self.width)
+
+    def generate(self, prompt: str, **kwargs) -> str:
+        match = re.search(r"SPECULATIVE LANE (\d+)/(\d+)", prompt)
+        assert match is not None
+        lane, width = (int(value) for value in match.groups())
+        assert width == self.width
+        self.calls.append(lane)
+        self.barrier.wait(timeout=2)
+        return self.responses[lane]
 
 
 def test_demo_board_is_corrupted_and_repair_is_legal() -> None:
@@ -351,6 +372,17 @@ def test_non_finite_feedback_values_are_rejected() -> None:
         )
 
 
+def test_speculative_width_is_bounded() -> None:
+    with pytest.raises(ValueError, match="between 2 and 4"):
+        PlacementAgent(speculative_width=1)
+
+
+@pytest.mark.parametrize("value", [True, 3.0, "3"])
+def test_speculative_width_rejects_coerced_values(value: object) -> None:
+    with pytest.raises(ValueError, match="must be an integer"):
+        repair_request({"speculative_width": value})
+
+
 def test_scripted_agent_accepts_improving_move_and_ignores_hallucination() -> None:
     profile = CompanyProfile("simple", clearance=0.5, edge_margin=0.5)
     board = Board(
@@ -400,6 +432,52 @@ def test_hybrid_policy_uses_gemini_only_after_fast_policy_stalls() -> None:
     assert [step.proposer for step in run.steps] == ["tinker", "gemini-recovery"]
     assert run.steps[0].accepted == ()
     assert run.steps[1].accepted
+
+
+def test_hybrid_policy_runs_parallel_lanes_and_commits_best_candidate() -> None:
+    profile = CompanyProfile("simple", clearance=0.5, edge_margin=0.5)
+    board = Board(
+        20,
+        12,
+        (Component("U1", 2, 2, 5, 5), Component("C1", 4, 3, 3, 3)),
+    )
+    fast = ParallelLaneModel(
+        responses={
+            1: "PLACE C1 3 3",
+            2: "PLACE C1 12 3",
+            3: "PLACE C1 9 3",
+        }
+    )
+    recovery = QueueModel(responses=["PLACE C1 10 3"])
+
+    run = PlacementAgent(fast, fallback_model=recovery, max_turns=1).run(
+        board, profile, policy="hybrid"
+    )
+    result = run_to_dict(run)
+
+    assert run.completed
+    assert sorted(fast.calls) == [1, 2, 3]
+    assert recovery.calls == []
+    assert len(run.steps) == 1
+    assert run.steps[0].winner_lane == 3
+    assert run.board.component("C1").x == 9
+    assert result["steps"][0]["speculation"]["width"] == 3
+    assert result["steps"][0]["speculation"]["winner_lane"] == 3
+    assert result["steps"][0]["speculation"]["wall_ms"] > 0
+    assert len(result["steps"][0]["speculation"]["candidates"]) == 3
+
+    traces = build_failure_traces(
+        result,
+        model_id="Qwen/Qwen3.5-4B",
+        input_origin="demo-board",
+        now=lambda: 123.0,
+        id_factory=lambda: "lane-trace",
+    )
+    assert len(traces) == 1
+    assert traces[0]["candidate_lane"] == 1
+    assert traces[0]["chosen_source"] == "speculative-winner"
+    assert traces[0]["rejected_response"] == "PLACE C1 3 3"
+    assert traces[0]["chosen_response"] == "PLACE C1 9 3"
 
 
 def test_failed_policy_step_becomes_recovery_training_pair(tmp_path) -> None:
