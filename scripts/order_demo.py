@@ -1,11 +1,16 @@
-"""Order demo: design a board, route it, and see whether it may be ordered.
+"""Order demo: design a board, prove it, price it, and stop.
 
     python scripts/order_demo.py
 
-Runs with no network, no API key and no KiCad install. The point of the demo
-is the gate in the middle: an unrouted board is refused, because copper that
-does not exist cannot carry a signal, and a board fabricated in that state
-arrives dead. Route it and the same gate passes.
+Runs with no network, no API key and no KiCad install. The whole point is the
+middle: twelve checks stand between a placement and an order, and an unrouted
+board fails the first one that matters -- copper that does not exist cannot
+carry a signal, and a board fabricated in that state arrives dead. Route it and
+the same gate passes, at which point the demo produces a real price and hands
+the decision to a person.
+
+Nothing here contacts a fabricator or spends money, and there is no flag that
+makes it. See silkscreen.fabhouse.SUBMISSION_BOUNDARY.
 """
 
 from __future__ import annotations
@@ -17,10 +22,11 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "engine"))
 
+from silkscreen.approval import prepare_order  # noqa: E402
 from silkscreen.board import build_board, route_board  # noqa: E402
-from silkscreen.fab import fab_files  # noqa: E402
+from silkscreen.fabhouse import SERVICES, check_capabilities, quote  # noqa: E402
 from silkscreen.netlist import parse_circuit_spec  # noqa: E402
-from silkscreen.order import OrderOptions, order_manifest, preflight  # noqa: E402
+from silkscreen.order import OrderOptions  # noqa: E402
 
 #: A 3.3 V LDO with input and output bulk capacitors -- the same circuit the
 #: live pipeline produces from a plain-language prompt. Note that Device.pins
@@ -40,16 +46,19 @@ CIRCUIT = {
 
 
 def rule(title: str) -> None:
-    print(f"\n{title}\n" + "-" * 62)
+    print(f"\n{title}\n" + "-" * 66)
 
 
-def show(pre) -> None:
-    for issue in pre.issues:
-        print(f"  [{issue.severity}] {issue.code}: {issue.title}")
+def show_gate(report) -> None:
+    for check in report.checks:
+        print(f"  [{str(check.status).upper():<7}] {check.title}")
+        if check.status.value in ("fail", "skipped", "warn"):
+            print(f"            {check.summary}")
 
 
 def main() -> int:
     spec = parse_circuit_spec(json.dumps(CIRCUIT))
+    options = OrderOptions(quantity=10)
 
     rule("1. Place the board")
     board = build_board(spec, time_limit_s=8.0)
@@ -59,12 +68,12 @@ def main() -> int:
         f"  [{board.solver_status}]"
     )
 
-    options = OrderOptions(quantity=10, assembly=True, panel_columns=2)
-
-    rule("2. Try to order it, unrouted")
-    before = preflight(board, spec=spec, options=options)
-    print(f"  orderable: {before.orderable}")
-    show(before)
+    rule("2. Try to order it, unrouted -- the gate refuses")
+    before = prepare_order(board, spec=spec, options=options)
+    print(f"  {before.gate.headline()}")
+    for check in before.gate.blocking:
+        print(f"  BLOCKING: {check.title}")
+        print(f"            {check.summary}")
 
     rule("3. Route it")
     route_board(board)
@@ -73,23 +82,39 @@ def main() -> int:
     for net, why in sorted(board.unrouted_nets.items()):
         print(f"  unrouted: {net} -- {why}")
 
-    rule("4. Try again, routed")
-    after = preflight(board, spec=spec, options=options)
-    print(f"  ORDERABLE: {after.orderable}")
-    show(after)
+    rule("4. The pre-flight gate, in full")
+    order = prepare_order(board, spec=spec, options=options)
+    show_gate(order.gate)
+    print(f"\n  {order.gate.headline()}")
 
-    rule("5. The fab package")
-    files = fab_files(board)
-    for layer in files:
-        print(f"  {layer.filename:32s} {len(layer.content):6d} bytes")
-    manifest = order_manifest(board, options, after)
+    rule("5. The same board, priced at every house we know")
+    for service in SERVICES:
+        priced = quote(board, options, service=service)
+        blockers = [
+            issue
+            for issue in check_capabilities(board, service, options=options)
+            if issue.severity.value == "blocker"
+        ]
+        verdict = "cannot build" if blockers else "can build"
+        print(f"  {service.house + ' ' + service.service:<34} "
+              f"{priced.total_text():>14}  {verdict}")
+        for issue in blockers:
+            print(f"      blocked: {issue.title}")
+
+    rule("6. The fab package")
+    for layer in order.files:
+        print(f"  {layer.filename:<32} {len(layer.content):>7} bytes")
+
+    rule("7. Where this stops")
+    print(f"  ready for a human to review: {order.ready_for_human_review}")
+    print(f"  human approval required:     {order.requires_human_approval}")
+    print(f"  price to beat:               {order.quote.total_text()}")
+    print(f"  upload it yourself at:       {order.service.quote_url}")
     print(
-        f"\n  {options.quantity} boards, assembly={options.assembly},"
-        f" {manifest['board']['boards_per_panel']} per panel"
+        "\n  Silkscreen prepares orders. It does not place them, and there is\n"
+        "  no flag, argument or configuration that changes that."
     )
-    print(f"  orderable: {manifest['orderable']}")
-    print(f"  human approval required: {manifest['requires_human_approval']}")
-    return 0
+    return 0 if order.gate.go else 2
 
 
 if __name__ == "__main__":
