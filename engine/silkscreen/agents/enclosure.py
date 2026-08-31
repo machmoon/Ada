@@ -32,7 +32,7 @@ from ..enclosure.errors import (
     WallError,
 )
 from ..enclosure.ir import EnclosureSpec, parse_enclosure_spec
-from ..enclosure.verify import verify_fit
+from ..enclosure.verify import FitReport, verify_fit
 from ..units import mm, to_mm
 from .model import Model
 
@@ -141,18 +141,24 @@ def propose_enclosure(
     style_hint: str = "",
     max_repairs: int = 3,
     on_event: Callable[[dict[str, Any]], None] | None = None,
-) -> tuple[EnclosureSpec, int]:
+) -> tuple[EnclosureSpec, FitReport, int]:
     """Ask for an enclosure spec and repair it until it validates AND fits.
 
-    Returns ``(spec, repair_rounds)`` -- how many corrections the model needed
-    is a genuinely useful quality signal, mirrored into the ``stage.done``
-    event.
+    Returns ``(spec, fit, repair_rounds)``. ``fit`` is the
+    :class:`~silkscreen.enclosure.verify.FitReport` the accepting round
+    produced -- returned rather than discarded so callers never re-verify
+    what the loop already verified. ``repair_rounds`` -- how many corrections
+    the model needed -- is a genuinely useful quality signal, mirrored into
+    the ``stage.done`` event.
 
     Each round runs :func:`parse_enclosure_spec` and then
     :func:`verify_fit(strict=True) <silkscreen.enclosure.verify.verify_fit>`,
-    so fit failures and fit *warnings* feed the repair loop rather than
-    shipping silently. ``on_event`` receives one ``enclosure.round`` event per
-    rejected round.
+    so fit failures and spec-fixable fit *warnings* feed the repair loop
+    rather than shipping silently. Warnings the model cannot fix -- a
+    defaulted part height is measured from the board, not chosen by the spec
+    -- stay on the returned report's ``warnings`` instead of burning repair
+    rounds. ``on_event`` receives one ``enclosure.round`` event per rejected
+    round.
 
     Raises:
         EnclosureProposalError: the model answered, but never with a spec that
@@ -179,13 +185,13 @@ def propose_enclosure(
             errors = list(exc.errors)
         else:
             try:
-                verify_fit(spec, envelope, strict=True)
+                fit = verify_fit(spec, envelope, strict=True)
             except EnclosureValidationError as exc:
                 errors = list(exc.errors)
             except (CavityFitError, CutoutError, WallError) as exc:
                 errors = [str(exc)]
             else:
-                return spec, round_no
+                return spec, fit, round_no
 
         last_errors = errors
         if on_event is not None:

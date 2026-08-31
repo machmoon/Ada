@@ -42,6 +42,10 @@ STANDOFF_DIAMETER_NM: int = mm(5.0)
 STANDOFF_INSET_NM: int = mm(4.0)
 #: Screw lid pilot-hole diameter (self-tapping M2.5).
 SCREW_HOLE_DIAMETER_NM: int = mm(2.2)
+#: Raised height of the embossed lid label -- a few printable layers.
+LABEL_EMBOSS_NM: int = mm(0.6)
+#: Character size of the embossed lid label.
+LABEL_TEXT_SIZE_NM: int = mm(6.0)
 #: Overshoot used so difference() faces never coincide exactly.
 EPS_NM: int = mm(0.01)
 
@@ -197,7 +201,9 @@ def _side_cutout_lines(spec, envelope, d) -> list[str]:
     return lines
 
 
-def _top_cutout_lines(spec, envelope, d) -> list[str]:
+def _top_cutout_lines(spec, envelope, d, through_nm: int) -> list[str]:
+    """Top-face openings, cut ``through_nm`` deep (the whole lid solid --
+    including a friction lip -- so an opening is never capped)."""
     lines: list[str] = []
     for cutout in spec.cutouts:
         if cutout.face != "top":
@@ -212,12 +218,14 @@ def _top_cutout_lines(spec, envelope, d) -> list[str]:
         )
         lines.append(
             f"            cube([{_f(x_hi - x_lo)}, {_f(y_hi - y_lo)}, "
-            f"{_f(d['lid_z'] + 2 * EPS_NM)}]);"
+            f"{_f(through_nm + 2 * EPS_NM)}]);"
         )
     return lines
 
 
-def _vent_lines(d: dict[str, int]) -> list[str]:
+def _vent_lines(d: dict[str, int], through_nm: int) -> list[str]:
+    """Vent slot solids, cut ``through_nm`` deep for the same reason as
+    :func:`_top_cutout_lines`: a slot that stops short of the lip is sealed."""
     slot_w = mm(1.5)
     slot_len = (d["cavity_y"] * 3) // 5
     y0 = (d["outer_y"] - slot_len) // 2
@@ -228,7 +236,7 @@ def _vent_lines(d: dict[str, int]) -> list[str]:
         x = d["wall"] + pitch * (i + 1) - slot_w // 2
         lines.append(
             f"        translate([{_f(x)}, {_f(y0)}, {_f(-EPS_NM)}]) "
-            f"cube([{_f(slot_w)}, {_f(slot_len)}, {_f(d['lid_z'] + 2 * EPS_NM)}]);"
+            f"cube([{_f(slot_w)}, {_f(slot_len)}, {_f(through_nm + 2 * EPS_NM)}]);"
         )
     return lines
 
@@ -284,18 +292,40 @@ def emit_scad(spec: EnclosureSpec, envelope: BoardEnvelope) -> str:
         lines.append("    standoffs();")
     lines += ["}", ""]
 
-    # Lid.
+    # Lid. The whole lid solid (plate plus any friction lip) is built first,
+    # then every opening is subtracted from it in one difference() -- a slot
+    # or window cut only through the plate would be capped by the lip.
     lines.append("module lid() {")
     if spec.lid == "none":
         lines.append("    // lid style \"none\": nothing to print")
     else:
-        lines += [
-            "    difference() {",
-            f"        _rbox(outer_x, outer_y, lid_z, {_f(spec.corner_radius_nm)});",
-        ]
-        lines += _top_cutout_lines(spec, envelope, d)
+        # Depth every top-face subtraction must reach to pierce the lid.
+        through_nm = d["lid_z"]
+        lines.append("    difference() {")
+        if spec.lid == "friction":
+            through_nm += LIP_HEIGHT_NM
+            lip_x = d["cavity_x"] - 2 * LIP_CLEARANCE_NM
+            lip_y = d["cavity_y"] - 2 * LIP_CLEARANCE_NM
+            off = spec.wall_nm + LIP_CLEARANCE_NM
+            lines += [
+                "        // plate + friction lip unioned before any opening",
+                "        // is subtracted, so vents and windows stay open",
+                "        union() {",
+                f"            _rbox(outer_x, outer_y, lid_z, "
+                f"{_f(spec.corner_radius_nm)});",
+                f"            translate([{_f(off)}, {_f(off)}, lid_z])",
+                f"                cube([{_f(lip_x)}, {_f(lip_y)}, "
+                f"{_f(LIP_HEIGHT_NM)}]);",
+                "        }",
+            ]
+        else:
+            lines.append(
+                f"        _rbox(outer_x, outer_y, lid_z, "
+                f"{_f(spec.corner_radius_nm)});"
+            )
+        lines += _top_cutout_lines(spec, envelope, d, through_nm)
         if spec.vents:
-            lines += _vent_lines(d)
+            lines += _vent_lines(d, through_nm)
         if spec.lid == "screw":
             for cx, cy in centres:
                 lines.append(
@@ -304,25 +334,40 @@ def emit_scad(spec: EnclosureSpec, envelope: BoardEnvelope) -> str:
                     f"d = {_f(SCREW_HOLE_DIAMETER_NM)});"
                 )
         lines.append("    }")
-        if spec.lid == "friction":
-            lip_x = d["cavity_x"] - 2 * LIP_CLEARANCE_NM
-            lip_y = d["cavity_y"] - 2 * LIP_CLEARANCE_NM
-            off = spec.wall_nm + LIP_CLEARANCE_NM
-            lines += [
-                "    // friction lip, printed on top of the plate",
-                f"    translate([{_f(off)}, {_f(off)}, lid_z])",
-                f"        cube([{_f(lip_x)}, {_f(lip_y)}, {_f(LIP_HEIGHT_NM)}]);",
-            ]
         if spec.label:
-            lines += [
-                f"    translate([{_f(d['outer_x'] // 2)}, "
-                f"{_f(d['outer_y'] // 2)}, {_f(-EPS_NM)}])",
-                "        // label is engraved by the printer's slicer as a"
-                " raised outline",
-                f"        linear_extrude({_f(EPS_NM * 2)}) "
-                f"text(\"{_escape(spec.label)}\", size = 6, "
-                "halign = \"center\", valign = \"center\");",
-            ]
+            cx = d["outer_x"] // 2
+            cy = d["outer_y"] // 2
+            text_call = (
+                f"text(\"{_escape(spec.label)}\", "
+                f"size = {_f(LABEL_TEXT_SIZE_NM)}, "
+                "halign = \"center\", valign = \"center\");"
+            )
+            if spec.lid == "friction":
+                # A friction lid assembles flipped -- the lip descends into
+                # the cavity -- so the case's visible outer face is the
+                # model's z=0 plane. The emboss is raised below z=0 and
+                # mirrored in X so it reads correctly from outside the
+                # assembled case (the lid prints label-side down).
+                lines += [
+                    "    // label: raised emboss on the z=0 face (the outer",
+                    "    // face once the lid is flipped lip-down), mirrored",
+                    "    // so it reads correctly on the assembled case",
+                    f"    translate([{_f(cx)}, {_f(cy)}, "
+                    f"{_f(-LABEL_EMBOSS_NM)}])",
+                    "        mirror([1, 0, 0])",
+                    f"            linear_extrude({_f(LABEL_EMBOSS_NM)}) "
+                    + text_call,
+                ]
+            else:
+                # A screw lid assembles as printed (pilot holes down onto the
+                # bosses), so its outer face is the z=lid_z plane; the emboss
+                # is raised on top of it.
+                lines += [
+                    "    // label: raised emboss on the z=lid_z outer face",
+                    f"    translate([{_f(cx)}, {_f(cy)}, lid_z])",
+                    f"        linear_extrude({_f(LABEL_EMBOSS_NM)}) "
+                    + text_call,
+                ]
     lines += ["}", ""]
 
     lines.append("base();")

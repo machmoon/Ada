@@ -21,7 +21,7 @@ new required binaries.
 | 4 | Pure-Python `.scad` emission. The C++ source at `vendor/openscad` is never built, linked, or imported — it is a read-only reference, gitignored, disclosed in DEVPOST. The only interaction with OpenSCAD is exec-ing a user-installed binary, same arms-length boundary as ngspice. | GPL-2.0 stays outside the codebase; MIT project stays MIT. |
 | 5 | Enclosure failure never fails the run: exhausted repair budget → `enclosure: null` + a visible `enclosure.failed` event, board still delivered. The repair rounds themselves are visible events (Product's fix-it loop), the degradation is honest (Infra's requirement). | The board is still the product. |
 | 6 | Naming: code says `enclosure` everywhere (package, stage, events, response key, artifact `enclosure.scad`); user-facing surfaces say **Case** (SPA tab label, CLI `--case`). | One code vocabulary, one product vocabulary; no half-renamed modules. |
-| 7 | CLI v1 is `--case` / `--case-style` / `--case-render` on the existing generate command. The standalone `silkscreen case board.kicad_pcb` subcommand and `--no-model` deterministic default case are deferred to v2. | Keeps workstream D small and the v1 surface reviewable. |
+| 7 | CLI v1 is `--case` / `--case-style` / `--case-render` on the existing generate command. The standalone `silkscreen case board.kicad_pcb` subcommand and `--no-model` deterministic default case are deferred to v2. **Amended during implementation:** the standalone subcommand shipped in v1 after all — `silkscreen case <board> [-o] [--intent] [--stl] [--no-model]` — and `--case-render` was never built; the generate command carries only `--case` / `--case-style`, with local STL rendering living on the subcommand's `--stl`. | Keeps workstream D small and the v1 surface reviewable. |
 | 8 | CI: `apt-get install openscad` on the **Linux job only**, mirroring ngspice; macOS brew skipped (slow/flaky), Windows skips. Python/web/docker jobs otherwise unchanged. Gated tests skip cleanly everywhere else. | Same convention as every other external verifier. |
 | 9 | Heights: `.kicad_pcb` carries no Z, so component heights come from a table keyed by footprint class, with an explicit default that lands as a **warning in the fit report**, never a silent guess. | No quiet zeros. |
 | 10 | Coordinate frames: `BoardEnvelope` stays in the KiCad Y-down frame — **no new flip**. The one place enclosure geometry changes frame is inside `emit.py`, which maps the envelope into OpenSCAD's frame. | The project has exactly one Y flip (placer boundary) and this feature does not add a second wandering one. |
@@ -41,7 +41,8 @@ offline tests throughout.
 **Out (v1):** server-side rendering of any kind; in-browser 3D viewer;
 arbitrary 3D modeling; real connector-geometry cutouts (the footprint set has no
 connectors — cutouts are rectangular openings sized from courtyard extents);
-print-readiness claims; standalone `case` subcommand; conversational revision of
+print-readiness claims; ~~standalone `case` subcommand~~ (amended during
+implementation: it shipped in v1 — see decision 7); conversational revision of
 an existing case (the chat root can simply re-run generation).
 
 ## Layout
@@ -162,7 +163,10 @@ Deterministic (same inputs → byte-identical output). nm→mm **only** inside t
 formatter via `units.to_mm` with fixed precision. Emits named parameters at the
 top (`board_x`, `board_y`, `wall`, `clearance`, `cavity_z`, …) and named modules
 `base()`, `lid()`, `standoffs()`. This is the one place geometry crosses into
-OpenSCAD's frame. Structural invariants (tier-1 tests read these back out of
+OpenSCAD's frame: `emit.py` owns the KiCad-Y-down → SCAD map (`_sy`), a
+distinct boundary from the solver↔KiCad flip that `kicad.py` owns — each of
+the two "one flip" statements is scoped to its own boundary, and neither
+crossing may happen anywhere else. Structural invariants (tier-1 tests read these back out of
 the text): `cavity_x == board_x + 2*clearance`, `outer − cavity == 2*wall` per
 axis, each cutout opening covers its connector's courtyard interval + margin.
 
@@ -183,6 +187,11 @@ Every failure raises a specific error (`CavityFitError` with signed margins,
 `CutoutError` naming an absent ref — hard error per the `edge_refs` convention —
 `WallError`); nothing returns a quiet zero. `strict=True` promotes warnings to
 errors (the `Testbench(strict=True)` precedent) and is what the agent loop uses.
+**Amended during implementation:** `strict=True` promotes only the
+*spec-fixable* warnings (e.g. a tight clearance). Warnings the model cannot fix
+by editing the spec — a defaulted component height, an empty board — are never
+promoted and always ride `FitReport.warnings`, or the repair loop would spin
+forever on a board fact no spec change can alter.
 
 ### render.py (owner C — gated CLI half, never on the service path)
 
@@ -212,6 +221,11 @@ def propose_enclosure(model: Model, envelope: BoardEnvelope,
                       on_event: Callable[[dict], None] | None = None,
                       ) -> tuple[EnclosureSpec, int]   # (spec, repair_rounds)
 ```
+
+**Amended during implementation:** the return type is
+`tuple[EnclosureSpec, FitReport, int]` — `(spec, fit, repair_rounds)`. The
+accepting round's `FitReport` is returned rather than discarded so callers
+never re-verify what the loop already verified.
 
 Mirrors `propose.py`: deterministic facts injected into the prompt (outline
 size, part rects, per-zone max height, edge-adjacent refs with their faces);
@@ -285,6 +299,20 @@ other field. The `.scad` rides the JSON exactly as `kicad_pcb` does.
                        the executable when it is absent (RenderUnavailable)
 ```
 
+**Amended during implementation:** `--case-render` was never built. The
+generate command carries `--case` / `--case-style` only, and rendering moved
+to the standalone subcommand that shipped in v1 (see decision 7):
+
+```
+silkscreen case <board.kicad_pcb>
+  -o PATH        where to write enclosure.scad
+  --intent TEXT  natural-language case intent
+  --stl          additionally render enclosure.stl via the local openscad
+                 binary; exits with a clear message naming the executable when
+                 it is absent (RenderUnavailable)
+  --no-model     emit the deterministic default-spec case with no API call
+```
+
 ## Workstreams
 
 Interfaces above are the build-against contract; C (and D, E) start immediately
@@ -305,6 +333,10 @@ input reports *all* errors in one exception; fenced-JSON tolerance.
 **Owns:** `enclosure/board_shape.py`, `enclosure/heights.py`, `enclosure/emit.py`,
 `enclosure/verify.py`, `engine/tests/test_enclosure_geometry.py`,
 `engine/tests/test_enclosure_emit.py`, `engine/tests/test_enclosure_verify.py`.
+**Amended during implementation:** the emitter and verifier tests landed
+together as `engine/tests/test_scad_emit.py` (there is no
+`test_enclosure_emit.py` or `test_enclosure_verify.py`); geometry tests are in
+`engine/tests/test_enclosure_geometry.py` as planned.
 Geometry tests compute expected bboxes with inline math over the raw
 `ref.kicad_pcb` fixture, never by calling the extractor (the `test_kicad.py`
 oracle discipline), and include a rotated-footprint case (the issue-9 bug
@@ -312,7 +344,10 @@ class). Emitter tests are tier-1 always-on: an independent `.scad` reader in
 the test file (regex/token extraction of numeric literals, importing no emitter
 constants) asserts the structural invariants listed under emit.py, plus the
 round-trip property (emitted `.scad` → tier-1 reparse → dims equal the IR's).
-Fully offline; B ships no gated tests.
+Fully offline; B ships no gated tests. **Amended during implementation:**
+`test_scad_emit.py` does carry gated render tests alongside its offline tier
+(see the workstream C amendment — `test_enclosure_render.py` was never
+created).
 
 ### C — Agent stage + repair loop + render gate + pipeline wiring
 **Owns:** `engine/silkscreen/agents/enclosure.py`, `enclosure/render.py`,
@@ -326,7 +361,10 @@ prompt contains the batched validation errors and that `enclosure.failed`
 degrades without killing the run. `test_enclosure_render.py` holds **all**
 gated tests (tier-2): render an STL, parse its bounding box with inline
 vertex min/max, assert the cavity contains the board box and the mesh is
-non-empty. Until A/B land, C develops against local stubs matching the frozen
+non-empty. **Amended during implementation:** there is no
+`test_enclosure_render.py` — the gated (`needs_openscad`) tests live in
+`engine/tests/test_scad_emit.py` and `engine/tests/test_enclosure_agent.py`
+instead, gating exactly as planned. Until A/B land, C develops against local stubs matching the frozen
 signatures and swaps to real imports at integration — the stubs never merge.
 
 ### D — Service + CLI surface
@@ -340,7 +378,10 @@ convention) and assert the additive key, the `null` degradation, and that the
 one-shot response never grows raw model output. CLI tests cover `--case`
 writing `enclosure.scad` and `--case-render` failing with the executable's
 name when openscad is absent (ungated: assert the message, mocking
-`find_openscad` to return `None`).
+`find_openscad` to return `None`). **Amended during implementation:** the CLI
+tests landed as `engine/tests/test_cli_case.py` (not
+`test_enclosure_cli.py`), and the absent-binary case exercises the shipped
+`case` subcommand's `--stl` flag rather than `--case-render` (see decision 7).
 
 ### E — Frontend Case tab + chores
 **Owns:** `frontend/src/lib/enclosure.js`, `frontend/src/lib/enclosure.test.js`,

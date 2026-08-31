@@ -26,7 +26,7 @@ from ..enclosure.board_shape import board_envelope
 from ..enclosure.emit import emit_scad
 from ..enclosure.errors import EnclosureError
 from ..enclosure.ir import EnclosureSpec
-from ..enclosure.verify import FitReport, verify_fit
+from ..enclosure.verify import FitReport
 from ..netlist import CircuitSpec
 from ..placement.adapter import GeneratedPlacement, repair_generated_board
 from ..placement.agent import TextModel
@@ -364,6 +364,10 @@ class EnclosureResult(NamedTuple):
     fit: FitReport
     repair_rounds: int
     rendered: bool  # always False on the service path in v1
+    #: Where ``enclosure.scad`` was written, or None when nothing was (no
+    #: ``output``, or ``emit_stages`` off). Additive with a default so every
+    #: existing consumer of the frozen five-field shape keeps working.
+    scad_path: Path | None = None
 
 
 def enclosure_stage(
@@ -373,6 +377,7 @@ def enclosure_stage(
     enclosure: bool,
     enclosure_style: str,
     output: str | Path | None,
+    emit_stages: bool,
     emit: Emit,
     enter: Enter,
 ) -> EnclosureResult | None:
@@ -389,42 +394,45 @@ def enclosure_stage(
     caller receives, not from in-memory state the file might not carry.
 
     ``enclosure.scad`` is written beside the project only when ``output`` is
-    set (the ``schematic_stage`` filesystem rule); the text itself is always
-    returned so the service can ship it without touching a disk.
+    set and ``emit_stages`` is on (the ``schematic_stage`` filesystem rule --
+    ``--board-only`` promises only the routed board); the text itself is
+    always returned so the service can ship it without touching a disk.
 
     Failure never fails the run (plan decision 5): any
     :class:`~silkscreen.enclosure.errors.EnclosureError` -- an exhausted
-    repair budget included -- is caught here, surfaced as a visible
-    ``enclosure.failed`` event, and answered with ``None``; the board is
-    still the product. Everything else, callback exceptions and
-    :class:`~silkscreen.agents.model.ModelError` included, propagates as it
-    does from every other stage.
+    repair budget included -- as well as a ``ValueError`` from measuring the
+    board and an ``OSError`` from writing the ``.scad`` is caught here,
+    surfaced as a visible ``enclosure.failed`` event, and answered with
+    ``None``; the board is still the product. Everything else, callback
+    exceptions and :class:`~silkscreen.agents.model.ModelError` included,
+    propagates as it does from every other stage.
     """
     if not enclosure:
         return None
     enter("enclosure")
     emit({"event": "stage.start", "stage": "enclosure"})
+    scad_path: Path | None = None
     try:
         with tempfile.TemporaryDirectory(prefix="silkscreen-enclosure-") as tmp:
             measured = write_board(board, Path(tmp) / "board.kicad_pcb")
             envelope = board_envelope(measured)
-        spec, repair_rounds = propose_enclosure(
+        # The loop verified every accepted spec with strict=True; the report
+        # it returns is the receipt, board-derived warnings included, so the
+        # stage never re-verifies what was already verified.
+        spec, fit, repair_rounds = propose_enclosure(
             agent_model,
             envelope,
             style_hint=enclosure_style,
             on_event=emit,
         )
-        # The receipt, non-strict: the loop already held the spec to
-        # strict=True, so anything left here is a warning worth showing.
-        fit = verify_fit(spec, envelope)
         scad = emit_scad(spec, envelope)
-    except EnclosureError as exc:
+        if output is not None and emit_stages:
+            scad_path = Path(output).with_name("enclosure.scad")
+            scad_path.parent.mkdir(parents=True, exist_ok=True)
+            scad_path.write_text(scad, encoding="utf-8")
+    except (EnclosureError, ValueError, OSError) as exc:
         emit({"event": "enclosure.failed", "error": str(exc)[:160]})
         return None
-
-    if output is not None:
-        out_path = Path(output)
-        out_path.with_name("enclosure.scad").write_text(scad, encoding="utf-8")
 
     emit(
         {
@@ -443,6 +451,7 @@ def enclosure_stage(
         fit=fit,
         repair_rounds=repair_rounds,
         rendered=False,
+        scad_path=scad_path,
     )
 
 

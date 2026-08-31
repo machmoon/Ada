@@ -40,6 +40,7 @@ from silkscreen.enclosure.errors import (  # noqa: E402
 )
 from silkscreen.enclosure.ir import Cutout, EnclosureSpec  # noqa: E402
 from silkscreen.enclosure.verify import verify_fit  # noqa: E402
+from silkscreen.packing import Layer  # noqa: E402
 
 HAS_OPENSCAD = shutil.which("openscad") is not None
 needs_openscad = pytest.mark.skipif(
@@ -109,13 +110,16 @@ def make_envelope(*, extra_parts=(), u1_default=False) -> BoardEnvelope:
         (_nm(BOARD["x1"]), _nm(BOARD["y1"])),
         (_nm(BOARD["x0"]), _nm(BOARD["y1"])),
     )
+    top = [p.height_nm for p in parts if p.side is Layer.TOP]
+    bottom = [p.height_nm for p in parts if p.side is Layer.BOTTOM]
     return BoardEnvelope(
         outline_nm=corners,
         x_min_nm=_nm(BOARD["x0"]), y_min_nm=_nm(BOARD["y0"]),
         x_max_nm=_nm(BOARD["x1"]), y_max_nm=_nm(BOARD["y1"]),
         thickness_nm=_nm(BOARD["thickness"]),
         parts=parts,
-        max_height_nm=max(p.height_nm for p in parts),
+        max_height_nm=max(top, default=0),
+        max_height_bottom_nm=max(bottom, default=0),
     )
 
 
@@ -271,6 +275,129 @@ def test_label_text_is_escaped():
     assert 'text("rev \\"A\\" \\\\ test"' in scad
 
 
+# --------------------------------------------------- lid CSG: vents and label
+
+# Single-line "translate([...]) cube([...]);" -- the vent-slot form. The lip
+# and top cutouts are emitted across multiple lines, so this regex isolates
+# the vents.
+_ONE_LINE_CUBE = re.compile(
+    r"translate\(\[(-?\d+\.\d+), (-?\d+\.\d+), (-?\d+\.\d+)\]\) "
+    r"cube\(\[(-?\d+\.\d+), (-?\d+\.\d+), (-?\d+\.\d+)\]\);"
+)
+
+# The friction lip: "translate([x, y, lid_z])" followed by a cube line.
+_LIP = re.compile(
+    r"translate\(\[(-?\d+\.\d+), (-?\d+\.\d+), lid_z\]\)\s*\n\s*"
+    r"cube\(\[(-?\d+\.\d+), (-?\d+\.\d+), (-?\d+\.\d+)\]\);"
+)
+
+
+def _lid_module(scad: str) -> str:
+    start = scad.index("module lid() {")
+    return scad[start:scad.index("\nbase();", start)]
+
+
+def test_friction_vents_pierce_plate_and_lip():
+    scad = emit_scad(make_spec(vents=True, cutouts=()), make_envelope())
+    lid = _lid_module(scad)
+    # The plate and lip are unioned *inside* the difference, so the vent
+    # subtractions apply to both solids.
+    diff_at = lid.index("difference() {")
+    union_at = lid.index("union() {")
+    lip_match = _LIP.search(lid)
+    assert lip_match is not None, "friction lip cube not found"
+    assert diff_at < union_at < lip_match.start()
+    lip_h = float(lip_match.group(5))
+    # lid_z is the wall thickness; lip height is read from the file itself.
+    lid_z = WALL
+    vents = [m for m in _ONE_LINE_CUBE.finditer(lid)]
+    assert len(vents) == 5
+    for m in vents:
+        # Every vent is a subtrahend (after the union closes) and spans the
+        # whole lid solid: from below z=0 to above lid_z + lip.
+        assert m.start() > lip_match.end()
+        z0, dz = float(m.group(3)), float(m.group(6))
+        assert z0 < 0.0
+        assert z0 + dz > lid_z + lip_h
+    # Inline slot math from the raw literals: cavity_x = board_x + 2c = 42,
+    # pitch = 42/6 = 7, x_i = wall + 7(i+1) - slot_w/2 with slot_w = 1.5.
+    xs = sorted(float(m.group(1)) for m in vents)
+    for i, x in enumerate(xs):
+        assert x == pytest.approx(WALL + 7.0 * (i + 1) - 0.75, abs=1e-3)
+
+
+def test_screw_lid_vents_pierce_the_plate():
+    scad = emit_scad(
+        make_spec(lid="screw", standoffs=True, vents=True, cutouts=()),
+        make_envelope(),
+    )
+    lid = _lid_module(scad)
+    vents = [m for m in _ONE_LINE_CUBE.finditer(lid)]
+    assert len(vents) == 5
+    for m in vents:
+        z0, dz = float(m.group(3)), float(m.group(6))
+        assert z0 < 0.0 and z0 + dz > WALL  # lid_z == wall
+
+
+def test_friction_top_cutout_pierces_the_lip():
+    spec = make_spec(
+        cutouts=(Cutout(id="window", ref="U1", face="top", margin_nm=_nm(MARGIN)),)
+    )
+    scad = emit_scad(spec, make_envelope())
+    lid = _lid_module(scad)
+    lip_h = float(_LIP.search(lid).group(5))
+    # The cube emitted right after the window's comment must cut through
+    # plate + lip, not just the plate.
+    after = lid[lid.index("// cutout window"):]
+    depth = float(
+        re.search(r"cube\(\[.*?, .*?, (-?\d+\.\d+)\]\);", after).group(1)
+    )
+    assert depth > WALL + lip_h
+
+
+def test_label_is_a_raised_emboss_on_the_outer_face():
+    # Screw lid assembles as printed: outer face is z = lid_z, emboss on top.
+    scad = emit_scad(
+        make_spec(lid="screw", standoffs=True, label="KAL1"), make_envelope()
+    )
+    lid = _lid_module(scad)
+    m = re.search(
+        r"translate\(\[(-?\d+\.\d+), (-?\d+\.\d+), lid_z\]\)\s*\n\s*"
+        r"linear_extrude\((-?\d+\.\d+)\) text\(\"KAL1\", size = (-?\d+\.\d+)",
+        lid,
+    )
+    assert m is not None, "raised label on the lid_z face not found"
+    # Centred on the lid: outer = board + 2*clearance + 2*wall (inline math).
+    cx = (BOARD["x1"] - BOARD["x0"]) / 2 + CLEARANCE + WALL
+    cy = (BOARD["y1"] - BOARD["y0"]) / 2 + CLEARANCE + WALL
+    assert float(m.group(1)) == pytest.approx(cx, abs=1e-3)
+    assert float(m.group(2)) == pytest.approx(cy, abs=1e-3)
+    # A printable emboss, not a hairline buried in the plate.
+    assert float(m.group(3)) >= 0.2
+    assert float(m.group(4)) > 0.0
+    # The label is unioned after the difference closes -- raised, not a hole.
+    assert lid.rindex("text(") > lid.rindex("    }")
+
+
+def test_friction_label_sits_on_the_flipped_outer_face_mirrored():
+    # A friction lid assembles lip-down, so the model's z=0 plane is the
+    # case's visible face: the emboss extrudes below z=0 and is mirrored.
+    scad = emit_scad(make_spec(label="KAL2"), make_envelope())
+    lid = _lid_module(scad)
+    m = re.search(
+        r"translate\(\[(-?\d+\.\d+), (-?\d+\.\d+), (-?\d+\.\d+)\]\)\s*\n\s*"
+        r"mirror\(\[1, 0, 0\]\)\s*\n\s*"
+        r"linear_extrude\((-?\d+\.\d+)\) text\(\"KAL2\"",
+        lid,
+    )
+    assert m is not None, "mirrored raised label on the z=0 face not found"
+    z0, height = float(m.group(3)), float(m.group(4))
+    assert height >= 0.2
+    # Extrudes exactly up to the outer face: z0 + height == 0.
+    assert z0 == pytest.approx(-height, abs=1e-3)
+    assert "engraved" not in scad
+
+
 # ------------------------------------------------------------------ verify
 
 
@@ -338,13 +465,24 @@ def test_same_ref_cutouts_on_different_faces_are_fine():
     verify_fit(spec, make_envelope())
 
 
-def test_defaulted_height_becomes_a_warning_and_strict_promotes_it():
+def test_defaulted_height_warns_but_strict_never_promotes_it():
+    # height_default is a *board* fact: no spec edit can fix it, so promoting
+    # it under strict would wedge the repair loop. It rides the report only.
     envelope = make_envelope(u1_default=True)
     report = verify_fit(make_spec(), envelope)
     assert any("U1" in w and "default" in w for w in report.warnings)
+    strict_report = verify_fit(make_spec(), envelope, strict=True)
+    assert any("U1" in w and "default" in w for w in strict_report.warnings)
+
+
+def test_strict_promotes_only_spec_fixable_warnings():
+    # Tight clearance is the model's own choice -> promoted; the defaulted
+    # height on the same board is not, and must not appear in the batch.
+    envelope = make_envelope(u1_default=True)
     with pytest.raises(EnclosureValidationError) as excinfo:
-        verify_fit(make_spec(), envelope, strict=True)
-    assert any("U1" in e for e in excinfo.value.errors)
+        verify_fit(make_spec(clearance_nm=_nm(0.3)), envelope, strict=True)
+    assert any("clearance" in e for e in excinfo.value.errors)
+    assert not any("default" in e for e in excinfo.value.errors)
 
 
 def test_tight_clearance_warns_but_passes():
@@ -358,6 +496,111 @@ def test_cutout_far_from_its_face_warns():
     )
     report = verify_fit(spec, make_envelope())
     assert any("mid" in w and "left" in w for w in report.warnings)
+
+
+# --------------------------------------------------- bottom-side Z accounting
+
+BOTTOM_H = 1.5  # mm, the bottom part's height in the tests below
+
+
+def _bottom_part(height_mm: float = BOTTOM_H) -> PartExtent:
+    return PartExtent(
+        ref="C9",
+        x_min_nm=_nm(30.0), y_min_nm=_nm(2.0),
+        x_max_nm=_nm(32.0), y_max_nm=_nm(4.0),
+        height_nm=_nm(height_mm), height_default=False,
+        side=Layer.BOTTOM,
+    )
+
+
+def test_bottom_part_does_not_inflate_the_cavity_height():
+    # A 5 mm part under the board must not grow the cavity above it: parts_z
+    # stays the tallest *top* part (J1, inline literal).
+    envelope = make_envelope(extra_parts=(_bottom_part(5.0),))
+    params = read_params(emit_scad(make_spec(standoffs=True), envelope))
+    assert params["parts_z"] == pytest.approx(J1["h"], abs=1e-3)
+    assert params["cavity_z"] == pytest.approx(
+        params["standoff_h"] + BOARD["thickness"] + J1["h"] + CLEARANCE,
+        abs=1e-3,
+    )
+
+
+def test_bottom_part_taller_than_standoff_gap_fails_signed():
+    # Standoffs off: the board sits on the floor, the gap is zero, and a
+    # 1.5 mm bottom part collides by exactly its own height.
+    envelope = make_envelope(extra_parts=(_bottom_part(),))
+    with pytest.raises(CavityFitError) as excinfo:
+        verify_fit(make_spec(standoffs=False), envelope)
+    assert excinfo.value.margins_nm["z"] == -_nm(BOTTOM_H)
+    assert excinfo.value.margins_nm["x"] == _nm(CLEARANCE)
+
+
+def test_bottom_part_within_standoff_gap_passes_with_true_margin():
+    envelope = make_envelope(extra_parts=(_bottom_part(),))
+    spec = make_spec(standoffs=True)
+    report = verify_fit(spec, envelope)
+    # The gap is the emitted standoff height -- read from the .scad header by
+    # the independent reader, not from an emitter constant.
+    gap = read_params(emit_scad(spec, envelope))["standoff_h"]
+    assert to_mm_f(report.margins_nm["z"]) == pytest.approx(
+        min(CLEARANCE, gap - BOTTOM_H), abs=1e-3
+    )
+
+
+def to_mm_f(value_nm: int) -> float:
+    return value_nm / 1_000_000
+
+
+def test_top_z_margin_is_still_signed_against_the_budget():
+    # A caller-supplied envelope can under-state max_height_nm; the top-side
+    # check still catches it (the pre-existing over_z behaviour).
+    parts = (
+        PartExtent(
+            ref="U1",
+            x_min_nm=_nm(10.0), y_min_nm=_nm(10.0),
+            x_max_nm=_nm(20.0), y_max_nm=_nm(20.0),
+            height_nm=_nm(4.0), height_default=False,
+        ),
+    )
+    envelope = BoardEnvelope(
+        outline_nm=((0, 0),),
+        x_min_nm=_nm(0.0), y_min_nm=_nm(0.0),
+        x_max_nm=_nm(40.0), y_max_nm=_nm(30.0),
+        thickness_nm=_nm(1.6),
+        parts=parts,
+        max_height_nm=_nm(2.0),  # understated by 2 mm
+    )
+    with pytest.raises(CavityFitError) as excinfo:
+        verify_fit(make_spec(cutouts=()), envelope)
+    assert excinfo.value.margins_nm["z"] == _nm(CLEARANCE) - _nm(2.0)
+
+
+# ---------------------------------------------------------------- empty board
+
+
+def _empty_envelope() -> BoardEnvelope:
+    return BoardEnvelope(
+        outline_nm=(
+            (_nm(0.0), _nm(0.0)), (_nm(40.0), _nm(0.0)),
+            (_nm(40.0), _nm(30.0)), (_nm(0.0), _nm(30.0)),
+        ),
+        x_min_nm=_nm(0.0), y_min_nm=_nm(0.0),
+        x_max_nm=_nm(40.0), y_max_nm=_nm(30.0),
+        thickness_nm=_nm(1.6),
+        parts=(),
+        max_height_nm=0,
+    )
+
+
+def test_empty_board_warns_instead_of_a_quiet_zero():
+    report = verify_fit(make_spec(cutouts=()), _empty_envelope())
+    assert any("no extractable parts" in w for w in report.warnings)
+
+
+def test_empty_board_warning_is_never_promoted():
+    # Board-derived, not spec-fixable: strict must not turn it into an error.
+    report = verify_fit(make_spec(cutouts=()), _empty_envelope(), strict=True)
+    assert any("no extractable parts" in w for w in report.warnings)
 
 
 # ------------------------------------------------------------ gated tier 2

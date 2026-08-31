@@ -79,6 +79,7 @@ def _case_main(argv: list[str]) -> int:
         print(f"error: {exc}", file=sys.stderr)
         return 1
 
+    fit = None
     if args.no_model:
         if args.intent:
             print("note: --no-model ignores --intent (deterministic default "
@@ -104,7 +105,8 @@ def _case_main(argv: list[str]) -> int:
             print(f"error: {exc}", file=sys.stderr)
             return 2
         try:
-            spec, repair_rounds = propose_enclosure(
+            # The loop's accepted FitReport is the receipt; no re-verification.
+            spec, fit, repair_rounds = propose_enclosure(
                 model, envelope, style_hint=args.intent
             )
         except Exception as exc:
@@ -112,7 +114,8 @@ def _case_main(argv: list[str]) -> int:
             return 1
 
     try:
-        fit = verify_fit(spec, envelope)
+        if fit is None:  # the --no-model spec was never verified by a loop
+            fit = verify_fit(spec, envelope)
         scad = emit_scad(spec, envelope)
     except EnclosureError as exc:
         print(f"error: {exc}", file=sys.stderr)

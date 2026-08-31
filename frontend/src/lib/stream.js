@@ -46,6 +46,7 @@ const STAGE_START = {
     `verifying placement${text(e.profile) ? ` for ${text(e.profile)}` : ''}…`,
   route: () => 'routing the copper…',
   review: () => 'adversarial review…',
+  enclosure: () => 'drawing the printable case…',
 }
 
 const STAGE_DONE = {
@@ -95,6 +96,19 @@ const STAGE_DONE = {
     return `routed: ${clauses.join(', ')}`
   },
 
+  enclosure: (e) => {
+    const rounds = countOf(e.repair_rounds)
+    const wall = num(e.wall_mm)
+    const clauses = [
+      formatCount(countOf(e.cutouts), 'cutout'),
+      text(e.lid) ? `${text(e.lid)} lid` : '',
+      wall === null ? '' : `${wall} mm walls`,
+      rounds > 0 ? `after ${formatCount(rounds, 'repair round')}` : '',
+      e.rendered === true ? 'rendered' : '',
+    ].filter(Boolean)
+    return `printable case generated: ${clauses.join(', ')}`
+  },
+
   review: (e) => {
     const findings = countOf(e.findings)
     const blockers = countOf(e.blockers)
@@ -142,6 +156,20 @@ const DESCRIBERS = {
     const which = round === null ? '' : ` round ${round}`
     const first = clip(text(e.first_error), MAX_ERROR_CHARS)
     return `proposal${which} rejected: ${formatCount(countOf(e.errors), 'validation error')}${first ? ` (first: ${first})` : ''}`
+  },
+
+  'enclosure.round': (e) => {
+    const round = num(e.round)
+    const which = round === null ? '' : ` round ${round}`
+    const first = clip(text(e.first_error), MAX_ERROR_CHARS)
+    return `case proposal${which} rejected: ${formatCount(countOf(e.errors), 'validation error')}${first ? ` (first: ${first})` : ''}`
+  },
+
+  // The run continues without a case; the sentence must say both halves, or a
+  // delivered board reads as a failed run.
+  'enclosure.failed': (e) => {
+    const why = clip(text(e.error), MAX_ERROR_CHARS)
+    return `case generation failed${why ? `: ${why}` : ''} — the board is still delivered`
   },
 
   'model.call': (e) => {

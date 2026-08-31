@@ -275,6 +275,16 @@ def parse_enclosure_spec(text: str | dict) -> EnclosureSpec:
         errors.append(f"'vents' must be a boolean, got {vents!r}")
         vents = False
 
+    # A screw lid's pilot holes bite into the standoff bosses; without
+    # standoffs they open onto an empty floor and the screws hold nothing.
+    # Model-fixable, so it joins the batch rather than raising later.
+    if lid == "screw" and not standoffs:
+        errors.append(
+            "'lid' is 'screw' but 'standoffs' is false: screw pilot holes "
+            "need standoff bosses to bite into; set 'standoffs' to true or "
+            "choose a different lid"
+        )
+
     label = _sanitise_label(data.get("label"), errors)
 
     known = {

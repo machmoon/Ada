@@ -86,6 +86,9 @@ class PipelineResult:
             self.project_path,
             self.schematic_path,
             self.placed_board_path,
+            # The enclosure stage runs after routing and writes before the
+            # headline board (which _finish writes last).
+            self.enclosure.scad_path if self.enclosure is not None else None,
             self.board_path,
         ]
         return [p for p in ordered if p is not None]
@@ -434,6 +437,7 @@ def _generate_pcb_sdk(
         enclosure=enclosure,
         enclosure_style=enclosure_style,
         output=output,
+        emit_stages=emit_stages,
         emit=emit,
         enter=enter,
     )
@@ -526,8 +530,9 @@ def generate_pcb(
             the finished board. Opt-in; the stage runs after routing and its
             failure never fails the run -- ``result.enclosure`` is ``None``
             and a visible ``enclosure.failed`` event says why, but the board
-            is still delivered (plan decision 5). With ``output`` set,
-            ``enclosure.scad`` is written beside the project.
+            is still delivered (plan decision 5). With ``output`` set and
+            ``emit_stages`` on, ``enclosure.scad`` is written beside the
+            project.
         enclosure_style: Natural-language case intent ("rounded corners, USB
             cutout left"), handed to the proposal prompt as a style hint.
             Ignored when ``enclosure`` is off.

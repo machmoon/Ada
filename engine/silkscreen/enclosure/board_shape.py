@@ -19,6 +19,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from ..kicad import extract_parts, load_board
+from ..packing import Layer
 from ..units import mm
 from .heights import HEIGHTS_NM, height_for
 
@@ -49,6 +50,10 @@ class PartExtent:
     #: True when the heights table had no entry for this footprint's class;
     #: the verifier surfaces this as a warning rather than guessing silently.
     height_default: bool
+    #: Which side of the board the footprint sits on (KiCad ``F.Cu``/``B.Cu``).
+    #: A bottom-side part hangs *below* the board into the standoff gap, so
+    #: budgeting its height above the board would be a fake Z margin.
+    side: Layer = Layer.TOP
 
 
 @dataclass(frozen=True)
@@ -62,7 +67,12 @@ class BoardEnvelope:
     y_max_nm: int
     thickness_nm: int  # board substrate
     parts: tuple[PartExtent, ...]
+    #: Tallest *top-side* part, measured above the board surface. This is what
+    #: the emitter budgets the cavity above the board for.
     max_height_nm: int
+    #: Tallest *bottom-side* part, measured below the board surface. It must
+    #: fit in the standoff gap under the board; the verifier owns that check.
+    max_height_bottom_nm: int = 0
 
 
 def _nm_point(x_mm: float, y_mm: float) -> tuple[int, int]:
@@ -219,6 +229,7 @@ def board_envelope(
                 y_max_nm=anchor_y + info.max_y_nm,
                 height_nm=height,
                 height_default=was_default,
+                side=info.side,
             )
         )
 
@@ -230,7 +241,16 @@ def board_envelope(
         y_max_nm=y_max,
         thickness_nm=thickness_nm,
         parts=tuple(parts),
-        max_height_nm=max((p.height_nm for p in parts), default=0),
+        # Heights are split per side: top parts size the cavity above the
+        # board, bottom parts must fit the standoff gap below it. An empty
+        # board legitimately yields 0/0 -- verify_fit warns on that condition
+        # rather than letting a quiet zero read as a flat board.
+        max_height_nm=max(
+            (p.height_nm for p in parts if p.side is Layer.TOP), default=0
+        ),
+        max_height_bottom_nm=max(
+            (p.height_nm for p in parts if p.side is Layer.BOTTOM), default=0
+        ),
     )
 
 

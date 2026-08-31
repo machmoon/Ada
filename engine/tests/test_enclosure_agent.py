@@ -102,10 +102,49 @@ def _envelope() -> BoardEnvelope:
 
 def test_propose_accepts_a_valid_spec_first_try():
     model = ScriptedModel(responses=[json.dumps(GOOD_ENCLOSURE)])
-    spec, rounds = propose_enclosure(model, _envelope())
+    spec, fit, rounds = propose_enclosure(model, _envelope())
     assert rounds == 0
     assert spec.lid == "friction"
     assert spec.wall_nm == mm(2.0)
+    # The accepted round's receipt rides along instead of being discarded, so
+    # no caller has to re-run verify_fit on a spec the loop already verified.
+    assert fit.margins_nm == {"x": mm(1.0), "y": mm(1.0), "z": mm(1.0)}
+    assert fit.warnings == ()
+
+
+def test_defaulted_heights_do_not_burn_repair_rounds():
+    """A board-derived warning is not the model's to fix (the new verify_fit
+    contract): parts with defaulted heights must be accepted on round 1, the
+    warning surfaced on the returned FitReport rather than raised or fed to
+    the repair loop."""
+    envelope = _envelope()
+    defaulted = tuple(
+        PartExtent(
+            ref=p.ref,
+            x_min_nm=p.x_min_nm, y_min_nm=p.y_min_nm,
+            x_max_nm=p.x_max_nm, y_max_nm=p.y_max_nm,
+            height_nm=p.height_nm, height_default=True,
+        )
+        for p in envelope.parts
+    )
+    envelope = BoardEnvelope(
+        outline_nm=envelope.outline_nm,
+        x_min_nm=envelope.x_min_nm, y_min_nm=envelope.y_min_nm,
+        x_max_nm=envelope.x_max_nm, y_max_nm=envelope.y_max_nm,
+        thickness_nm=envelope.thickness_nm,
+        parts=defaulted,
+        max_height_nm=envelope.max_height_nm,
+    )
+    # One scripted response: a second request would raise ModelError, so
+    # success here proves no repair round was spent on the height warnings.
+    model = ScriptedModel(responses=[json.dumps(GOOD_ENCLOSURE)])
+    _spec, fit, rounds = propose_enclosure(model, envelope)
+    assert rounds == 0
+    assert len(model.calls) == 1
+    defaulted_warnings = [w for w in fit.warnings if "height defaulted" in w]
+    assert len(defaulted_warnings) == 2  # one per part, visible, not raised
+    assert any("U1" in w for w in defaulted_warnings)
+    assert any("J1" in w for w in defaulted_warnings)
 
 
 def test_prompt_carries_the_frozen_marker_and_measured_facts():
@@ -127,7 +166,7 @@ def test_repair_prompt_batches_every_validation_error():
     model = ScriptedModel(
         responses=[json.dumps(BAD_ENCLOSURE), json.dumps(GOOD_ENCLOSURE)]
     )
-    spec, rounds = propose_enclosure(model, _envelope())
+    spec, _fit, rounds = propose_enclosure(model, _envelope())
     assert rounds == 1
     repair = model.calls[1]["prompt"]
     # Both problems in one prompt -- the batched-ValidationError convention.
@@ -147,7 +186,7 @@ def test_fit_failures_feed_the_repair_loop_not_just_json_shape():
         cutouts=[{"id": "usb", "ref": "J9", "face": "left", "margin_mm": 0.5}],
     )
     model = ScriptedModel(responses=[json.dumps(ghost), json.dumps(GOOD_ENCLOSURE)])
-    _spec, rounds = propose_enclosure(model, _envelope())
+    _spec, _fit, rounds = propose_enclosure(model, _envelope())
     assert rounds == 1
     assert "'J9'" in model.calls[1]["prompt"]
     assert "not on this board" in model.calls[1]["prompt"]
@@ -156,7 +195,7 @@ def test_fit_failures_feed_the_repair_loop_not_just_json_shape():
 def test_strict_fit_warnings_feed_the_repair_loop():
     tight = dict(GOOD_ENCLOSURE, clearance_mm=0.3)
     model = ScriptedModel(responses=[json.dumps(tight), json.dumps(GOOD_ENCLOSURE)])
-    _spec, rounds = propose_enclosure(model, _envelope())
+    _spec, _fit, rounds = propose_enclosure(model, _envelope())
     assert rounds == 1
     assert "the board may bind" in model.calls[1]["prompt"]
 
@@ -259,6 +298,12 @@ def test_enclosure_run_emits_the_frozen_events_and_writes_the_scad(
     assert "module base()" in result.enclosure.scad
     scad_path = tmp_path / "enclosure.scad"
     assert scad_path.read_text(encoding="utf-8") == result.enclosure.scad
+    # The written .scad is a first-class artifact, reported like the rest.
+    assert result.enclosure.scad_path == scad_path
+    assert scad_path in result.artifacts
+    assert result.artifacts.index(scad_path) < result.artifacts.index(
+        result.board_path
+    ), "artifacts stay in the order the stages produced them"
     # The board is still the headline artifact.
     assert (tmp_path / "board.kicad_pcb").exists()
 
@@ -276,8 +321,65 @@ def test_enclosure_without_output_returns_scad_but_writes_nothing(
     )
     assert result.enclosure is not None
     assert "module lid()" in result.enclosure.scad
+    assert result.enclosure.scad_path is None
     assert result.board_path is None
     assert list(tmp_path.iterdir()) == []
+
+
+def test_board_only_case_into_a_missing_directory_still_delivers_the_board(
+    tmp_path, offline_pdf_fetch
+):
+    """Regression: ``--board-only --case`` into a not-yet-existing output
+    directory used to die on the ``enclosure.scad`` write (FileNotFoundError
+    escaping before ``_finish``); the run must complete and write the board,
+    and ``--board-only`` promises only the routed board -- no .scad file."""
+    out = tmp_path / "brand" / "new" / "board.kicad_pcb"
+    assert not out.parent.exists()
+    result = generate_pcb(
+        _pipeline_model(json.dumps(GOOD_ENCLOSURE)),
+        INTENT,
+        datasheets=SHEETS,
+        output=out,
+        time_limit_s=15.0,
+        emit_stages=False,
+        enclosure=True,
+    )
+    assert out.exists()
+    assert result.enclosure is not None
+    assert "module base()" in result.enclosure.scad  # the text still ships
+    assert result.enclosure.scad_path is None
+    assert not (out.parent / "enclosure.scad").exists()
+    assert result.artifacts == [out]
+
+
+def test_board_envelope_valueerror_degrades_to_enclosure_failed(
+    tmp_path, offline_pdf_fetch, monkeypatch
+):
+    """A ValueError from measuring the board is the stage's own failure, not
+    the run's: it must surface as enclosure.failed and the run must finish."""
+    from silkscreen.agents import stages
+
+    def broken_envelope(path):
+        raise ValueError("board has no Edge.Cuts outline")
+
+    monkeypatch.setattr(stages, "board_envelope", broken_envelope)
+    events = []
+    result = generate_pcb(
+        _pipeline_model(json.dumps(GOOD_ENCLOSURE)),
+        INTENT,
+        datasheets=SHEETS,
+        output=tmp_path / "board.kicad_pcb",
+        time_limit_s=15.0,
+        on_event=events.append,
+        enclosure=True,
+    )
+    assert result.enclosure is None
+    failed = [e for e in events if e["event"] == "enclosure.failed"]
+    assert len(failed) == 1
+    assert "Edge.Cuts" in failed[0]["error"]
+    # The run finished: review closed the stream and the board was written.
+    assert [e["stage"] for e in events if e["event"] == "stage.done"][-1] == "review"
+    assert (tmp_path / "board.kicad_pcb").exists()
 
 
 def test_enclosure_failure_degrades_and_the_board_still_ships(
@@ -377,6 +479,10 @@ def test_both_drivers_emit_identical_enclosure_events(tmp_path, offline_pdf_fetc
         (tmp_path / "adk" / "enclosure.scad").read_bytes()
         == (tmp_path / "sdk" / "enclosure.scad").read_bytes()
     )
+    # Both drivers thread emit_stages into the stage and report the write.
+    for result, where in ((sdk_result, "sdk"), (adk_result, "adk")):
+        assert result.enclosure.scad_path == tmp_path / where / "enclosure.scad"
+        assert result.enclosure.scad_path in result.artifacts
 
 
 # ---------------------------------------------------------------- render gate

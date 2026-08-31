@@ -1,6 +1,6 @@
 <script>
   import MicButton from './MicButton.svelte'
-  import { MAX_REQUEST_BYTES, MAX_TIME_LIMIT_S, MIN_TIME_LIMIT_S, normalizeRequest, requestBytes } from '../lib/api.js'
+  import { MAX_ENCLOSURE_STYLE_CHARS, MAX_REQUEST_BYTES, MAX_TIME_LIMIT_S, MIN_TIME_LIMIT_S, normalizeRequest, requestBytes } from '../lib/api.js'
   import {
     constraintFieldExample,
     constraintManifestReady,
@@ -57,6 +57,8 @@
   let noSolverBudget = $state(seed.no_solver_budget !== false)
   let review = $state(seed.review !== false)
   let ground = $state(seed.ground === true)
+  let enclosure = $state(seed.enclosure === true)
+  let enclosureStyle = $state(seed.enclosure_style ?? '')
   // Seeded once with the rest of the editable form state.
   // svelte-ignore state_referenced_locally
   let orchestratorModel = $state(initialModel || 'gemini-3.7-flash')
@@ -90,6 +92,8 @@
     no_solver_budget: noSolverBudget,
     review,
     ground: ground && hasDatasheets,
+    enclosure,
+    enclosure_style: enclosureStyle,
     placement_enabled: placementEnabled,
     placement_profile: placementProfile,
     placement_policy: placementPolicy,
@@ -591,6 +595,27 @@
       <span>Ground findings against datasheet pages</span>
     </label>
 
+    <label class="control checkbox">
+      <input type="checkbox" bind:checked={enclosure} data-testid="intent-form-enclosure" />
+      <span>Also generate a 3D-printable case</span>
+    </label>
+
+    {#if enclosure}
+      <label class="control case-style" title="Free-text styling for the case; left empty, the model chooses">
+        <span class="lbl">case style</span>
+        <input
+          class="mono style"
+          type="text"
+          bind:value={enclosureStyle}
+          maxlength={MAX_ENCLOSURE_STYLE_CHARS}
+          placeholder="rounded corners, vented lid"
+          aria-label="Case style"
+          data-testid="intent-form-enclosure-style"
+          data-material="panel"
+        />
+      </label>
+    {/if}
+
     <div class="spacer"></div>
     <MicButton />
     <button type="submit" class="run" data-testid="intent-form-submit" disabled={!canSubmit}>
@@ -754,6 +779,15 @@
     font-size: var(--fs-mono);
   }
   .budget:disabled { color: var(--ink-faint); }
+
+  .style {
+    width: 220px;
+    background: var(--surface);
+    border: 1px solid var(--rule-soft);
+    padding: 6px 8px;
+    font-size: var(--fs-mono);
+  }
+  .style:focus { border-color: var(--rule); outline: none; }
 
   .no-budget {
     padding: 6px 9px;

@@ -173,6 +173,38 @@ def test_stl_success_reports_the_stl_path(tmp_path, monkeypatch, capsys):
 # ------------------------------------------------- generate command flags
 
 
+def test_board_only_case_into_a_missing_directory_writes_the_board(
+    tmp_path, monkeypatch, capsys
+):
+    """Regression: ``--board-only --case`` with an output directory that does
+    not exist yet must complete and write the board. The enclosure.scad write
+    used to run outside the stage's try, before ``_finish``, and its
+    FileNotFoundError killed the whole run."""
+    import json
+
+    from test_agents import _scripted_pipeline_model
+    from test_enclosure_agent import GOOD_ENCLOSURE
+
+    monkeypatch.setenv("SILKSCREEN_ENGINE", "sdk")
+    model = _scripted_pipeline_model()
+    model.by_marker["ENCLOSURE-SPEC v1"] = json.dumps(GOOD_ENCLOSURE)
+    monkeypatch.setattr(cli, "GeminiModel", lambda name: model)
+
+    out = tmp_path / "does" / "not" / "exist" / "board.kicad_pcb"
+    assert not out.parent.exists()
+    code = cli.main(
+        ["a 3.3V motor driver board", "-o", str(out), "--board-only", "--case"]
+    )
+
+    assert code == 0
+    assert out.exists()
+    # --board-only promises only the routed board; the receipt still prints.
+    assert not (out.parent / "enclosure.scad").exists()
+    captured = capsys.readouterr()
+    assert "Case fit:" in captured.out
+    assert str(out) in captured.out
+
+
 def _fake_result(enclosure=None):
     return SimpleNamespace(
         summary=lambda: "1 part board",

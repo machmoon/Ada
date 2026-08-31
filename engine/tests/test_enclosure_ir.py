@@ -207,6 +207,29 @@ def test_cutouts_must_be_a_list():
     assert any("'cutouts' must be a list" in e for e in errs)
 
 
+def test_screw_lid_without_standoffs_is_rejected():
+    # Pilot holes over an empty floor: the screws would bite nothing.
+    errs = errors_of({**GOOD, "lid": "screw", "standoffs": False})
+    assert any("'lid' is 'screw'" in e and "standoffs" in e for e in errs)
+
+
+def test_screw_lid_with_standoffs_parses():
+    spec = parse({"lid": "screw", "standoffs": True})
+    assert spec.lid == "screw" and spec.standoffs is True
+    # standoffs defaults to True, so omitting it is also legal.
+    spec = parse_enclosure_spec(json.dumps({"lid": "screw"}))
+    assert spec.standoffs is True
+
+
+def test_screw_standoff_coupling_joins_the_batch():
+    # The coupling error rides the same batched exception as other failures.
+    errs = errors_of({
+        **GOOD, "lid": "screw", "standoffs": False, "wall_mm": -1.0,
+    })
+    assert any("'wall_mm'" in e for e in errs)
+    assert any("standoffs" in e for e in errs)
+
+
 def test_non_boolean_flags_are_rejected():
     errs = errors_of({**GOOD, "standoffs": "yes", "vents": 1})
     assert any("'standoffs'" in e for e in errs)

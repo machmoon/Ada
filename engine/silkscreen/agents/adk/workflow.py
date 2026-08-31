@@ -135,6 +135,7 @@ def enclosure(node_input: str) -> str:
             enclosure=run.enclosure,
             enclosure_style=run.enclosure_style,
             output=run.output,
+            emit_stages=run.emit_stages,
             emit=run.emit,
             enter=run.enter,
         )

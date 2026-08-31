@@ -19,6 +19,7 @@ from silkscreen.enclosure.board_shape import (
     find_part,
 )
 from silkscreen.enclosure.heights import DEFAULT_HEIGHT_NM, HEIGHTS_NM, height_for
+from silkscreen.packing import Layer
 from silkscreen.units import mm
 
 FIXTURE = Path(__file__).resolve().parent / "fixtures" / "ref.kicad_pcb"
@@ -68,7 +69,8 @@ def envelope(tmp_path):
 
 
 def _synthetic_board(tmp_path: Path, *, angle: float = 90.0,
-                     footprint: str = "Foo:Bar_Widget") -> Path:
+                     footprint: str = "Foo:Bar_Widget",
+                     layer: str = "F.Cu") -> Path:
     """One-footprint board with an asymmetric fp_rect courtyard, rotated."""
     at = f"(at 10 20 {angle:g})" if angle else "(at 10 20)"
     stroke = "(stroke (width 0.05) (type solid))"
@@ -77,11 +79,12 @@ def _synthetic_board(tmp_path: Path, *, angle: float = 90.0,
   (general (thickness 1.2))
   (layers
     (0 "F.Cu" signal)
+    (2 "B.Cu" signal)
     (44 "Edge.Cuts" user)
     (47 "F.CrtYd" user "F.Courtyard")
   )
   (net 0 "")
-  (footprint "{footprint}" (layer "F.Cu")
+  (footprint "{footprint}" (layer "{layer}")
     {at}
     (property "Reference" "X1" (at 0 0 0) (layer "F.SilkS")
       (effects (font (size 1 1) (thickness 0.15))))
@@ -223,6 +226,31 @@ def test_unknown_footprint_class_surfaces_the_default_flag(tmp_path):
     assert part.height_default
     assert part.height_nm == DEFAULT_HEIGHT_NM
     assert envelope.max_height_nm == DEFAULT_HEIGHT_NM
+
+
+def test_bottom_side_part_is_carried_and_split_out(tmp_path):
+    # A B.Cu footprint hangs *below* the board: its height must land in
+    # max_height_bottom_nm and must not leak into the top-side budget.
+    envelope = board_envelope(_synthetic_board(tmp_path, layer="B.Cu"))
+    (part,) = envelope.parts
+    assert part.side is Layer.BOTTOM
+    assert envelope.max_height_nm == 0
+    assert envelope.max_height_bottom_nm == DEFAULT_HEIGHT_NM
+
+
+def test_top_side_is_the_default_and_fills_max_height(tmp_path):
+    envelope = board_envelope(_synthetic_board(tmp_path, layer="F.Cu"))
+    (part,) = envelope.parts
+    assert part.side is Layer.TOP
+    assert envelope.max_height_nm == DEFAULT_HEIGHT_NM
+    assert envelope.max_height_bottom_nm == 0
+
+
+def test_fixture_parts_are_all_top_side(envelope):
+    # The STM32 fixture is a single-sided board; the split must say so.
+    assert all(p.side is Layer.TOP for p in envelope.parts)
+    assert envelope.max_height_bottom_nm == 0
+    assert envelope.max_height_nm == max(p.height_nm for p in envelope.parts)
 
 
 def test_ref_keyed_height_override_wins(tmp_path):

@@ -9,10 +9,13 @@ measured board. Design rules copied from :mod:`silkscreen.spice`:
   :class:`CutoutError` naming the offending cutout (an absent ref is a hard
   error per the ``edge_refs`` convention), :class:`WallError` for
   unprintable walls.
-* **Warnings are visible, and ``strict=True`` promotes them to errors** (the
-  ``Testbench(strict=True)`` precedent) -- that is what the agent's repair
-  loop runs, so a defaulted component height or a tight clearance feeds the
-  loop instead of shipping silently.
+* **Warnings are visible, and ``strict=True`` promotes the spec-fixable ones
+  to errors** (the ``Testbench(strict=True)`` precedent) -- that is what the
+  agent's repair loop runs, so a tight clearance feeds the loop instead of
+  shipping silently. Warnings the model cannot fix by editing the spec (a
+  defaulted component height, an empty board) are never promoted; they always
+  ride :attr:`FitReport.warnings`, or the repair loop would spin forever on a
+  board fact no spec change can alter.
 
 All checks are in integer nanometres; ``params_mm`` is display-only and comes
 from :func:`silkscreen.enclosure.emit.scad_params` so the receipt shows the
@@ -23,6 +26,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from ..packing import Layer
 from ..units import mm, to_mm
 from .board_shape import BoardEnvelope
 from .emit import STANDOFF_HEIGHT_NM, opening_extent, scad_params
@@ -59,10 +63,16 @@ def _overhang_margins(spec: EnclosureSpec, envelope: BoardEnvelope) -> dict[str,
     The cavity is sized from the *outline* bbox plus clearance, but parts may
     overhang the outline; the margin is the clearance minus the worst
     overhang, so a part reaching past the cavity wall goes negative.
+
+    ``z`` is genuinely two-sided: top parts are checked against the cavity
+    budget above the board, and bottom parts against the standoff gap below
+    it (:data:`STANDOFF_HEIGHT_NM` when standoffs are on, zero when the board
+    sits on the floor) -- the worse of the two is the reported margin.
     """
     over_x = 0
     over_y = 0
-    over_z = 0
+    over_z_top = 0
+    bottom_height = None
     for part in envelope.parts:
         over_x = max(
             over_x,
@@ -74,13 +84,27 @@ def _overhang_margins(spec: EnclosureSpec, envelope: BoardEnvelope) -> dict[str,
             envelope.y_min_nm - part.y_min_nm,
             part.y_max_nm - envelope.y_max_nm,
         )
-        # Cavity height budgets for max_height_nm; any single part cannot
-        # exceed it by construction, but a caller-supplied envelope might.
-        over_z = max(over_z, part.height_nm - envelope.max_height_nm)
+        if part.side is Layer.BOTTOM:
+            # Bottom parts hang below the board into the standoff gap; they
+            # do not consume the cavity budgeted above the board.
+            bottom_height = max(bottom_height or 0, part.height_nm)
+        else:
+            # The cavity above the board budgets for max_height_nm; any
+            # single top part cannot exceed it by construction, but a
+            # caller-supplied envelope might.
+            over_z_top = max(
+                over_z_top, part.height_nm - envelope.max_height_nm
+            )
+    # Below the board the only room is the standoff gap (nothing at all when
+    # standoffs are off and the board sits on the floor).
+    gap = STANDOFF_HEIGHT_NM if spec.standoffs else 0
+    z = spec.clearance_nm - over_z_top
+    if bottom_height is not None:
+        z = min(z, gap - bottom_height)
     return {
         "x": spec.clearance_nm - over_x,
         "y": spec.clearance_nm - over_y,
-        "z": spec.clearance_nm - over_z,
+        "z": z,
     }
 
 
@@ -126,9 +150,15 @@ def verify_fit(
 
     Returns the :class:`FitReport` receipt on success. Raises
     :class:`WallError`, :class:`CutoutError`, or :class:`CavityFitError` on a
-    hard failure, and with ``strict=True`` additionally raises
-    :class:`EnclosureValidationError` batching every warning (so one repair
-    prompt sees them all, the ``parse_circuit_spec`` convention).
+    hard failure.
+
+    ``strict=True`` promotes **only the spec-fixable warnings** (tight
+    clearance, a cutout far from its face, standoffs in an open case) to one
+    batched :class:`EnclosureValidationError` (so one repair prompt sees them
+    all, the ``parse_circuit_spec`` convention). Board-derived warnings -- a
+    defaulted component height, a board with no extractable parts -- are
+    **never promoted**: no spec edit can fix them, so promoting them would
+    wedge the repair loop. They always ride :attr:`FitReport.warnings`.
     """
     if spec.wall_nm < MIN_WALL_NM:
         raise WallError(
@@ -144,7 +174,10 @@ def verify_fit(
             "half the enclosure's smaller side"
         )
 
-    warnings: list[str] = []
+    # Spec-fixable warnings feed the repair loop under strict=True;
+    # board-derived warnings only ever ride the report.
+    spec_warnings: list[str] = []
+    board_warnings: list[str] = []
 
     margins = _overhang_margins(spec, envelope)
     if min(margins.values()) < 0:
@@ -155,30 +188,37 @@ def verify_fit(
             dict(margins),
         )
 
-    _check_cutouts(spec, envelope, warnings)
+    _check_cutouts(spec, envelope, spec_warnings)
 
     if spec.clearance_nm < TIGHT_CLEARANCE_NM:
-        warnings.append(
+        spec_warnings.append(
             f"clearance under {to_mm(TIGHT_CLEARANCE_NM):.1f} mm "
             f"({to_mm(spec.clearance_nm):.2f} mm): the board may bind"
         )
+    if not envelope.parts:
+        # A quiet zero in disguise: max_height is legitimately 0 here, but
+        # the caller must hear that the cavity was sized for a bare board.
+        board_warnings.append(
+            "board has no extractable parts; cavity height covers only the "
+            "substrate plus clearance"
+        )
     for part in envelope.parts:
         if part.height_default:
-            warnings.append(
+            board_warnings.append(
                 f"{part.ref} height defaulted to "
                 f"{to_mm(DEFAULT_HEIGHT_NM):.1f} mm (no table entry)"
             )
     if spec.standoffs and spec.lid == "none":
-        warnings.append(
+        spec_warnings.append(
             "standoffs raise the board by "
             f"{to_mm(STANDOFF_HEIGHT_NM):.1f} mm in an open case"
         )
 
-    if strict and warnings:
-        raise EnclosureValidationError(list(warnings))
+    if strict and spec_warnings:
+        raise EnclosureValidationError(list(spec_warnings))
 
     return FitReport(
         margins_nm=margins,
-        warnings=tuple(warnings),
+        warnings=tuple(spec_warnings + board_warnings),
         params_mm=scad_params(spec, envelope),
     )

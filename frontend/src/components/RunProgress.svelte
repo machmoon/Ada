@@ -2,7 +2,7 @@
   import { elapsed, run } from '../lib/run.js'
   import { formatDuration } from '../lib/format.js'
 
-  // The labels and their order are the six things that happen, whether or not
+  // The labels and their order are the things that happen, whether or not
   // the server is reporting them. `key` names the backend stage each row
   // watches; `validate` is the synthetic one, driven from propose's events.
   //
@@ -17,6 +17,7 @@
     { key: 'place', label: 'place with CP-SAT' },
     { key: 'route', label: 'route the copper' },
     { key: 'review', label: 'adversarial review' },
+    { key: 'enclosure', label: 'printable case' },
   ]
 
   const budget = $derived($run.request ? $run.request.time_limit_s : null)
@@ -98,6 +99,14 @@
     background: var(--ink);
   }
   .stage[data-state='done'] .box { background: var(--ink); border-color: var(--ink); }
+
+  /* A stage that gave up: the blocker colour, and a box filled with it, so a
+     failure cannot be misread as either running or done. */
+  .stage[data-state='failed'] { color: var(--sev-blocker-fg); }
+  .stage[data-state='failed'] .box {
+    background: var(--sev-blocker-fg);
+    border-color: var(--sev-blocker-fg);
+  }
 
   .clock {
     margin-top: 26px;
