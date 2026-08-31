@@ -350,8 +350,15 @@ def judge(
                 digest=digest,
             )
             verdict = _loads(_generate(model, prompt))
-            refuted = bool(verdict.get("refuted", False))
+            raw_refuted = verdict.get("refuted")
+            valid_verdict = isinstance(raw_refuted, bool)
+            # Deep review is an allow-list: a claim survives only when the
+            # refuter returns an explicit JSON boolean false. Malformed output
+            # must not silently promote an unverified claim into the report.
+            refuted = raw_refuted if valid_verdict else True
             reason = str(verdict.get("reason", "")).strip()
+            if not valid_verdict:
+                reason = "invalid refutation response; claim was not verified"
             finding.checks.append(
                 ("refuted: " if refuted else "survived refutation: ")
                 + (reason or "no reason given")

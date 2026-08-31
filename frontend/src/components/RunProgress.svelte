@@ -2,14 +2,20 @@
   import { elapsed, run } from '../lib/run.js'
   import { formatDuration } from '../lib/format.js'
 
-  // The labels and their order are the five things that happen, whether or not
+  // The labels and their order are the six things that happen, whether or not
   // the server is reporting them. `key` names the backend stage each row
   // watches; `validate` is the synthetic one, driven from propose's events.
+  //
+  // There is deliberately no `schematic` row. That stage only runs when the
+  // engine is given an output path, and the service never gives it one, so a
+  // row for it could never tick -- and an un-tickable row is exactly the kind
+  // of claim this list exists not to make.
   const STAGES = [
     { key: 'read', label: 'read the datasheets' },
     { key: 'propose', label: 'propose a circuit' },
     { key: 'validate', label: 'validate and repair' },
     { key: 'place', label: 'place with CP-SAT' },
+    { key: 'route', label: 'route the copper' },
     { key: 'review', label: 'adversarial review' },
   ]
 

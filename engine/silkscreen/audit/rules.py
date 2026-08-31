@@ -75,6 +75,12 @@ def _f(rule: Rule | str, **kwargs) -> Finding:
     return Finding(rule=name, **kwargs)
 
 
+def _via_rect(via: tuple[int, int, int, str]) -> Rect:
+    x, y, size, _net = via
+    radius = (size + 1) // 2
+    return Rect(x - radius, y - radius, x + radius, y + radius)
+
+
 # --------------------------------------------------------------------------
 # geometry
 # --------------------------------------------------------------------------
@@ -346,8 +352,8 @@ def _net_connectivity(board: AuditBoard, profile: EffortProfile) -> list[Finding
             continue
 
         # Islands: pads and tracks are nodes; a track that touches a pad or
-        # another track merges their sets. A via merges nothing on its own --
-        # it is a layer change on copper that must already reach it.
+        # another track merges their sets. A via joins every same-net node its
+        # barrel lands on, including an SMD pad directly beneath it.
         nodes: list = list(pads) + list(tracks)
         sets = _DisjointSet(len(nodes))
         for ti in range(len(pads), len(nodes)):
@@ -358,13 +364,18 @@ def _net_connectivity(board: AuditBoard, profile: EffortProfile) -> list[Finding
             for tj in range(ti + 1, len(nodes)):
                 if _touching(nodes[tj], track):
                     sets.union(ti, tj)
-        for vx, vy, size, _net in vias:
-            box = Rect(vx - size // 2, vy - size // 2, vx + size // 2, vy + size // 2)
+        for via in vias:
+            box = _via_rect(via)
             hit = [
+                i
+                for i, pad in enumerate(pads)
+                if pad.rect.gap_to(box) <= 0
+            ]
+            hit.extend(
                 i
                 for i in range(len(pads), len(nodes))
                 if seg_rect_distance_nm(nodes[i], box) <= 0
-            ]
+            )
             for other in hit[1:]:
                 sets.union(hit[0], other)
 
@@ -493,6 +504,97 @@ def _track_clearance(board: AuditBoard, profile: EffortProfile) -> list[Finding]
                     point=track.midpoint,
                     evidence=f"gap {fmt_mm(gap)}, clearance {fmt_mm(limit)}",
                     fix="Reroute the track around the pad.",
+                )
+            )
+
+    for via in board.vias:
+        vx, vy, _size, net = via
+        box = _via_rect(via)
+        for pad in pads:
+            if net and pad.net and net == pad.net:
+                continue
+            gap = box.gap_to(pad.rect)
+            if gap >= limit:
+                continue
+            out.append(
+                _f(
+                    "via-pad-clearance",
+                    severity=Severity.BLOCKER if gap <= 0 else Severity.MARGINAL,
+                    title=f"via on {net or 'no net'} is {fmt_mm(gap)} from {pad.name}",
+                    detail=(
+                        f"A via carrying {net or 'no net'} passes {pad.name} "
+                        f"(net {pad.net or 'none'}) at {fmt_mm(gap)}. "
+                        + (
+                            "Their copper intersects: these two nets are shorted."
+                            if gap <= 0
+                            else "Etch tolerance eats gaps this size."
+                        )
+                    ),
+                    refs=(pad.ref,),
+                    nets=tuple(n for n in dict.fromkeys((net, pad.net)) if n),
+                    extent=box.union(pad.rect),
+                    point=(vx, vy),
+                    evidence=f"gap {fmt_mm(gap)}, clearance {fmt_mm(limit)}",
+                    fix="Move the via or the pad to restore clearance.",
+                )
+            )
+        for track in board.tracks:
+            if net and track.net and net == track.net:
+                continue
+            gap = seg_rect_distance_nm(track, box)
+            if gap >= limit:
+                continue
+            out.append(
+                _f(
+                    "via-track-clearance",
+                    severity=Severity.BLOCKER if gap <= 0 else Severity.MARGINAL,
+                    title=(
+                        f"via on {net or 'no net'} is {fmt_mm(gap)} from "
+                        f"track {track.net or 'with no net'}"
+                    ),
+                    detail=(
+                        "A through via crosses both copper layers and passes a "
+                        f"foreign {track.layer} track at {fmt_mm(gap)}. "
+                        + (
+                            "Their copper intersects: these two nets are shorted."
+                            if gap <= 0
+                            else "Etch tolerance eats gaps this size."
+                        )
+                    ),
+                    nets=tuple(n for n in dict.fromkeys((net, track.net)) if n),
+                    extent=box.union(track.bbox),
+                    point=(vx, vy),
+                    evidence=f"gap {fmt_mm(gap)}, clearance {fmt_mm(limit)}",
+                    fix="Move the via or reroute the track.",
+                )
+            )
+
+    for i, a in enumerate(board.vias):
+        a_box = _via_rect(a)
+        for b in board.vias[i + 1 :]:
+            if a[3] and b[3] and a[3] == b[3]:
+                continue
+            b_box = _via_rect(b)
+            gap = a_box.gap_to(b_box)
+            if gap >= limit:
+                continue
+            out.append(
+                _f(
+                    "via-via-clearance",
+                    severity=Severity.BLOCKER if gap <= 0 else Severity.MARGINAL,
+                    title=(
+                        f"vias {a[3] or 'with no net'} and {b[3] or 'with no net'} "
+                        f"are {fmt_mm(gap)} apart"
+                    ),
+                    detail=(
+                        "Two vias on different nets are closer than the clearance "
+                        "rule allows. Their annular copper spans both layers."
+                    ),
+                    nets=tuple(n for n in dict.fromkeys((a[3], b[3])) if n),
+                    extent=a_box.union(b_box),
+                    point=(a[0], a[1]),
+                    evidence=f"gap {fmt_mm(gap)}, clearance {fmt_mm(limit)}",
+                    fix="Move one of the vias to restore clearance.",
                 )
             )
 
@@ -708,6 +810,30 @@ def _copper_off_board(board: AuditBoard, profile: EffortProfile) -> list[Finding
                 fix="Reroute inside the outline.",
             )
         )
+    for via in board.vias:
+        box = _via_rect(via)
+        if board.outline.contains(box):
+            continue
+        vx, vy, _size, net = via
+        out.append(
+            _f(
+                "copper-off-board",
+                severity=Severity.BLOCKER,
+                title=f"via on {net or 'no net'} leaves the board",
+                detail=(
+                    "This via crosses Edge.Cuts. Profiling the board cuts its "
+                    "annular copper and leaves an exposed board edge."
+                ),
+                nets=(net,) if net else (),
+                extent=box,
+                point=(vx, vy),
+                evidence=(
+                    f"via bbox {fmt_mm(box.x0)},{fmt_mm(box.y0)} to "
+                    f"{fmt_mm(box.x1)},{fmt_mm(box.y1)} outside the outline"
+                ),
+                fix="Move the via inside the outline.",
+            )
+        )
     return out
 
 
@@ -914,7 +1040,7 @@ RULES: tuple[Rule, ...] = (
          "pads of different nets closer than the clearance rule",
          _pad_clearance),
     Rule("track-clearance", "clearance",
-         "tracks too close to foreign pads or tracks", _track_clearance),
+         "tracks and vias too close to foreign copper", _track_clearance),
     Rule("silkscreen-over-pad", "clearance",
          "silkscreen ink on solderable area", _silk_over_pad),
     Rule("decoupling", "practice",

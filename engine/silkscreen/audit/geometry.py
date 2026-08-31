@@ -127,11 +127,12 @@ class Seg:
 
     @property
     def bbox(self) -> Rect:
+        radius = (self.width_nm + 1) // 2
         return Rect(
-            min(self.x0, self.x1),
-            min(self.y0, self.y1),
-            max(self.x0, self.x1),
-            max(self.y0, self.y1),
+            min(self.x0, self.x1) - radius,
+            min(self.y0, self.y1) - radius,
+            max(self.x0, self.x1) + radius,
+            max(self.y0, self.y1) + radius,
         )
 
     @property
@@ -281,6 +282,223 @@ def _rotate(x: float, y: float, angle_deg: float) -> tuple[float, float]:
     return x * c + y * s, -x * s + y * c
 
 
+def _absolute_xy(
+    x: float,
+    y: float,
+    offset_x: float = 0,
+    offset_y: float = 0,
+    angle: float = 0,
+) -> tuple[int, int]:
+    x, y = _rotate(x, y, angle)
+    return int(round(offset_x + x)), int(round(offset_y + y))
+
+
+def _point_xy(
+    point: object,
+    offset_x: float = 0,
+    offset_y: float = 0,
+    angle: float = 0,
+) -> tuple[int, int]:
+    return _absolute_xy(
+        _nm(getattr(point, "X", None)),
+        _nm(getattr(point, "Y", None)),
+        offset_x,
+        offset_y,
+        angle,
+    )
+
+
+def _ccw_delta(start: float, end: float) -> float:
+    return (end - start) % math.tau
+
+
+def _arc_geometry(
+    points: list[tuple[int, int]],
+) -> tuple[float, float, float, float, float] | None:
+    """Circle and signed sweep through an arc's start, mid and end points."""
+    if len(points) != 3:
+        return None
+    (ax, ay), (bx, by), (cx, cy) = points
+    determinant = 2.0 * (ax * (by - cy) + bx * (cy - ay) + cx * (ay - by))
+    if abs(determinant) < 1e-9:
+        return None
+
+    a2 = ax * ax + ay * ay
+    b2 = bx * bx + by * by
+    c2 = cx * cx + cy * cy
+    centre_x = (a2 * (by - cy) + b2 * (cy - ay) + c2 * (ay - by)) / determinant
+    centre_y = (a2 * (cx - bx) + b2 * (ax - cx) + c2 * (bx - ax)) / determinant
+    radius = math.hypot(ax - centre_x, ay - centre_y)
+    start = math.atan2(ay - centre_y, ax - centre_x)
+    middle = math.atan2(by - centre_y, bx - centre_x)
+    end = math.atan2(cy - centre_y, cx - centre_x)
+    ccw_sweep = _ccw_delta(start, end)
+    if _ccw_delta(start, middle) <= ccw_sweep + 1e-9:
+        sweep = ccw_sweep
+    else:
+        sweep = -_ccw_delta(end, start)
+    return centre_x, centre_y, radius, start, sweep
+
+
+def _angle_on_arc(angle: float, start: float, sweep: float) -> bool:
+    if sweep >= 0:
+        return _ccw_delta(start, angle) <= sweep + 1e-9
+    return _ccw_delta(angle, start) <= -sweep + 1e-9
+
+
+def _arc_bound_points(points: list[tuple[int, int]]) -> list[tuple[int, int]]:
+    geometry = _arc_geometry(points)
+    if geometry is None:
+        return points
+    centre_x, centre_y, radius, start, sweep = geometry
+    out = list(points)
+    for angle in (0.0, math.pi / 2, math.pi, 3 * math.pi / 2):
+        if _angle_on_arc(angle, start, sweep):
+            out.append(
+                (
+                    int(round(centre_x + radius * math.cos(angle))),
+                    int(round(centre_y + radius * math.sin(angle))),
+                )
+            )
+    return out
+
+
+def _arc_path(points: list[tuple[int, int]]) -> list[tuple[int, int]]:
+    geometry = _arc_geometry(points)
+    if geometry is None:
+        return points
+    centre_x, centre_y, radius, start, sweep = geometry
+    steps = max(1, math.ceil(abs(sweep) / math.radians(5)))
+    return [
+        (
+            int(round(centre_x + radius * math.cos(start + sweep * i / steps))),
+            int(round(centre_y + radius * math.sin(start + sweep * i / steps))),
+        )
+        for i in range(steps + 1)
+    ]
+
+
+def _bezier_point(
+    points: list[tuple[int, int]], t: float
+) -> tuple[float, float]:
+    mt = 1.0 - t
+    weights = (mt**3, 3 * mt * mt * t, 3 * mt * t * t, t**3)
+    return (
+        sum(weight * point[0] for weight, point in zip(weights, points, strict=True)),
+        sum(weight * point[1] for weight, point in zip(weights, points, strict=True)),
+    )
+
+
+def _bezier_extrema(points: list[tuple[int, int]]) -> list[tuple[int, int]]:
+    if len(points) != 4:
+        return points
+    candidates = {0.0, 1.0}
+    for axis in (0, 1):
+        p0, p1, p2, p3 = (point[axis] for point in points)
+        a = -p0 + 3 * p1 - 3 * p2 + p3
+        b = 3 * p0 - 6 * p1 + 3 * p2
+        c = -3 * p0 + 3 * p1
+        qa, qb, qc = 3 * a, 2 * b, c
+        if abs(qa) < 1e-9:
+            if abs(qb) >= 1e-9:
+                root = -qc / qb
+                if 0 < root < 1:
+                    candidates.add(root)
+            continue
+        discriminant = qb * qb - 4 * qa * qc
+        if discriminant < 0:
+            continue
+        root_term = math.sqrt(discriminant)
+        for root in ((-qb - root_term) / (2 * qa), (-qb + root_term) / (2 * qa)):
+            if 0 < root < 1:
+                candidates.add(root)
+    return [
+        (int(round(x)), int(round(y)))
+        for x, y in (_bezier_point(points, t) for t in sorted(candidates))
+    ]
+
+
+def _graphic_points(
+    item: object,
+    *,
+    offset_x: float = 0,
+    offset_y: float = 0,
+    angle: float = 0,
+    path: bool = False,
+) -> list[tuple[int, int]]:
+    """Absolute points that bound, or trace, one KiCad graphic primitive."""
+    kind = type(item).__name__.lower()
+
+    def point(value: object) -> tuple[int, int]:
+        return _point_xy(value, offset_x, offset_y, angle)
+
+    if kind.endswith("line"):
+        return [point(item.start), point(item.end)]
+    if kind.endswith("rect"):
+        sx, sy = _nm(item.start.X), _nm(item.start.Y)
+        ex, ey = _nm(item.end.X), _nm(item.end.Y)
+        corners = [
+            _absolute_xy(x, y, offset_x, offset_y, angle)
+            for x, y in ((sx, sy), (ex, sy), (ex, ey), (sx, ey))
+        ]
+        return corners + [corners[0]] if path else corners
+    if kind.endswith("circle"):
+        centre, edge = point(item.center), point(item.end)
+        radius = math.hypot(edge[0] - centre[0], edge[1] - centre[1])
+        if not path:
+            return [
+                (
+                    int(round(centre[0] + dx * radius)),
+                    int(round(centre[1] + dy * radius)),
+                )
+                for dx, dy in ((-1, 0), (1, 0), (0, -1), (0, 1))
+            ]
+        return [
+            (
+                int(round(centre[0] + radius * math.cos(math.tau * i / 72))),
+                int(round(centre[1] + radius * math.sin(math.tau * i / 72))),
+            )
+            for i in range(73)
+        ]
+    if kind.endswith("arc"):
+        points = [point(item.start), point(item.mid), point(item.end)]
+        return _arc_path(points) if path else _arc_bound_points(points)
+    if kind.endswith(("poly", "curve")):
+        points = [point(value) for value in (item.coordinates or [])]
+        if kind.endswith("curve"):
+            if path and len(points) == 4:
+                return [
+                    (int(round(x)), int(round(y)))
+                    for x, y in (_bezier_point(points, i / 32) for i in range(33))
+                ]
+            return _bezier_extrema(points)
+        if path and len(points) > 1:
+            return points + [points[0]]
+        return points
+    return []
+
+
+def _graphic_width_nm(item: object) -> int:
+    stroke = getattr(item, "stroke", None)
+    if stroke is not None and getattr(stroke, "width", None) is not None:
+        return _nm(stroke.width)
+    return _nm(getattr(item, "width", None))
+
+
+def _fp_graphic_segments(
+    fp_x: float, fp_y: float, angle: float, item: object
+) -> list[Seg]:
+    points = _graphic_points(
+        item, offset_x=fp_x, offset_y=fp_y, angle=angle, path=True
+    )
+    width = _graphic_width_nm(item)
+    layer = str(getattr(item, "layer", "") or "")
+    return [
+        Seg(x0, y0, x1, y1, width_nm=width, layer=layer)
+        for (x0, y0), (x1, y1) in zip(points, points[1:], strict=False)
+    ]
+
+
 def _pad_rect(fp_x: float, fp_y: float, angle: float, pad) -> Rect:
     """Absolute bounding box of a pad, exact at 90 degree steps.
 
@@ -294,34 +512,20 @@ def _pad_rect(fp_x: float, fp_y: float, angle: float, pad) -> Rect:
     px, py = _nm(pad.position.X), _nm(pad.position.Y)
     local_angle = float(getattr(pad.position, "angle", None) or 0.0)
     total = angle + local_angle
+    centre_x, centre_y = _rotate(px, py, angle)
     corners = []
     for sx in (-hw, hw):
         for sy in (-hh, hh):
-            cx, cy = _rotate(px + sx, py + sy, total)
-            corners.append((int(round(fp_x + cx)), int(round(fp_y + cy))))
+            cx, cy = _rotate(sx, sy, total)
+            corners.append(
+                (
+                    int(round(fp_x + centre_x + cx)),
+                    int(round(fp_y + centre_y + cy)),
+                )
+            )
     box = Rect.around(corners)
     assert box is not None
     return box
-
-
-def _fp_line_abs(fp_x: float, fp_y: float, angle: float, item, net: str = "") -> Seg:
-    sx, sy = _rotate(_nm(item.start.X), _nm(item.start.Y), angle)
-    ex, ey = _rotate(_nm(item.end.X), _nm(item.end.Y), angle)
-    width = 0
-    stroke = getattr(item, "stroke", None)
-    if stroke is not None and getattr(stroke, "width", None):
-        width = _nm(stroke.width)
-    elif getattr(item, "width", None):
-        width = _nm(item.width)
-    return Seg(
-        x0=int(round(fp_x + sx)),
-        y0=int(round(fp_y + sy)),
-        x1=int(round(fp_x + ex)),
-        y1=int(round(fp_y + ey)),
-        width_nm=width,
-        layer=str(getattr(item, "layer", "") or ""),
-        net=net,
-    )
 
 
 def _reference_of(fp) -> str:
@@ -390,13 +594,12 @@ def load_audit_board(path: str | Path) -> AuditBoard:
         silk: list[Seg] = []
         for item in fp.graphicItems or []:
             layer = str(getattr(item, "layer", "") or "")
-            if not hasattr(item, "start") or not hasattr(item, "end"):
-                continue
-            seg = _fp_line_abs(fx, fy, angle, item)
             if layer.endswith(".CrtYd"):
-                courtyard_pts += [(seg.x0, seg.y0), (seg.x1, seg.y1)]
+                courtyard_pts.extend(
+                    _graphic_points(item, offset_x=fx, offset_y=fy, angle=angle)
+                )
             elif layer.endswith(".SilkS"):
-                silk.append(seg)
+                silk.extend(_fp_graphic_segments(fx, fy, angle, item))
 
         parts.append(
             AuditPart(
@@ -443,10 +646,7 @@ def load_audit_board(path: str | Path) -> AuditBoard:
     for item in raw.graphicItems or []:
         if not str(getattr(item, "layer", "")).startswith("Edge.Cuts"):
             continue
-        for attr in ("start", "end", "position"):
-            point = getattr(item, attr, None)
-            if point is not None:
-                edge_pts.append((_nm(point.X), _nm(point.Y)))
+        edge_pts.extend(_graphic_points(item))
 
     return AuditBoard(
         parts=parts,

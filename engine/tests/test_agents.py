@@ -25,6 +25,13 @@ from silkscreen.netlist import parse_circuit_spec
 
 # ---------------------------------------------------------------- fixtures
 
+
+# This file is the SDK driver's suite; the ADK driver's is test_adk.py.
+@pytest.fixture(autouse=True)
+def _pin_sdk_engine(monkeypatch):
+    monkeypatch.setenv("SILKSCREEN_ENGINE", "sdk")
+
+
 GOOD_CIRCUIT = {
     "devices": {
         "AMS1117-3.3": {"pins": {"GND": "1", "VOUT": "2", "VIN": "3"}},
@@ -335,10 +342,15 @@ def test_events_trace_every_stage_and_model_call(tmp_path):
         "stage.start", "read.part", "model.call", "stage.done",
         "stage.start", "model.call", "stage.done",
         "stage.start", "stage.done",
+        "stage.start", "stage.done",
+        "stage.start", "stage.done",
         "stage.start", "model.call", "stage.done",
     ]
+    # Schematic and route are stages like any other: each opens and closes, so
+    # a client ticking a stage list never sees a close it has no open for.
     assert [e["stage"] for e in events if e["event"].startswith("stage.")] == [
-        "read", "read", "propose", "propose", "place", "place", "review", "review",
+        "read", "read", "propose", "propose", "place", "place",
+        "schematic", "schematic", "route", "route", "review", "review",
     ]
     assert all(isinstance(e["t_s"], (int, float)) for e in events)
     assert len([e for e in events if e["event"] == "model.call"]) == len(model.calls)
@@ -351,6 +363,33 @@ def test_events_trace_every_stage_and_model_call(tmp_path):
         assert "kicad_pcb" not in event
         for value in event.values():
             assert not (isinstance(value, str) and len(value) > 500)
+
+
+def test_the_event_name_set_is_frozen(tmp_path):
+    """Every event name a client can be sent, in one assertion.
+
+    ``frontend/src/lib/stream.js`` switches on these strings to turn a frame
+    into a sentence, so a renamed or added event is a silent regression over
+    there rather than a failure here -- unless this set is what has to change.
+    """
+    broken = json.loads(json.dumps(GOOD_CIRCUIT))
+    broken["nets"]["GND"] = ["AMS1117-3.3.GND", "DRV8837.GND"]
+    # One datasheet and one repair round, so every unconditional event fires.
+    model = ScriptedModel(responses=[
+        json.dumps(DATASHEET_JSON), json.dumps(broken), json.dumps(GOOD_CIRCUIT),
+        json.dumps({"findings": []}),
+    ])
+    events = []
+    generate_pcb(model, "a 3.3V motor driver board",
+                 datasheets={"AMS1117-3.3": "https://x/ams1117.pdf"},
+                 output=tmp_path / "b.kicad_pcb",
+                 time_limit_s=10.0, on_event=events.append)
+
+    assert {e["event"] for e in events} == {
+        "stage.start", "stage.done", "read.part", "propose.round", "model.call",
+    }
+    # The two conditional names have their own tests here: model.response fires
+    # only under include_responses, model.retry only behind a failover model.
 
 
 def test_response_events_carry_each_answer_verbatim(tmp_path):
@@ -490,3 +529,58 @@ def test_events_surface_a_provider_failover(tmp_path):
     calls = [e for e in events if e["event"] == "model.call"]
     assert len(calls) == 1
     assert calls[0]["ok"] and calls[0]["provider"] == "backup"
+
+
+def test_the_project_files_sit_beside_a_dotted_board_name(tmp_path):
+    """The .kicad_pro must name the board that is actually there.
+
+    Stripping every suffix turned "revision.2.kicad_pcb" into the stem
+    "revision", so the project and the schematic landed next to a board file
+    they did not describe -- and opening the advertised project found no board.
+    """
+    out = tmp_path / "revision.2.kicad_pcb"
+    result = generate_pcb(
+        _scripted_pipeline_model(),
+        "a 3.3V motor driver board",
+        datasheets={"AMS1117-3.3": "https://x/ams1117.pdf"},
+        output=out,
+        time_limit_s=15.0,
+    )
+
+    assert [p.name for p in result.artifacts] == [
+        "revision.2.kicad_pro",
+        "revision.2.kicad_sch",
+        "revision.2.placed.kicad_pcb",
+        "revision.2.kicad_pcb",
+    ]
+    assert all(p.exists() for p in result.artifacts)
+
+
+def test_routing_can_be_turned_off_without_losing_the_board(tmp_path):
+    """--no-route leaves a placed board with pads on nets and empty copper."""
+    out = tmp_path / "board.kicad_pcb"
+    result = generate_pcb(
+        _scripted_pipeline_model(),
+        "a 3.3V motor driver board",
+        datasheets={"AMS1117-3.3": "https://x/ams1117.pdf"},
+        output=out,
+        time_limit_s=15.0,
+        route=False,
+    )
+    assert result.route is None
+    assert result.board.tracks == []
+    assert out.exists()
+
+
+def test_board_only_writes_the_board_and_nothing_else(tmp_path):
+    out = tmp_path / "board.kicad_pcb"
+    result = generate_pcb(
+        _scripted_pipeline_model(),
+        "a 3.3V motor driver board",
+        datasheets={"AMS1117-3.3": "https://x/ams1117.pdf"},
+        output=out,
+        time_limit_s=15.0,
+        emit_stages=False,
+    )
+    assert result.artifacts == [out]
+    assert list(tmp_path.iterdir()) == [out]

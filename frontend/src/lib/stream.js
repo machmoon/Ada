@@ -42,6 +42,7 @@ const STAGE_START = {
   read: () => 'reading datasheets…',
   propose: () => 'proposing a circuit…',
   place: (e) => `placing with CP-SAT${budgetOf(e.time_limit_s)}…`,
+  route: () => 'routing the copper…',
   review: () => 'adversarial review…',
 }
 
@@ -66,6 +67,18 @@ const STAGE_DONE = {
       warnings > 0 ? formatCount(warnings, 'warning') : '',
     ].filter(Boolean)
     return clauses.length ? `placed: ${clauses.join(', ')}` : 'placed'
+  },
+
+  route: (e) => {
+    const routed = countOf(e.routed_nets)
+    const unrouted = countOf(e.unrouted_nets)
+    // Say the unfinished count out loud. A net left as ratsnest is invisible
+    // until fabrication, and "routed" with nothing after it reads as done.
+    const clauses = [`${routed}/${routed + unrouted} nets`]
+    if (countOf(e.tracks) > 0) clauses.push(formatCount(countOf(e.tracks), 'track'))
+    if (countOf(e.vias) > 0) clauses.push(formatCount(countOf(e.vias), 'via'))
+    if (unrouted > 0) clauses.push(`${unrouted} left unrouted`)
+    return `routed: ${clauses.join(', ')}`
   },
 
   review: (e) => {

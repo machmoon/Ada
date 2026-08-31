@@ -18,7 +18,7 @@ repeated in its badge, so the picture keeps the split the report makes.
 
 from __future__ import annotations
 
-from xml.sax.saxutils import escape
+from xml.sax.saxutils import escape, quoteattr
 
 from ..units import NM_PER_MM
 from .effort import Effort
@@ -217,7 +217,7 @@ def render_svg(
     out.append('<g id="parts">')
     for part in board.parts:
         out.append(
-            f'<g data-ref="{escape(part.ref)}" class="part">'
+            f'<g data-ref={quoteattr(part.ref)} class="part">'
         )
         if part.courtyard is not None:
             out.append(
@@ -254,7 +254,7 @@ def render_svg(
         out.append(
             f'<g class="finding sev-{finding.severity.value} '
             f'origin-{finding.origin.value}" data-finding="{finding.id}" '
-            f'data-refs="{escape(" ".join(finding.refs))}">'
+            f'data-refs={quoteattr(" ".join(finding.refs))}>'
         )
         box = finding.extent
         if box is not None:

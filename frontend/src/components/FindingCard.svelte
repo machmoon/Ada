@@ -7,8 +7,10 @@
   let {
     finding,
     selected = false,
+    schematicEnabled = false,
     boardEnabled = false,
     onselect = null,
+    onshowschematic = null,
     onshowboard = null,
   } = $props()
 
@@ -48,11 +50,14 @@
 
   {#if finding.detail}<p class="detail">{finding.detail}</p>{/if}
 
-  {#if citation || fix || (selectable && boardEnabled)}
+  {#if citation || fix || (selectable && (schematicEnabled || boardEnabled))}
     <div class="footer" data-testid="finding-card-footer">
       <Citation {citation} />
+      {#if selectable && schematicEnabled}
+        <button type="button" class="view" data-testid="finding-card-show-schematic" onclick={onshowschematic}>Show on schematic</button>
+      {/if}
       {#if selectable && boardEnabled}
-        <button type="button" class="board" data-testid="finding-card-show-board" onclick={onshowboard}>Show on board</button>
+        <button type="button" class="view" data-testid="finding-card-show-board" onclick={onshowboard}>Show on board</button>
       {/if}
       <div class="spacer"></div>
       {#if fix}
@@ -119,7 +124,7 @@
   }
   .spacer { flex-grow: 1; }
 
-  .fix, .board {
+  .fix, .view {
     font-size: 12px;
     padding: 6px 13px;
     background: transparent;
@@ -128,5 +133,5 @@
     border-radius: var(--radius);
     text-align: left;
   }
-  .board { white-space: nowrap; }
+  .view { white-space: nowrap; }
 </style>

@@ -81,7 +81,23 @@ def _footprint(ref, x, y, *, pads, courtyard=None, silk=()):
     return "\n".join(lines)
 
 
-def _board_text(footprints, nets, *, outline=(0, 0, 30, 30), segments=()):
+def _footprint_with_graphic(graphic, *, at="10 10"):
+    return "\n".join(
+        [
+            '  (footprint "test:U1_FP"',
+            '    (layer "F.Cu")',
+            f"    (at {at})",
+            '    (property "Reference" "U1" (at 0 -1 0) (layer "F.SilkS")',
+            "      (effects (font (size 0.8 0.8) (thickness 0.12))))",
+            f"    {graphic}",
+            "  )",
+        ]
+    )
+
+
+def _board_text(
+    footprints, nets, *, outline=(0, 0, 30, 30), segments=(), vias=()
+):
     out = [_HEADER]
     out.append('  (net 0 "")')
     for index, name in enumerate(nets, start=1):
@@ -101,6 +117,11 @@ def _board_text(footprints, nets, *, outline=(0, 0, 30, 30), segments=()):
         out.append(
             f"  (segment (start {sx} {sy}) (end {ex} {ey}) (width {width})"
             f' (layer "F.Cu") (net {net_index}))'
+        )
+    for x, y, size, drill, net_index in vias:
+        out.append(
+            f"  (via (at {x} {y}) (size {size}) (drill {drill})"
+            f' (layers "F.Cu" "B.Cu") (net {net_index}))'
         )
     out.append(")")
     return "\n".join(out) + "\n"
@@ -146,6 +167,129 @@ def overlapping_board(tmp_path):
     c1 = _footprint("C1", 10, 8, pads=[_pad("1", 0, 0, 1, 1, 1, "SIG")],
                     courtyard=(2, 2))
     return _write(tmp_path, _board_text([u1, c1], ["SIG"]))
+
+
+# --------------------------------------------------------------------------
+# independent geometry reader
+# --------------------------------------------------------------------------
+
+
+def test_pad_local_rotation_rotates_shape_without_moving_centre(tmp_path):
+    footprint = "\n".join(
+        [
+            '  (footprint "test:U1_FP"',
+            '    (layer "F.Cu")',
+            "    (at 10 10 90)",
+            '    (property "Reference" "U1" (at 0 -1 0) (layer "F.SilkS")',
+            "      (effects (font (size 0.8 0.8) (thickness 0.12))))",
+            '    (pad "1" smd rect (at 2 0 90) (size 4 2)',
+            '      (layers "F.Cu" "F.Paste" "F.Mask"))',
+            "  )",
+        ]
+    )
+    board = load_audit_board(_write(tmp_path, _board_text([footprint], [])))
+    pad = board.parts[0].pads[0]
+    assert (pad.rect.x0, pad.rect.y0, pad.rect.x1, pad.rect.y1) == (
+        8_000_000,
+        7_000_000,
+        12_000_000,
+        9_000_000,
+    )
+    assert pad.centre == (10_000_000, 8_000_000)
+
+
+@pytest.mark.parametrize(
+    ("graphic", "expected"),
+    [
+        (
+            '(fp_circle (center 0 0) (end 2 0) (stroke (width 0.05) '
+            '(type solid)) (fill none) (layer "F.CrtYd"))',
+            (8_000_000, 8_000_000, 12_000_000, 12_000_000),
+        ),
+        (
+            '(fp_arc (start -2 0) (mid 0 -2) (end 2 0) '
+            '(stroke (width 0.05) (type solid)) (layer "F.CrtYd"))',
+            (8_000_000, 8_000_000, 12_000_000, 10_000_000),
+        ),
+        (
+            '(fp_poly (pts (xy -2 -1) (xy 2 -1) (xy 1 2)) '
+            '(stroke (width 0.05) (type solid)) (fill none) '
+            '(layer "F.CrtYd"))',
+            (8_000_000, 9_000_000, 12_000_000, 12_000_000),
+        ),
+        (
+            '(fp_curve (pts (xy -2 0) (xy -1 -2) (xy 1 -2) (xy 2 0)) '
+            '(stroke (width 0.05) (type solid)) (layer "F.CrtYd"))',
+            (8_000_000, 8_500_000, 12_000_000, 10_000_000),
+        ),
+    ],
+)
+def test_non_line_footprint_graphics_bound_courtyard(tmp_path, graphic, expected):
+    footprint = _footprint_with_graphic(graphic)
+    board = load_audit_board(_write(tmp_path, _board_text([footprint], [])))
+    courtyard = board.parts[0].courtyard
+    assert courtyard is not None
+    assert (courtyard.x0, courtyard.y0, courtyard.x1, courtyard.y1) == expected
+
+
+def test_rotated_rect_courtyard_uses_all_four_corners(tmp_path):
+    graphic = (
+        '(fp_rect (start -2 -1) (end 2 1) (stroke (width 0.05) '
+        '(type solid)) (fill none) (layer "F.CrtYd"))'
+    )
+    footprint = _footprint_with_graphic(graphic, at="10 10 45")
+    board = load_audit_board(_write(tmp_path, _board_text([footprint], [])))
+    courtyard = board.parts[0].courtyard
+    assert courtyard is not None
+    assert (courtyard.x0, courtyard.y0, courtyard.x1, courtyard.y1) == (
+        7_878_680,
+        7_878_680,
+        12_121_320,
+        12_121_320,
+    )
+
+
+@pytest.mark.parametrize(
+    ("graphic", "expected"),
+    [
+        (
+            '(gr_rect (start 2 3) (end 8 9) (stroke (width 0.1) '
+            '(type solid)) (fill none) (layer "Edge.Cuts"))',
+            (2_000_000, 3_000_000, 8_000_000, 9_000_000),
+        ),
+        (
+            '(gr_circle (center 5 5) (end 8 5) (stroke (width 0.1) '
+            '(type solid)) (fill none) (layer "Edge.Cuts"))',
+            (2_000_000, 2_000_000, 8_000_000, 8_000_000),
+        ),
+        (
+            '(gr_arc (start 2 5) (mid 5 2) (end 8 5) '
+            '(stroke (width 0.1) (type solid)) (layer "Edge.Cuts"))',
+            (2_000_000, 2_000_000, 8_000_000, 5_000_000),
+        ),
+        (
+            '(gr_poly (pts (xy 2 3) (xy 8 4) (xy 6 9)) '
+            '(stroke (width 0.1) (type solid)) (fill none) '
+            '(layer "Edge.Cuts"))',
+            (2_000_000, 3_000_000, 8_000_000, 9_000_000),
+        ),
+        (
+            '(gr_curve (pts (xy 2 5) (xy 3 2) (xy 7 2) (xy 8 5)) '
+            '(stroke (width 0.1) (type solid)) (layer "Edge.Cuts"))',
+            (2_000_000, 2_750_000, 8_000_000, 5_000_000),
+        ),
+    ],
+)
+def test_non_line_board_graphics_bound_outline(tmp_path, graphic, expected):
+    text = _HEADER + '  (net 0 "")\n  ' + graphic + "\n)\n"
+    board = load_audit_board(_write(tmp_path, text))
+    assert board.outline is not None
+    assert (
+        board.outline.x0,
+        board.outline.y0,
+        board.outline.x1,
+        board.outline.y1,
+    ) == expected
 
 
 # --------------------------------------------------------------------------
@@ -306,6 +450,75 @@ def test_pads_of_different_parts_too_close_are_reported(tmp_path):
     assert "0.100 mm" in close[0].evidence
 
 
+def test_track_width_counts_when_checking_copper_at_board_edge(tmp_path):
+    path = _write(
+        tmp_path,
+        _board_text(
+            [],
+            ["SIG"],
+            outline=(0, 0, 10, 10),
+            segments=[(1, 5, 10, 5, 0.4, 1)],
+        ),
+    )
+    result = review_board(path, effort=Effort.STANDARD, model=None)
+    off_board = [f for f in result.findings if f.rule == "copper-off-board"]
+    assert len(off_board) == 1
+    assert off_board[0].extent.x1 == 10_200_000
+
+
+def test_foreign_via_touching_track_is_a_clearance_blocker(tmp_path):
+    path = _write(
+        tmp_path,
+        _board_text(
+            [],
+            ["A", "B"],
+            outline=(0, 0, 10, 10),
+            segments=[(2, 5, 8, 5, 0.2, 1)],
+            vias=[(5, 5, 0.6, 0.3, 2)],
+        ),
+    )
+    result = review_board(path, effort=Effort.STANDARD, model=None)
+    clashes = [f for f in result.findings if f.rule == "via-track-clearance"]
+    assert len(clashes) == 1
+    assert clashes[0].severity is Severity.BLOCKER
+
+
+def test_via_radius_counts_when_checking_copper_at_board_edge(tmp_path):
+    path = _write(
+        tmp_path,
+        _board_text(
+            [],
+            ["SIG"],
+            outline=(0, 0, 10, 10),
+            vias=[(9.9, 5, 0.6, 0.3, 1)],
+        ),
+    )
+    result = review_board(path, effort=Effort.STANDARD, model=None)
+    off_board = [f for f in result.findings if f.rule == "copper-off-board"]
+    assert len(off_board) == 1
+    assert off_board[0].extent.x1 == 10_200_000
+
+
+def test_via_can_connect_smd_pad_directly_to_opposite_layer_track(tmp_path):
+    top = _footprint(
+        "U1", 5, 5, pads=[_pad("1", 0, 0, 1, 1, 1, "SIG")], courtyard=(1, 1)
+    )
+    bottom_pad = _pad("1", 0, 0, 1, 1, 1, "SIG").replace("F.Cu", "B.Cu")
+    bottom = _footprint(
+        "R1", 15, 5, pads=[bottom_pad], courtyard=(1, 1)
+    ).replace('(layer "F.Cu")', '(layer "B.Cu")', 1)
+    text = _board_text([top, bottom], ["SIG"], outline=(0, 0, 20, 10))
+    text = text[:-2] + """
+  (via (at 5 5) (size 0.6) (drill 0.3) (layers "F.Cu" "B.Cu") (net 1))
+  (segment (start 5 5) (end 15 5) (width 0.2) (layer "B.Cu") (net 1))
+)
+"""
+    result = review_board(
+        _write(tmp_path, text), effort=Effort.QUICK, model=None
+    )
+    assert [f for f in result.findings if f.rule == "net-not-connected"] == []
+
+
 def test_decoupling_distance_tightens_with_effort(tmp_path):
     """The same board, two levels: 2.5 mm passes at standard, fails at deep."""
     pads = [
@@ -455,6 +668,18 @@ def test_deep_effort_keeps_a_claim_that_survives(overlapping_board):
     assert len(result.suggested) == 1
     assert result.suggested[0].checks
     assert "survived" in result.suggested[0].checks[0]
+
+
+@pytest.mark.parametrize("verdict", ["not JSON", '{"refuted": "false"}'])
+def test_deep_effort_drops_claim_when_refutation_is_invalid(
+    overlapping_board, verdict
+):
+    model = ScriptedModel(
+        by_marker={"REFUTE": verdict, "reviewing a PCB": _JUDGMENT}
+    )
+    result = review_board(overlapping_board, effort=Effort.DEEP, model=model)
+    assert result.suggested == []
+    assert any("0 of" in entry for entry in result.model_passes)
 
 
 def test_a_model_failure_loses_only_the_model_half(overlapping_board):

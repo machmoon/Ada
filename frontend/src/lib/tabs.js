@@ -12,10 +12,11 @@ export function parseTab(hash) {
   return TABS.includes(name) ? name : ''
 }
 
-/** The tab actually shown. Board falls back to the review until a run carries
-    placements, and Schematic is not built at all, so it never resolves. */
-export function resolveTab(hash, { board = false } = {}) {
+/** The tab actually shown. Drawing tabs fall back to review until the current
+    run carries a contract each renderer accepts. */
+export function resolveTab(hash, { schematic = false, board = false } = {}) {
   const name = parseTab(hash)
+  if (name === 'schematic' && schematic) return 'schematic'
   if (name === 'board' && board) return 'board'
   return 'review'
 }

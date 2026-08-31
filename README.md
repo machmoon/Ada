@@ -4,35 +4,71 @@
 layout back — with the reasoning shown and every claim cited.**
 
 Silkscreen reads the datasheets, proposes a circuit, refuses to build it if it does
-not validate, generates the footprints, places the board with a CP-SAT solver, writes
-a real `.kicad_pcb`, and then argues against its own design and tells you what it
-thinks is wrong.
+not validate, **draws a schematic**, generates the footprints, places the board with a
+CP-SAT solver, **routes the copper**, and then argues against its own design and tells
+you what it thinks is wrong.
+
+**Silkscreen is a Python program you run.** The command line is the product; the web UI
+is a viewer for what it produced, and is the less-supported path — see
+[Which interface](#which-interface).
 
 ```bash
 python -m silkscreen "a 3.3V motor driver around an STM32F103" -o board.kicad_pcb
 ```
 
+One run leaves you a KiCad project, one file per stage:
+
 ```
-380 passed — no network, no API key, no KiCad install
+wrote board.kicad_pro          ← open this in KiCad
+wrote board.kicad_sch          ← the schematic
+wrote board.placed.kicad_pcb   ← after placement, before any copper
+wrote board.kicad_pcb          ← routed
 ```
+
+Every stage is a real KiCad file you can open and inspect on its own, so you can see
+where a design went wrong instead of only seeing the last artifact.
+
+```
+467 passed — no network, no API key, no KiCad install
+```
+
+---
+
+## Which interface
+
+| | `python -m silkscreen` *(recommended)* | Web UI |
+|---|---|---|
+| Schematic (`.kicad_sch`) | ✅ | ❌ not surfaced |
+| Routed copper | ✅ | ✅ in the downloaded file only — the board well draws placement, not tracks |
+| Per-stage files you can open | ✅ | ❌ final board only |
+| KiCad project (`.kicad_pro`) | ✅ | ❌ |
+| Adversarial review, findings, citations | ✅ text | ✅ nicer to read |
+
+**The CLI is the supported path.** The web UI (`service/` + `frontend/`) is a review
+viewer built around the one artifact the pipeline used to produce, and it has not
+caught up with schematics or routing: it shows a placement diagram and hands you the
+final `.kicad_pcb`. Use it to read a review; use the CLI to design a board.
 
 ---
 
 ## Do I need KiCad?
 
-**Not to run Silkscreen. Yes to open what it makes.**
+**Not to run Silkscreen. Yes, strongly recommended, to do anything with what it makes.**
 
-Silkscreen writes the `.kicad_pcb` format itself, so nothing in the pipeline shells
-out to KiCad, imports `pcbnew`, or touches your mouse. But a board file is not much
-use if you cannot look at it — so install KiCad unless you have a reason not to.
+Silkscreen writes the KiCad formats itself, so nothing in the pipeline shells out to
+KiCad, imports `pcbnew`, or touches your mouse. But the output *is* a KiCad project,
+and without KiCad you have files you cannot open, check, or fabricate. Silkscreen's
+router leaves hard nets unrouted on purpose and tells you which — finishing them is
+work you do in KiCad. Install it unless you have a specific reason not to.
 
-| | Without KiCad | With KiCad *(recommended)* |
+| | Without KiCad | With KiCad *(strongly recommended)* |
 |---|---|---|
-| Generate a board from a prompt | ✅ | ✅ |
+| Generate a schematic and a routed board from a prompt | ✅ | ✅ |
 | Run the test suite | ✅ | ✅ |
 | Deploy the service, use the MCP server | ✅ | ✅ |
-| **See the board** | ❌ | ✅ |
-| **Edit, route, and run DRC on it** | ❌ | ✅ |
+| **See the schematic and the board** | ❌ | ✅ |
+| **Finish the nets the router left unrouted** | ❌ | ✅ |
+| **Run DRC and electrical rules check** | ❌ | ✅ |
 | **Export Gerbers and get it fabricated** | ❌ | ✅ |
 
 Skip KiCad if you are running Silkscreen in CI, on a server, or inside another tool
@@ -46,15 +82,18 @@ that consumes the file. Install it if you are a person who wants to see a board.
 |---|---|
 | `kicad.py` — `.kicad_pcb` read/write | **Working** · 28 tests |
 | `packing.py` — CP-SAT placer | **Working** · 43 tests |
-| `netlist.py` — validated circuit IR | **Working** · 15 tests |
+| `netlist.py` — validated circuit IR | **Working** · 21 tests |
+| `schematic.py` — `.kicad_sch` + `.kicad_pro` emission | **Working** · 20 tests · KiCad ERC clean |
+| `routing.py` — two-layer grid autorouter | **Working, partial by design** · 20 tests — see below |
 | `footprints.py` + `board.py` — land patterns, board emission | **Working** · 20 tests |
-| `agents/` — datasheet, propose, review, pipeline | **Working** · 30 tests |
+| `agents/` — datasheet, propose, review, pipeline | **Working** · 34 tests |
+| `agents/adk/` — ADK dynamic-workflow driver for the pipeline | **Working** · 18 tests |
 | `agents/retrieval.py` — page-cited datasheet retrieval | **Working** · 15 tests |
 | `agents/resilience.py` — provider failover | **Working** · 14 tests |
 | `mcp/` — MCP server over stdio | **Working** · 23 tests |
-| `audit/` — optional visual design review | **Working** · 35 tests |
-| `service/` — Cloud Run + Firestore cache | **Working** · 81 tests |
-| `frontend/` — Svelte review UI, served by the service | **Working** · review and board tabs, with an in-app debug console for log export |
+| `audit/` — optional visual design review | **Working** · 52 tests |
+| `service/` — Cloud Run + Firestore cache | **Working** · 83 tests |
+| `frontend/` — Svelte review UI, served by the service | **Working** · review, schematic and board tabs, with an in-app debug console for log export |
 | Overlay UI, guided cursor | Not built (mockups only) |
 
 ---
@@ -66,7 +105,7 @@ that consumes the file. Install it if you are a person who wants to see a board.
 ```bash
 git clone https://github.com/machmoon/silkscreen && cd silkscreen
 python3 -m venv .venv
-./.venv/bin/pip install -e ".[dev,agents]"
+./.venv/bin/pip install -e ".[dev,agents,adk]"
 ```
 
 **2. A Gemini key**, for the prompt-to-PCB path. The engine and the whole test suite
@@ -100,20 +139,27 @@ python -m silkscreen "a 3.3V motor driver board around an STM32F030" \
 ```
 
 ```
-intent ──► datasheets ──► propose ──► validate/repair ──► place ──► .kicad_pcb
-                                          │                            │
-                                          └────────► review ───────────┘
+intent ─► datasheets ─► propose ─► validate/repair ─► .kicad_sch ─► place ─► route ─► .kicad_pcb
+                                        │                                               │
+                                        └──────────────► review ────────────────────────┘
 ```
 
-| Stage | Module |
-|---|---|
-| Datasheet reading (Gemini native PDF vision) | `agents/datasheet.py` |
-| Retrieval over datasheet text, page-cited | `agents/retrieval.py` |
-| Circuit proposal into the IR | `agents/propose.py` |
-| Validation + bounded repair loop | `netlist.py` |
-| Footprint generation, board emission | `footprints.py`, `board.py` |
-| Placement | `packing.py` |
-| Adversarial review | `agents/review.py` |
+| Stage | Module | Artifact |
+|---|---|---|
+| Datasheet reading (Gemini native PDF vision) | `agents/datasheet.py` | |
+| Retrieval over datasheet text, page-cited | `agents/retrieval.py` | |
+| Circuit proposal into the IR | `agents/propose.py` | |
+| Validation + bounded repair loop | `netlist.py` | |
+| Schematic drawing | `schematic.py` | `.kicad_sch`, `.kicad_pro` |
+| Footprint generation, board emission | `footprints.py`, `board.py` | |
+| Placement | `packing.py` | `.placed.kicad_pcb` |
+| Copper routing | `routing.py` | `.kicad_pcb` |
+| Adversarial review | `agents/review.py` | |
+
+The schematic and the board are drawn by two emitters from one `CircuitSpec`, and both
+take their reference designators from `CircuitSpec.assign_refs()` — so `C1` on the
+drawing is `C1` on the board. Numbering them separately would give two files that are
+each internally consistent and describe different circuits.
 
 Two gates sit between the model and the board.
 
@@ -123,11 +169,60 @@ bounded and `result.repair_rounds` reports how many corrections it took.
 
 **Semantic.** A reviewer re-reads the datasheets and is prompted to *refute* the
 design — an agent asked "is this correct?" says yes. Findings are graded
-blocker / marginal / note and cite the datasheet page. Findings naming parts that
-aren't on the board are dropped rather than surfaced.
+blocker / marginal / note and cite the datasheet page. A part reference the circuit
+does not contain is stripped out of the finding that named it; the finding itself
+is still shown.
 
 Everything below `agents/` is model-free and network-free, so the whole pipeline —
 including its failure paths — is tested against a scripted model with no API key.
+
+### Drawing the schematic
+
+`schematic.py` renders the validated `CircuitSpec` as a KiCad 8 `.kicad_sch`, plus the
+`.kicad_pro` that ties the schematic and the board together as one project.
+
+Symbols are **generated, not looked up**. The file carries its own `lib_symbols` block,
+the same way `footprints.py` generates land patterns rather than reading a library — so
+it opens on a machine with no KiCad symbol libraries installed, and cannot silently
+resolve to a different part than the one it was drawn for. Each passive type gets its
+own body: a schematic whose crystals are drawn as capacitors reads as correct and
+is not.
+
+Connections are a short wire stub from each pin to a **net label**, which is ordinary
+KiCad practice and electrically identical to point-to-point wires. The netlist KiCad
+extracts from the sheet is the netlist the board was built from, and a pin on no net
+gets no stub and no label rather than a wire to nowhere.
+
+### Routing the copper
+
+`routing.py` is a two-layer grid maze router: A* over a uniform lattice with an explicit
+via cost, nets routed one at a time, each net grown outward from its first terminal so
+later pins join the nearest point of the tree already laid.
+
+**It is not a competitive autorouter, and the output says so.** A uniform grid cannot
+reach every pin of a fine-pitch package, and a sequential router paints itself into
+corners a rip-up-and-retry router escapes. So the contract is honesty rather than
+completeness — every net it cannot finish is **named**, with the reason:
+
+```
+Routing: 11/13 nets routed, 47 tracks, 6 vias, 214.3 mm of copper
+  unrouted SPI1_SCK: no clear path to one of its 3 pads; the channel is blocked
+  unrouted VDDA: only 1 distinct grid node(s) among its pads; the routing grid is
+                 too coarse for this footprint
+```
+
+Unrouted nets stay as ratsnest in KiCad, for you to finish. A net is all-or-nothing:
+half a net's tracks laid down would give a board that looks routed everywhere you
+happen to look. Defaults are 0.2 mm tracks, 0.2 mm clearance, 0.4/0.2 mm vias, on a
+0.25 mm lattice.
+
+Rotated footprints are **refused** rather than approximated, because `board.py` has a
+recorded, unfixed bug in the anchor it writes for a rotated part — routing to those
+coordinates would turn a latent placement bug into copper landing on bare laminate.
+Nothing sets rotation today.
+
+`--no-route` stops after placement, which is what every run produced before this
+existed.
 
 ### Generating footprints
 
@@ -158,7 +253,7 @@ treats the board file as the interface.
 | Requires KiCad running | Yes | **No** |
 | Headless / CI | Hard | **Native** |
 | Platform lock | KiCad's plugin loader | **None — pure Python** |
-| Testable without KiCad | No | **Yes, all 380 tests** |
+| Testable without KiCad | No | **Yes, all 467 tests** |
 
 ### What it reads
 
@@ -263,8 +358,9 @@ gcloud run deploy silkscreen --source . --region us-central1 \
 ```
 
 `POST /generate` with `{"intent": "...", "datasheets": {"PART": "url"}}` returns
-the board plus the emitted `.kicad_pcb`. Extracted datasheet facts persist to
-Firestore, so the second request for a part skips the most expensive stage.
+the board, the emitted `.kicad_pcb`, and a versioned `schematic` topology block
+with stable part ids, board refs, pins and structured net endpoints. Extracted
+datasheet facts persist to Firestore, so the second request for a part skips the most expensive stage.
 `GET /healthz` is the readiness probe. The container also serves the built review
 UI at `/`, same origin as `/generate`, so there is no CORS anywhere.
 
@@ -292,11 +388,14 @@ The UI has its own suite, which CI runs before the build:
 cd frontend && npm test  # Vitest over frontend/src/lib
 ```
 
-A run lands on the review, and the **Board** tab draws the board the placer
+A run lands on the review. The **Schematic** tab draws the validated circuit as
+generic IC and passive symbols with physical pin numbers and net-labelled
+connections; it deliberately does not claim to be a native `.kicad_sch` or a
+library-accurate symbol sheet. The **Board** tab draws the board the placer
 actually produced — courtyard outlines, copper pads, and part refs, straight
 from the `placements` the service returns. Selecting a finding highlights the
-parts it names on that board, and either pane will hand you the emitted
-`.kicad_pcb` as a download.
+parts it names in either drawing, and the board and review panes will hand you
+the emitted `.kicad_pcb` as a download.
 
 ### As an MCP server
 
@@ -448,15 +547,21 @@ engine/
     netlist.py    validated circuit IR
     footprints.py parametric IPC-7351 land patterns
     board.py      emit a .kicad_pcb from a circuit
+    schematic.py  emit a .kicad_sch and the .kicad_pro that ties them
+    routing.py    two-layer A* copper router
     kicad.py      read/modify an existing .kicad_pcb via kiutils
+    ids.py        stable UUIDs, so two runs diff cleanly
     cli.py        python -m silkscreen "..."
     agents/       the only place a model call happens
       model.py      provider seam + scripted stand-in for tests
       datasheet.py  PDF -> structured facts, with page citations
       propose.py    intent -> circuit, with a bounded repair loop
       review.py     adversarial design review
+      stages.py     the six stage bodies, shared by both drivers
       pipeline.py   prompt -> PCB
-  tests/          380 tests — no network, no API keys, no KiCad
+      adk/          ADK dynamic workflow over the same stage bodies
+    audit/        optional visual review of a finished board
+  tests/          467 tests — no network, no API keys, no KiCad
     fixtures/     ref.kicad_pcb -- 11-footprint board fixture
 scripts/
   demo.py         end-to-end: read -> place -> write -> verify
@@ -509,7 +614,7 @@ the test suite and the demo both run fully offline.
 git clone https://github.com/machmoon/silkscreen.git
 cd silkscreen
 python3 -m venv .venv
-./.venv/bin/pip install -e ".[dev,agents,cloud]"
+./.venv/bin/pip install -e ".[dev,agents,cloud,adk]"
 ```
 
 Then run the same four Python checks CI runs, in the same order:
@@ -536,10 +641,10 @@ docker build .                                      # the `docker` job
 
 ### Expected output
 
-**1. Test suite** — 380 tests, no warnings (four key-gated live-model tests skip unless `GOOGLE_API_KEY` is set):
+**1. Test suite** — 467 tests, no warnings (four key-gated live-model tests skip unless `GOOGLE_API_KEY` is set):
 
 ```
-380 passed in 190.85s
+467 passed in 190.85s
 ```
 
 The suite is dominated by the 20-second solver budget in a handful of placement
@@ -547,17 +652,20 @@ tests; the rest run in milliseconds.
 
 | File | Tests | Covers |
 |---|---:|---|
+| `test_app.py` | 76 | Cloud Run HTTP surface, the NDJSON stream, and the served UI bundle, over a real socket |
+| `test_grounding.py` | 73 | Datasheet grounding — SSRF-guarded PDF fetch, page extraction, page-cache sharding, citation corroboration |
 | `test_packing.py` | 43 | CP-SAT model: no-overlap, clearance, edge pinning, rotation, symmetry breaking, keepouts, pinned parts, fallback, determinism |
-| `test_app.py` | 31 | Cloud Run HTTP surface and the served UI bundle, over a real socket |
+| `test_agents.py` | 31 | Datasheet extraction, proposal repair loop, review — against a scripted model |
+| `test_kicad.py` | 28 | Board read/write, coordinate conversion, round-trip |
 | `test_mcp.py` | 23 | MCP protocol — initialize, tools/list, tools/call, stdio transport, every tool |
-| `test_agents.py` | 22 | Datasheet extraction, proposal repair loop, review — against a scripted model |
 | `test_board.py` | 20 | Footprint generation and emitting a `.kicad_pcb` from a circuit spec |
+| `test_adk.py` | 17 | Parity between the SDK and ADK drivers — same events, same result, same exceptions |
 | `test_netlist.py` | 15 | Circuit IR validation — every rejection rule |
 | `test_retrieval.py` | 15 | Datasheet chunking, embedding, cosine ranking, page citations |
 | `test_resilience.py` | 14 | Provider failover — every fallback path, forced |
-| `test_kicad.py` | 13 | Board read/write, coordinate conversion, round-trip |
 | `test_cache.py` | 7 | Firestore fact cache, via a fake client |
-| **Total** | **203** | |
+| `test_live_model.py` | 3 | The live Gemini path, behind an API-key gate that skips it by default |
+| **Total** | **365** | |
 
 **2. Lint:**
 

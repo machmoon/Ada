@@ -17,8 +17,9 @@ dependencies = [
 
 [project.optional-dependencies]
 # The engine is model-free; agents/ is the only place a network call lives.
-agents = ["google-genai>=1.0", "pypdf>=4.0"]
-cloud = ["google-genai>=1.0", "google-cloud-firestore>=2.16"]
+agents = ["google-genai>=2.19,<3", "pypdf>=4.0"]
+cloud = ["google-genai>=2.19,<3", "google-cloud-firestore>=2.16"]
+adk = ["google-adk>=2.8,<3"]
 dev = ["pytest>=8.0", "ruff>=0.6"]
 
 [project.scripts]
@@ -36,6 +37,10 @@ where = ["engine"]
 testpaths = ["engine/tests", "service/tests"]
 norecursedirs = ["vendor", ".venv", "frontend", "frontend-archive", "node_modules"]
 pythonpath = ["engine", "."]
+filterwarnings = [
+    # google-adk deprecating its own internals; nothing in silkscreen uses it.
+    "ignore:BaseAgentConfig is deprecated:DeprecationWarning",
+]
 
 [tool.ruff]
 line-length = 88
