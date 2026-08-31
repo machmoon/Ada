@@ -192,6 +192,14 @@ A service running without a key answers `/generate` with a 502 whose message nam
 `GOOGLE_API_KEY`; the web UI recognises that specific error and renders setup
 instructions rather than an outage.
 
+The right side rail polls `GET /config/status` every five seconds. It shows the
+configuration the running backend can actually use, verifies Gemini through cached
+model discovery, and checks a configured Ollama endpoint and model. If `.env` changes
+without changing the process environment, the rail names only the affected variable
+names and asks for a restart; secret values never leave the backend. Tinker and
+Firestore are checked for the settings and optional dependencies they require, without
+making a paid model call.
+
 ### Other environment variables
 
 | Variable | Read by | Meaning |

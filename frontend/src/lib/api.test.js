@@ -9,7 +9,9 @@ import {
   chatStream,
   generate,
   generateStream,
+  getConfigurationStatus,
   listModels,
+  normalizePlacementRequest,
   normalizeRequest,
   requestBytes,
 } from './api.js'
@@ -214,13 +216,16 @@ describe('normalizeRequest', () => {
     expect(normalizeRequest({ no_solver_budget: 'yes' }).no_solver_budget).toBe(false)
   })
 
-  it('emits exactly the five fields the service accepts, dropping anything else', () => {
+  it('emits the stable board and placement fields, dropping anything else', () => {
     const request = normalizeRequest({ intent: 'x', nonsense: 'drop me' })
 
     expect(Object.keys(request).sort()).toEqual([
       'datasheets',
+      'experimental_placement',
       'intent',
       'no_solver_budget',
+      'placement_policy',
+      'placement_profile',
       'review',
       'time_limit_s',
     ])
@@ -245,12 +250,127 @@ describe('normalizeRequest', () => {
   it('adds the grounding field to the emitted set only when it is on', () => {
     expect(Object.keys(normalizeRequest({ intent: 'x', ground: true })).sort()).toEqual([
       'datasheets',
+      'experimental_placement',
       'ground',
       'intent',
       'no_solver_budget',
+      'placement_policy',
+      'placement_profile',
       'review',
       'time_limit_s',
     ])
+  })
+
+  it('runs deterministic placement verification by default and can turn it off', () => {
+    expect(normalizeRequest({})).toMatchObject({
+      placement_profile: 'compact-control',
+      placement_policy: 'deterministic',
+      experimental_placement: false,
+    })
+    expect(normalizeRequest({ placement_enabled: false }).placement_profile).toBeUndefined()
+  })
+
+  it('only forwards trace consent with the experimental switch on', () => {
+    expect(normalizeRequest({ record_trace: true }).record_trace).toBeUndefined()
+    expect(
+      normalizeRequest({ experimental_placement: true, record_trace: true }).record_trace,
+    ).toBe(true)
+  })
+
+  it('omits constraints by default so prompt-only demos remain valid', () => {
+    expect(normalizeRequest({ intent: 'a regulator' }).constraints).toBeUndefined()
+  })
+
+  it('normalizes an enabled manifest, drops unknown keys, and invalidates approval', () => {
+    const constraints = normalizeRequest({
+      constraints: {
+        version: 2,
+        approved: true,
+        board_layers: 2,
+        unexpected: 'drop me',
+        net_classes: [{
+          name: 'Signals',
+          kind: 'signal',
+          nets: ['LED'],
+          allowed_layers: ['F.Cu'],
+          max_layer_transitions: 0,
+          max_vias_per_net: 0,
+          unknown_limit: 99,
+        }],
+      },
+    }).constraints
+
+    expect(constraints).toMatchObject({
+      version: 2,
+      approved: false,
+      board_layers: 2,
+      net_classes: [{ name: 'Signals', nets: ['LED'], allowed_layers: ['F.Cu'] }],
+    })
+    expect(constraints.unexpected).toBeUndefined()
+    expect(constraints.net_classes[0].unknown_limit).toBeUndefined()
+  })
+
+  it('migrates restored version-one constraints and invalidates their approval', () => {
+    const constraints = normalizeRequest({
+      constraints: {
+        version: 1,
+        approved: true,
+        board_layers: 2,
+        net_classes: [{
+          name: 'Signals',
+          kind: 'signal',
+          nets: ['LED'],
+          allowed_layers: ['F.Cu'],
+          max_layer_transitions: 0,
+          max_vias_per_net: 0,
+        }],
+      },
+    }).constraints
+
+    expect(constraints.version).toBe(2)
+    expect(constraints.approved).toBe(false)
+  })
+})
+
+describe('normalizePlacementRequest', () => {
+  it('defaults to the reproducible placement demo', () => {
+    expect(normalizePlacementRequest()).toEqual({
+      profile: 'compact-control',
+      policy: 'deterministic',
+      experimental_placement: false,
+    })
+  })
+
+  it('keeps structured feedback and normalizes the policy', () => {
+    expect(
+      normalizePlacementRequest({
+        profile: 'thermal-first',
+        policy: 'gemini',
+        feedback: { fixed_refs_add: ['C1'] },
+      }),
+    ).toEqual({
+      profile: 'thermal-first',
+      policy: 'gemini',
+      experimental_placement: false,
+      feedback: { fixed_refs_add: ['C1'] },
+    })
+  })
+
+  it('does not forward caller-selected profile memory ids', () => {
+    expect(
+      normalizePlacementRequest({ profile_id: 'shared-team' }).profile_id,
+    ).toBeUndefined()
+  })
+
+  it.each(['fast', 'deterministic', 'gemini', 'ollama', 'tinker', 'hybrid'])(
+    'preserves the supported %s policy',
+    (policy) => {
+      expect(normalizePlacementRequest({ policy }).policy).toBe(policy)
+    },
+  )
+
+  it('falls back when the placement policy is unknown', () => {
+    expect(normalizePlacementRequest({ policy: 'invented' }).policy).toBe('deterministic')
   })
 })
 
@@ -1212,6 +1332,76 @@ describe('listModels', () => {
           thinking: true,
         },
       ],
+      placement: {
+        experimental_enabled: false,
+        profiles: [],
+        policies: {},
+      },
     })
+  })
+})
+
+describe('getConfigurationStatus', () => {
+  it('normalizes the secret-safe backend readiness response', async () => {
+    const fetch = stubFetch(
+      jsonResponse(200, {
+        version: 1,
+        dotenv: {
+          present: true,
+          state: 'restart',
+          summary: 'Restart to apply one setting.',
+          reload_required: true,
+          changed_since_start: true,
+          pending: ['GOOGLE_API_KEY'],
+        },
+        features: [
+          {
+            id: 'gemini',
+            label: 'Gemini agents',
+            state: 'ready',
+            summary: 'API access verified.',
+            variables: ['GOOGLE_API_KEY'],
+          },
+        ],
+      }),
+    )
+
+    await expect(getConfigurationStatus()).resolves.toEqual({
+      version: 1,
+      dotenv: {
+        present: true,
+        state: 'restart',
+        summary: 'Restart to apply one setting.',
+        reload_required: true,
+        changed_since_start: true,
+        pending: ['GOOGLE_API_KEY'],
+      },
+      features: [
+        {
+          id: 'gemini',
+          label: 'Gemini agents',
+          state: 'ready',
+          summary: 'API access verified.',
+          variables: ['GOOGLE_API_KEY'],
+        },
+      ],
+    })
+    expect(fetch).toHaveBeenCalledWith('/config/status', {
+      headers: { accept: 'application/json' },
+      cache: 'no-store',
+    })
+  })
+
+  it('downgrades unknown states instead of trusting server markup', async () => {
+    stubFetch(
+      jsonResponse(200, {
+        dotenv: { state: 'surprise' },
+        features: [{ id: 'x', label: 'X', state: '<script>' }],
+      }),
+    )
+
+    const status = await getConfigurationStatus()
+    expect(status.dotenv.state).toBe('warning')
+    expect(status.features[0].state).toBe('warning')
   })
 })

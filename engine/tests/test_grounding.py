@@ -645,3 +645,57 @@ def test_batching_embedder_over_gemini_embedder():
     vectors = embedder.embed(texts)
     assert len(vectors) == 5
     assert all(len(v) == 768 for v in vectors)
+
+
+# ------------------------------------------------- datasheet download, end to end
+
+
+def test_read_datasheet_downloads_over_a_real_socket(
+    start_server, bypass_ssrf_guard_for_localhost, fixture_pdf_bytes
+):
+    """The default path: a URL becomes bytes in the model request.
+
+    Everything else about this fix is asserted with an injected fetcher, which
+    proves the wiring but not that the wiring reaches a socket. This one serves
+    the fixture PDF over real HTTP and checks the model was handed exactly those
+    bytes -- the step that was silently missing when Gemini was asked to fetch
+    the URL itself.
+    """
+    import json
+
+    from silkscreen.agents import ScriptedModel, read_datasheet
+
+    facts_json = json.dumps({
+        "part_number": "SILK1117",
+        "package": "SOT-223-3",
+        "pin_count": 3,
+        "pins": [
+            {"number": "1", "name": "GND"},
+            {"number": "2", "name": "VOUT"},
+            {"number": "3", "name": "VIN"},
+        ],
+    })
+    server = start_server(_handler_returning(fixture_pdf_bytes))
+    model = ScriptedModel(responses=[facts_json])
+
+    facts = read_datasheet(model, "SILK1117", pdf_url=_url(server, "/ds.pdf"))
+
+    document = model.calls[0]["documents"][0]
+    assert document.data == fixture_pdf_bytes
+    assert document.url is None
+    assert facts.pin_map() == {"GND": "1", "VOUT": "2", "VIN": "3"}
+
+
+def test_a_url_serving_html_is_refused_before_the_model(
+    start_server, bypass_ssrf_guard_for_localhost
+):
+    """The LCSC failure, reproduced over HTTP rather than with a stub."""
+    from silkscreen.agents import ScriptedModel, read_datasheet
+
+    page = b"<!doctype html><html><head><title>AMS1117-3.3 | LCSC</title>"
+    server = start_server(_handler_returning(page))
+    model = ScriptedModel(responses=["{}"])
+
+    with pytest.raises(grounding.GroundingError, match="did not return a PDF"):
+        read_datasheet(model, "AMS1117-3.3", pdf_url=_url(server, "/C6186.pdf"))
+    assert model.calls == []

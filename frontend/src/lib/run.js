@@ -195,6 +195,14 @@ const DONE_SUMMARY = {
     wirelength_mm: finiteOrNull(e.wirelength_mm),
     warnings: countOf(e.warnings),
   }),
+  placement_repair: (e) => ({
+    profile: String(e.profile ?? ''),
+    policy: String(e.policy ?? ''),
+    moves: countOf(e.moves),
+    hard_before: finiteOrNull(e.hard_before),
+    hard_after: finiteOrNull(e.hard_after),
+    applied: e.applied === true,
+  }),
   route: (e) => ({
     tracks: countOf(e.tracks),
     vias: countOf(e.vias),

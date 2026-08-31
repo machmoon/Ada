@@ -85,9 +85,9 @@ feature is tracked under feature 12.
  ----- FallbackModel chain w/ response validation      [DONE]        resilience.py
  ----- 3.7-flash primary, 3.5-flash-lite second        [DONE]        service/app.py
  ----- Per-task routing beyond failover                [IDEA]        vision/reasoning vs mechanical passes
- ----- Request timeout so a hung primary fails over    [OPEN]        GeminiModel sets no deadline; observed 2026-08-30
-                                                                     via the event stream: 3.7-flash 504-degraded, the
-                                                                     propose call hangs, fallback is never reached
+ ----- Request timeout so a hung primary fails over    [DONE]        60 s http_options deadline (SDK unit: ms) on
+                                                                     GeminiModel + GeminiEmbedder clients; override
+                                                                     SILKSCREEN_MODEL_TIMEOUT_S; timeout -> ModelError
  6   Confirmation gates on file writes                 [NOT BUILT]
  ----- Inventory write points, define the gate         [NOT BUILT]   save_board, CLI output, service response
  ----- CLI confirmation prompt before board write      [NOT BUILT]   with a --yes bypass
@@ -222,6 +222,18 @@ feature is tracked under feature 12.
  ----- Device models for ICs                          [OPEN]        use a trusted server-side model registry; never
                                                                      execute raw model programs supplied over MCP
  ----- Wire simulation into the agent loop            [OPEN]        future propose -> simulate -> repair feedback
+
+ 17  Verifiable placement repair                       [PARTIAL]
+ ----- Portable geometry and backend-neutral reward   [DONE]        silkscreen/placement/
+ ----- Company hard rules and soft preferences        [DONE]        compact-control + thermal-first
+ ----- Generated-board adapter                        [DONE]        verifier runs before routing; write-back remains
+                                                                     integer nanometres and may expand a tight outline
+ ----- Gemini and deterministic action policies       [DONE]        bounded verifier-gated loop
+ ----- Experimental Ollama/Tinker policies            [DONE]        explicit default-off UI + server environment gate
+ ----- Engineer correction memory                     [PARTIAL]     request/session-local lab only; tenant durability
+                                                                     still requires authentication and ownership
+ ----- Integrated placement view and JSON download    [DONE]        generated boards, receipts and session export
+ ----- Synthetic behavior-cloning trajectory export  [DONE]        no trained checkpoint claimed
 
 OPEN WORK, SUMMARISED
 ---------------------

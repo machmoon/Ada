@@ -22,6 +22,7 @@
     onnew,
     onopen,
     schematicEnabled = false,
+    placementEnabled = false,
     boardEnabled = false,
   } = $props()
 
@@ -29,6 +30,7 @@
   let file = $state(null)
   let importError = $state('')
   let models = $state([])
+  let placementCapabilities = $state({})
   let selectedModel = $state('auto')
   let selectedThinkingLevel = $state('auto')
   let selectedQuotaRpm = $state('auto')
@@ -38,9 +40,12 @@
 
   onMount(async () => {
     try {
-      models = (await listModels()).models
+      const catalog = await listModels()
+      models = catalog.models
+      placementCapabilities = catalog.placement
     } catch {
       models = []
+      placementCapabilities = {}
     }
   })
 
@@ -108,6 +113,7 @@
       initialModel={$run.orchestratorModel || 'gemini-3.7-flash'}
       initialThinkingLevel={$run.thinkingLevel || 'auto'}
       initialQuotaRpm={$run.quotaRpm || 'auto'}
+      {placementCapabilities}
     />
   {:else}
     <div class="thread" aria-live="polite">
@@ -122,6 +128,7 @@
                 <ArtifactCards
                   result={entry.result}
                   {schematicEnabled}
+                  {placementEnabled}
                   {boardEnabled}
                   {onopen}
                 />

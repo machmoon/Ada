@@ -4,11 +4,14 @@
 
 import { logError, logEvent, logWarn } from './log.js'
 import { parseNdjson } from './stream.js'
+import { normalizeConstraintManifest } from './constraints.js'
 
 const ENDPOINT = '/generate'
 const STREAM_ENDPOINT = '/generate/stream'
+const PLACEMENT_ENDPOINT = '/placement/repair'
 const CHAT_STREAM_ENDPOINT = '/chat/stream'
 const MODELS_ENDPOINT = '/models'
+const CONFIG_STATUS_ENDPOINT = '/config/status'
 const NDJSON_TYPE = 'application/x-ndjson'
 const TIMEOUT_MESSAGE = 'The run passed the 300 second budget and was cancelled.'
 
@@ -42,6 +45,12 @@ export function normalizeRequest(request) {
     const u = String(url).trim()
     if (p && u) datasheets[p] = u
   }
+  const placementEnabled = request.placement_enabled !== false
+  const experimentalPlacement = request.experimental_placement === true
+  const placementPolicies = new Set(['fast', 'deterministic', 'gemini', 'ollama', 'tinker', 'hybrid'])
+  const placementPolicy = placementPolicies.has(String(request.placement_policy || 'deterministic'))
+    ? String(request.placement_policy || 'deterministic')
+    : 'deterministic'
   return {
     intent: String(request.intent ?? '').trim(),
     datasheets,
@@ -54,7 +63,71 @@ export function normalizeRequest(request) {
     // Grounding is opt-in and only sent when it was asked for: an absent flag
     // is the service's default, so a stray `ground: false` would say nothing.
     ...(request.ground === true ? { ground: true } : {}),
+    ...(request.constraints && typeof request.constraints === 'object' && !Array.isArray(request.constraints)
+      ? { constraints: normalizeConstraintManifest(request.constraints) }
+      : {}),
+    ...(placementEnabled
+      ? {
+          placement_profile: String(request.placement_profile || 'compact-control'),
+          placement_policy: placementPolicy,
+          experimental_placement: experimentalPlacement,
+          ...(experimentalPlacement && request.record_trace === true
+            ? { record_trace: true }
+            : {}),
+          ...(request.placement_feedback && typeof request.placement_feedback === 'object'
+            ? { placement_feedback: request.placement_feedback }
+            : {}),
+        }
+      : {}),
   }
+}
+
+export function normalizePlacementRequest(request = {}) {
+  const policies = new Set(['fast', 'deterministic', 'gemini', 'ollama', 'tinker', 'hybrid'])
+  const requestedPolicy = String(request.policy || 'deterministic')
+  const profile =
+    request.profile && typeof request.profile === 'object'
+      ? request.profile
+      : String(request.profile || 'compact-control')
+  const normalized = {
+    profile,
+    policy: policies.has(requestedPolicy) ? requestedPolicy : 'deterministic',
+    experimental_placement: request.experimental_placement === true,
+  }
+  if (request.board && typeof request.board === 'object') normalized.board = request.board
+  if (request.feedback && typeof request.feedback === 'object') {
+    normalized.feedback = request.feedback
+  }
+  if (request.experimental_placement === true && request.record_trace === true) {
+    normalized.record_trace = true
+  }
+  if (request.quota_rpm !== undefined) normalized.quota_rpm = request.quota_rpm
+  return normalized
+}
+
+export async function repairPlacement(request) {
+  const body = JSON.stringify(normalizePlacementRequest(request))
+  guardSize(body)
+  let response
+  try {
+    response = await fetch(PLACEMENT_ENDPOINT, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body,
+    })
+  } catch (err) {
+    throw new ApiError('network', String(err && err.message ? err.message : err))
+  }
+  let data = {}
+  try {
+    data = await response.json()
+  } catch {
+    throw new ApiError('internal', 'The placement service returned invalid JSON.', {
+      status: response.status,
+    })
+  }
+  if (!response.ok) throw errorFor(response.status, data)
+  return data
 }
 
 export function requestBytes(request) {
@@ -568,13 +641,69 @@ export async function listModels() {
     auto_model: String(data.auto_model ?? ''),
     source: String(data.source ?? ''),
     warning: String(data.warning ?? ''),
-    models: asArray(data.models).map((model) => ({
-      id: String(model?.id ?? ''),
-      name: String(model?.name ?? model?.id ?? ''),
-      description: String(model?.description ?? ''),
-      input_token_limit: model?.input_token_limit ?? null,
-      output_token_limit: model?.output_token_limit ?? null,
-      thinking: model?.thinking ?? null,
-    })).filter((model) => model.id),
+    models: asArray(data.models)
+      .map((model) => ({
+        id: String(model?.id ?? ''),
+        name: String(model?.name ?? model?.id ?? ''),
+        description: String(model?.description ?? ''),
+        input_token_limit: model?.input_token_limit ?? null,
+        output_token_limit: model?.output_token_limit ?? null,
+        thinking: model?.thinking ?? null,
+      }))
+      .filter((model) => model.id),
+    placement: {
+      experimental_enabled: data.placement?.experimental_enabled === true,
+      profiles: asArray(data.placement?.profiles).map(String),
+      policies:
+        data.placement?.policies && typeof data.placement.policies === 'object'
+          ? data.placement.policies
+          : {},
+    },
+  }
+}
+
+/** Secret-safe backend and .env readiness for the live side-rail monitor. */
+export async function getConfigurationStatus({ signal } = {}) {
+  let response
+  try {
+    response = await fetch(CONFIG_STATUS_ENDPOINT, {
+      headers: { accept: 'application/json' },
+      cache: 'no-store',
+      ...(signal ? { signal } : {}),
+    })
+  } catch (err) {
+    throw new ApiError('network', String(err && err.message ? err.message : err))
+  }
+  let data = {}
+  try {
+    data = await response.json()
+  } catch {
+    throw new ApiError('internal', 'The configuration status is not JSON.', {
+      status: response.status,
+    })
+  }
+  if (!response.ok) throw errorFor(response.status, data || {})
+
+  const states = new Set(['ready', 'off', 'warning', 'error', 'restart'])
+  const state = (value) => (states.has(String(value)) ? String(value) : 'warning')
+  return {
+    version: Number(data.version) || 1,
+    dotenv: {
+      present: data.dotenv?.present === true,
+      state: state(data.dotenv?.state),
+      summary: String(data.dotenv?.summary ?? ''),
+      reload_required: data.dotenv?.reload_required === true,
+      changed_since_start: data.dotenv?.changed_since_start === true,
+      pending: asArray(data.dotenv?.pending).map(String),
+    },
+    features: asArray(data.features)
+      .map((feature) => ({
+        id: String(feature?.id ?? ''),
+        label: String(feature?.label ?? ''),
+        state: state(feature?.state),
+        summary: String(feature?.summary ?? ''),
+        variables: asArray(feature?.variables).map(String),
+      }))
+      .filter((feature) => feature.id && feature.label),
   }
 }
