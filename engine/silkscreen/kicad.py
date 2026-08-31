@@ -28,7 +28,7 @@ from pathlib import Path
 
 from kiutils.board import Board
 
-from .packing import Net, Part, Placement, Wire
+from .packing import Layer, Net, Part, Placement, Wire
 from .units import NM_PER_MM
 
 __all__ = [
@@ -117,6 +117,11 @@ class FootprintInfo:
     max_x_nm: int = 0
     max_y_nm: int = 0
     library_id: str = ""
+    #: Which side of the board the footprint sits on. The solver enforces
+    #: no-overlap per side -- a part on the back may sit under one on the front
+    #: -- so calling every footprint top-side is not a cosmetic error: it makes
+    #: the placer reserve a separate slot for parts that never collided.
+    side: Layer = Layer.TOP
 
     def local_bbox_after_rotation(self, rotated: bool) -> tuple[int, int]:
         """Local bbox top-left corner, accounting for a 90 degree rotation.
@@ -165,6 +170,18 @@ def _fp_angle(fp) -> float:
     """A footprint's existing placement angle in degrees, 0 if unset."""
     position = getattr(fp, "position", None)
     return float(getattr(position, "angle", None) or 0.0)
+
+
+def _footprint_side(fp) -> Layer:
+    """Which side of the board a footprint sits on.
+
+    KiCad names the side in the footprint's own ``layer``: ``F.Cu`` for the
+    front, ``B.Cu`` for the back. A flipped footprint already has its geometry
+    stored mirrored, so the courtyard extents need no further correction --
+    only the side itself has to be carried through.
+    """
+    layer = getattr(fp, "layer", "") or ""
+    return Layer.BOTTOM if str(layer).startswith("B.") else Layer.TOP
 
 
 def load_board(path: str | Path) -> Board:
@@ -411,6 +428,7 @@ def extract_parts(
                 max_x_nm=_mm(max_x),
                 max_y_nm=_mm(max_y),
                 library_id=getattr(fp, "libraryNickname", "") or "",
+                side=_footprint_side(fp),
             )
         )
     return infos
@@ -563,6 +581,7 @@ def to_parts(
             ref=info.ref,
             must_be_on_edge=info.ref in edge_refs,
             allow_rotation=info.ref in rotatable_refs,
+            layer=info.side,
         )
         for info in infos
     ]
@@ -615,6 +634,17 @@ def apply_placements(
         fp = fp_by_ref.get(placement.ref)
         if info is None or fp is None:
             continue
+
+        # Moving a footprint across sides means mirroring every pad and graphic
+        # it owns, which this writer does not do. Writing the position while
+        # ignoring the side would produce a board whose geometry silently
+        # contradicts the solve it came from, so refuse instead.
+        if placement.layer is not info.side:
+            raise ValueError(
+                f"{placement.ref} was solved onto the {placement.layer} side but "
+                f"sits on the {info.side} side of the board; flipping a footprint "
+                "across sides is not supported."
+            )
 
         height_nm = info.width_nm if placement.rotated else info.height_nm
         bbox_top_nm = board_height_nm - (placement.y_nm + height_nm)

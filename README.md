@@ -156,12 +156,12 @@ Platform-by-platform commands are in [docs/install.md](docs/install.md#kicad-opt
 
 | Component | State |
 |---|---|
-| `kicad.py` — `.kicad_pcb` read/write | **Working** · 28 tests |
+| `kicad.py` — `.kicad_pcb` read/write | **Working** · 33 tests |
 | `packing.py` — CP-SAT placer | **Working** · 44 tests |
 | `netlist.py` — validated circuit IR | **Working** · 21 tests |
 | `schematic.py` — `.kicad_sch` + `.kicad_pro` emission | **Working** · 22 tests · KiCad ERC clean |
 | `routing.py` — two-layer grid autorouter | **Working, partial by design** · 20 tests — see below |
-| `footprints.py` + `board.py` — land patterns, board emission | **Working** · 20 tests |
+| `footprints.py` + `board.py` — land patterns, board emission | **Working** · 23 tests |
 | `agents/` — datasheet, propose, review, pipeline | **Working** · 34 tests |
 | `agents/adk/` — ADK dynamic-workflow driver for the pipeline | **Working** · 18 tests |
 | `agents/retrieval.py` — page-cited datasheet retrieval | **Working** · 15 tests |
@@ -449,8 +449,8 @@ motor-driver fixture in `engine/tests/fixtures/`:
 ```
 11 footprints, 6 nets
 status     : feasible
-board size : 19.60 x 15.05 mm  (295.0 mm²)
-HPWL       : 52.4 mm
+board size : 18.25 x 18.00 mm  (328.5 mm²)
+HPWL       : 53.0 mm
 placed 11/11 -> placed.kicad_pcb  (~43.9 kB, reparses clean)
 ```
 
@@ -886,7 +886,7 @@ All checks passed!
 **3. Doc drift** — re-counts the suite and checks every figure quoted in the docs:
 
 ```
-docs ok: 20 claim(s) across 2 files match a suite of 703
+docs ok: 20 claim(s) across 2 files match a suite of 706
 ```
 
 **4. End-to-end demo** — reads the 11-footprint fixture board, places it, writes a
@@ -896,15 +896,15 @@ real `.kicad_pcb`, and re-parses it to prove the round-trip:
 3. Solve (OR-Tools CP-SAT)
 --------------------------------------------------------------
   status     : feasible
-  board size : 19.60 x 15.05 mm  (295.0 mm^2)
-  HPWL       : 52.4 mm
+  board size : 18.25 x 18.00 mm  (328.5 mm^2)
+  HPWL       : 53.0 mm
   solve time : 20.00 s
   warning    : Time limit reached; solution is feasible but not proven
-               optimal (gap bound 669000 vs 1740000).
+               optimal (gap bound 696000 vs 1785000).
 
 4. Write a real .kicad_pcb
 --------------------------------------------------------------
-  placed 11/11 -> placed.kicad_pcb  (43,933 bytes)
+  placed 11/11 -> placed.kicad_pcb  (43,936 bytes)
 
 5. Prove the round-trip
 --------------------------------------------------------------
