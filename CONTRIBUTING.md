@@ -26,7 +26,7 @@ order, on Ubuntu, macOS and Windows against Python 3.11:
 
 ```bash
 ./.venv/bin/python -m pytest -q                            # 1. tests
-./.venv/bin/python -m ruff check engine service scripts    # 2. lint
+./.venv/bin/python -m ruff check engine service scripts desktop # 2. lint
 ./.venv/bin/python scripts/check_docs.py                   # 3. doc drift
 ./.venv/bin/python scripts/demo.py                         # 4. end-to-end
 ```
@@ -44,6 +44,14 @@ build, on Node 22 or newer:
 ```bash
 cd frontend && npm test
 cd frontend && npm run build
+```
+
+If you touched `desktop/src-tauri/`, run the macOS desktop gate:
+
+```bash
+cargo fmt --manifest-path desktop/src-tauri/Cargo.toml -- --check
+cargo clippy --manifest-path desktop/src-tauri/Cargo.toml --locked --all-targets -- -D warnings
+cargo test --manifest-path desktop/src-tauri/Cargo.toml --locked --all-targets
 ```
 
 If you touched the `Dockerfile`, `docker build .` is the only thing that exercises it,
@@ -185,6 +193,7 @@ engine/tests/        the engine suite; fixtures/ref.kicad_pcb is the shared fixt
 service/             Cloud Run surface: stdlib HTTP server + Firestore fact cache
 service/tests/       the service suite
 frontend/            Svelte 5 + Vite review UI (plain JS, no SvelteKit, no TypeScript)
+desktop/             Chromium fallback, Python sidecar, and native Tauri host
 scripts/             demo.py, check_docs.py
 docs/                install guide and the hackathon-requirement analyses
 ```

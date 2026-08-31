@@ -1,7 +1,8 @@
 // Getting text out of the browser: the board file the service returns, and the
 // debug console's log exports.
 
-import { LOG_TEXT_MIME, logEvent } from './log.js'
+import { saveTextWithDialog } from './desktop-files.js'
+import { LOG_TEXT_MIME, logError, logEvent } from './log.js'
 
 export const PCB_FILENAME = 'board.kicad_pcb'
 export const PCB_MIME = 'application/octet-stream'
@@ -16,6 +17,29 @@ export function pcbText(result) {
 /** Writes the text to a Blob and saves it. Returns whether anything was saved. */
 export function downloadText(text, filename, type = LOG_TEXT_MIME) {
   if (!text) return false
+  if (globalThis.__SILKSCREEN_BASE__) {
+    return saveTextWithDialog(text, filename)
+      .then((path) => {
+        if (!path) return false
+        logEvent('ui.download', `saved ${filename}`, {
+          filename,
+          path,
+          type,
+          chars: text.length,
+          native: true,
+        })
+        return true
+      })
+      .catch((error) => {
+        logError('ui.download', `could not save ${filename}`, {
+          filename,
+          type,
+          message: String(error?.message ?? error),
+          native: true,
+        })
+        return false
+      })
+  }
   const url = URL.createObjectURL(new Blob([text], { type }))
   const link = document.createElement('a')
   link.href = url

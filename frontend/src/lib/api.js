@@ -1,10 +1,11 @@
-// The only fetch in the app. Paths are relative because the bundle is served
-// from the same origin as the API — in dev by the Vite proxy, in production by
-// service/app.py. No absolute URL, therefore no CORS, ever.
+// The only request boundary in the app. Browser paths remain same-origin; the
+// desktop shell injects its loopback sidecar origin before this module loads.
 
+import { fetch as nativeFetch } from '@tauri-apps/plugin-http'
 import { logError, logEvent, logWarn } from './log.js'
 import { parseNdjson } from './stream.js'
 import { normalizeConstraintManifest } from './constraints.js'
+import { createTransport } from './transport.js'
 
 const ENDPOINT = '/generate'
 const STREAM_ENDPOINT = '/generate/stream'
@@ -14,6 +15,14 @@ const MODELS_ENDPOINT = '/models'
 const CONFIG_STATUS_ENDPOINT = '/config/status'
 const NDJSON_TYPE = 'application/x-ndjson'
 const TIMEOUT_MESSAGE = 'The run passed the 300 second budget and was cancelled.'
+
+const transportRequest = createTransport({
+  baseUrl: globalThis.__SILKSCREEN_BASE__ ?? '',
+  // Resolve this at call time so tests and browser instrumentation can replace
+  // the global fetch implementation after the module has loaded.
+  webFetch: (...args) => globalThis.fetch(...args),
+  nativeFetch,
+})
 
 export const REQUEST_TIMEOUT_MS = 300000
 export const MAX_REQUEST_BYTES = 1024 * 1024
@@ -133,7 +142,7 @@ export async function repairPlacement(request) {
   guardSize(body)
   let response
   try {
-    response = await fetch(PLACEMENT_ENDPOINT, {
+    response = await transportRequest(PLACEMENT_ENDPOINT, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body,
@@ -249,7 +258,7 @@ export async function generate(request) {
   const startedAt = Date.now()
   let response
   try {
-    response = await fetch(ENDPOINT, {
+    response = await transportRequest(ENDPOINT, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body,
@@ -394,7 +403,7 @@ export async function generateStream(request, onEvent) {
   try {
     let response
     try {
-      response = await fetch(STREAM_ENDPOINT, {
+      response = await transportRequest(STREAM_ENDPOINT, {
         method: 'POST',
         headers: { 'content-type': 'application/json', accept: NDJSON_TYPE },
         body,
@@ -550,7 +559,7 @@ export async function chatStream(request, onEvent) {
   try {
     let response
     try {
-      response = await fetch(CHAT_STREAM_ENDPOINT, {
+      response = await transportRequest(CHAT_STREAM_ENDPOINT, {
         method: 'POST',
         headers: { 'content-type': 'application/json', accept: NDJSON_TYPE },
         body,
@@ -648,7 +657,7 @@ export async function chatStream(request, onEvent) {
 export async function listModels() {
   let response
   try {
-    response = await fetch(MODELS_ENDPOINT, { headers: { accept: 'application/json' } })
+    response = await transportRequest(MODELS_ENDPOINT, { headers: { accept: 'application/json' } })
   } catch (err) {
     throw new ApiError('network', String(err && err.message ? err.message : err))
   }
@@ -689,7 +698,7 @@ export async function listModels() {
 export async function getConfigurationStatus({ signal } = {}) {
   let response
   try {
-    response = await fetch(CONFIG_STATUS_ENDPOINT, {
+    response = await transportRequest(CONFIG_STATUS_ENDPOINT, {
       headers: { accept: 'application/json' },
       cache: 'no-store',
       ...(signal ? { signal } : {}),
