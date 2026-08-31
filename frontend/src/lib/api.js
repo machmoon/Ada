@@ -4,6 +4,7 @@
 
 import { logError, logEvent, logWarn } from './log.js'
 import { parseNdjson } from './stream.js'
+import { normalizeConstraintManifest } from './constraints.js'
 
 const ENDPOINT = '/generate'
 const STREAM_ENDPOINT = '/generate/stream'
@@ -61,6 +62,9 @@ export function normalizeRequest(request) {
     // Grounding is opt-in and only sent when it was asked for: an absent flag
     // is the service's default, so a stray `ground: false` would say nothing.
     ...(request.ground === true ? { ground: true } : {}),
+    ...(request.constraints && typeof request.constraints === 'object' && !Array.isArray(request.constraints)
+      ? { constraints: normalizeConstraintManifest(request.constraints) }
+      : {}),
     ...(placementEnabled
       ? {
           placement_profile: String(request.placement_profile || 'compact-control'),

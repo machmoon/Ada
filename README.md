@@ -101,7 +101,7 @@ Every stage is a real KiCad file you can open and inspect on its own, so you can
 where a design went wrong instead of only seeing the last artifact.
 
 ```
-807 tests collected — no network, no API key, no KiCad install
+841 tests collected — no network, no API key, no KiCad install
 ```
 
 **Next:** [full install guide and troubleshooting](docs/install.md) ·
@@ -175,9 +175,10 @@ Platform-by-platform commands are in [docs/install.md](docs/install.md#kicad-opt
 | `order.py` — order options, manufacturability preflight | **Working** · blocks an unrouted board |
 | `mcp/` — MCP server over stdio | **Working** · 43 tests |
 | `audit/` — optional visual design review | **Working** · 52 tests |
-| `service/` — Cloud Run + Firestore cache | **Working** · 136 tests · not deployed anywhere yet; no live URL |
+| `service/` — Cloud Run + Firestore cache | **Working** · 143 tests · not deployed anywhere yet; no live URL |
 | `frontend/` — Svelte review UI, served by the service | **Working** · persistent orchestrator chat, expandable traces, session JSON, review, schematic, placement and board tabs |
 | `engine/silkscreen/placement/` — verifier-grounded repair and company profiles | **Working** · deterministic and Gemini policies; experimental providers are opt-in |
+| `constraints.py` — approved build contract and post-route receipt | **Working** · opt-in, fail-closed, and deterministically tested |
 | Voice / talk input | Not built |
 | Overlay UI, guided cursor | Not built (mockups only) |
 
@@ -216,6 +217,33 @@ for the agent, supervised fine-tuning, reinforcement learning, and verifier boun
 
 ---
 
+## Approved build constraints
+
+The main prompt form has an optional **Verified constraints** editor. It is collapsed
+and disabled by default, so the ordinary prompt-only demo is unchanged. When enabled,
+the editor requires exact net names, measurable limits, and an explicit engineer
+approval. Any prompt or manifest edit clears that approval. Version 2 manifests are
+strict: unknown fields, unknown constraint kinds, duplicate ownership, unsupported
+layers, and zero-area physical limits are rejected before cache access or a model call.
+
+The approved manifest is included in the circuit-proposal context, then checked again
+against the validated circuit, final placement, and routed copper. The receipt reports
+verified, violated, unresolved, and not-required checks for connectivity, routed
+geometry, pull-ups, board outline, keepouts, fixed placements, and other declared
+limits. Claims that need evidence this engine does not have—such as controlled
+impedance without a stackup/field solver, plane continuity, component height, or a
+complete voltage-drop model—remain **unresolved** and block production-promotion
+eligibility rather than being guessed.
+
+This is currently a post-build eligibility receipt, not a second placer or router.
+Board dimensions, keepouts, fixed locations, and soft weights do not yet configure the
+CP-SAT or A* solve directly. Soft terms score the one generated result for comparison;
+they do not prove that alternatives were ranked. A blocked receipt leaves the generated
+KiCad artifact available for inspection, but the orchestrator identifies it as not
+eligible for production promotion.
+
+---
+
 ## Prompt to PCB
 
 ```bash
@@ -244,6 +272,7 @@ intent ─► datasheets ─► propose/validate ─► CP-SAT place ─► veri
 | Placement | `packing.py` | `.placed.kicad_pcb` |
 | Verifier-gated placement repair | `placement/` | placement receipt |
 | Copper routing | `routing.py` | `.kicad_pcb` |
+| Approved constraint verification | `constraints.py` | promotion receipt |
 | Adversarial review | `agents/review.py` | |
 
 Useful flags: `--no-route` stops after placement, `--no-review` skips the adversarial
@@ -408,7 +437,7 @@ treats the board file as the interface.
 | Requires KiCad running | Yes | **No** |
 | Headless / CI | Hard | **Native** |
 | Platform lock | KiCad's plugin loader | **None — pure Python** |
-| Testable without KiCad | No | **Yes, all 807 tests** |
+| Testable without KiCad | No | **Yes, all 841 tests** |
 
 ### What it reads
 
@@ -746,6 +775,7 @@ engine/
     cli.py        python -m silkscreen "..."
     spice/        typed testbenches, deck building, simulators, measurements
     placement/    verifier-gated repair + opt-in Ollama/Tinker policy adapters
+    constraints.py approved manifest parsing + deterministic post-route receipt
     mcp/          JSON-RPC tools, including the bounded simulation verifier
     agents/       Gemini-backed worker and orchestrator calls
       model.py      provider seam + scripted stand-in for tests
@@ -756,7 +786,7 @@ engine/
       pipeline.py   prompt -> PCB
       adk/          ADK dynamic workflow over the same stage bodies
     audit/        optional visual review of a finished board
-  tests/          807 tests — no network, no API keys, no KiCad
+  tests/          841 tests — no network, no API keys, no KiCad
     fixtures/     ref.kicad_pcb -- 11-footprint board fixture
 scripts/
   demo.py         end-to-end: read -> place -> write -> verify

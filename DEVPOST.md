@@ -76,6 +76,22 @@ preferences cover connector access, functional grouping, compactness, and therma
 separation. Gemini may propose actions, but a deterministic verifier accepts or rejects
 every move.
 
+**Approved build constraints. [built]**
+The normal prompt-only path remains unchanged, but an engineer can open an optional
+constraint contract, name exact nets and physical limits, and approve it for one run.
+Any edit clears approval. The service rejects malformed or unapproved version 2
+contracts before cache access or model spend, includes an approved contract in circuit
+proposal context, and then checks the validated circuit, final placement, and routed
+copper. The chat trace exposes this as a separate constraint-verification event, and
+the review screen shows every blocker and its evidence.
+
+The receipt is deliberately fail-closed. Missing routing, stackup, field-solver,
+component-height, or full voltage-drop evidence is `unresolved`, not silently clean.
+Today this is post-build production-promotion eligibility: the artifact remains
+available for engineering inspection, and the declared limits do not yet configure
+CP-SAT or A* directly. Soft preferences provide an advisory score for the generated
+board; they do not claim that alternative layouts were ranked.
+
 **1. Understand the parts. [built]**
 Point Silkscreen at a component and it reads the actual datasheet. Gemini's native PDF
 vision matters here in a way that text extraction does not: pinout tables, package
@@ -205,7 +221,7 @@ network calls; Gemini and the opt-in placement providers sit behind policy adapt
 - Pure-integer nanometre arithmetic end to end, because unit confusion between
   millimetres, mils, and KiCad's internal nanometres is a silent, board-destroying class
   of bug
-- 807 tests that run with no network, no API key, and no KiCad installed
+- 841 tests that run with no network, no API key, and no KiCad installed
 
 Splitting it this way is the point. The parts that must be *correct* are testable
 offline. The parts that must be *smart* are the ones talking to a model.
@@ -263,7 +279,7 @@ valuable engineering artifact we produced was an honest list of what was actuall
 What we're proud of in the new one:
 
 - **The deterministic kernel has no network calls.** Every correctness-critical path is tested offline.
-- **807 tests, and the interesting ones are regressions** — each pins down a specific bug
+- **841 tests, and the interesting ones are regressions** — each pins down a specific bug
   that shipped in the previous version and can never ship again.
 - **A validation layer whose job is to say no.** The IR makes a floating capacitor and a
   hallucinated pin unrepresentable rather than merely unlikely.
@@ -300,7 +316,7 @@ meant to build. The lesson we took is that the README should be written from the
 at revision `ad58192`, MIT licensed, included unmodified with its licence file
 intact as a working reference for the guided-cursor overlay we have not built
 yet. Nothing in `engine/`, `service/`, or `scripts/` imports from it, it is
-excluded from lint and tests, and it contributes nothing to the 807 tests or to
+excluded from lint and tests, and it contributes nothing to the 841 tests or to
 any figure quoted in this document. Everything else in the repository was
 written during the submission period.
 

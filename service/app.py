@@ -54,6 +54,10 @@ from silkscreen.agents.resilience import (  # noqa: E402
 )
 from silkscreen.agents.retrieval import GeminiEmbedder  # noqa: E402
 from silkscreen.board import emit_kicad_pcb  # noqa: E402
+from silkscreen.constraints import (  # noqa: E402
+    parse_constraint_manifest,
+    verify_constraint_manifest,
+)
 from silkscreen.fab import fab_files  # noqa: E402
 from silkscreen.order import (  # noqa: E402
     OrderOptions,
@@ -787,6 +791,13 @@ def generate(
     if not intent:
         raise ValueError("'intent' is required")
 
+    # An approved manifest is caller-owned input, so reject it before cache
+    # reads, datasheet downloads, or a model call can spend time or quota.
+    constraint_manifest = parse_constraint_manifest(payload.get("constraints"))
+    model_intent = intent
+    if constraint_manifest is not None:
+        model_intent += constraint_manifest.prompt_block()
+
     datasheets = payload.get("datasheets") or {}
     if not isinstance(datasheets, dict):
         raise ValueError("'datasheets' must be an object of {part: url}")
@@ -861,7 +872,7 @@ def generate(
 
     result = generate_pcb(
         model,
-        intent,
+        model_intent,
         datasheets=to_read,
         preloaded_facts=preloaded,
         time_limit_s=time_limit_s,
@@ -932,6 +943,49 @@ def generate(
             else round(to_mm(board.wirelength_nm), 3)
         ),
     }
+
+    if constraint_manifest is not None:
+        receipt = verify_constraint_manifest(
+            constraint_manifest,
+            result.spec,
+            board,
+            result.route,
+        )
+        checks = [
+            check
+            for group in receipt.get("net_classes", [])
+            for check in group.get("checks", [])
+        ]
+        checks.extend(receipt.get("mechanical", []))
+        counts = {
+            status: sum(check.get("status") == status for check in checks)
+            for status in ("verified", "violated", "unresolved")
+        }
+
+        response["constraint_manifest"] = constraint_manifest.to_dict()
+        response["constraint_receipt"] = receipt
+        # This is production-promotion eligibility metadata, not an artifact
+        # gate. The generated KiCad board stays available in this response.
+        response["promotion_status"] = (
+            "constraint_passed" if receipt["promotable"] else "constraint_blocked"
+        )
+        response["blockers"].extend(
+            f"constraint {item['scope']}/{item['name']}: {item['detail']}"
+            for item in receipt["blockers"]
+        )
+        emit(
+            {
+                "event": "constraints.verify",
+                "manifest_version": constraint_manifest.version,
+                "hard_gate": receipt["hard_gate"],
+                "promotable": receipt["promotable"],
+                "blockers": len(receipt["blockers"]),
+                "verified": counts["verified"],
+                "violated": counts["violated"],
+                "unresolved": counts["unresolved"],
+                "artifact_available": True,
+            }
+        )
 
     if result.route is not None:
         response["routing"] = {
@@ -1448,6 +1502,10 @@ class Handler(BaseHTTPRequestHandler):
             return
 
         try:
+            # Validate board constraints before even resolving the chat model.
+            # generate() repeats this at the tool boundary so direct calls get
+            # the same guarantee.
+            parse_constraint_manifest(payload.get("constraints"))
             catalog = self.model_catalog_factory()
             orchestrator_model = select_model(payload.get("model"), catalog)
             thinking_level = select_thinking_level(payload.get("thinking_level"))

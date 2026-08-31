@@ -185,6 +185,20 @@ const DESCRIBERS = {
     return `grounding${part ? ` ${part}` : ''} (${e.cached ? 'cached' : 'reading'} pages)`
   },
 
+  'constraints.verify': (e) => {
+    const verified = countOf(e.verified)
+    if (e.promotable === true) {
+      return `constraints verified: ${formatCount(verified, 'check')}; production promotion eligible`
+    }
+    const blockers = countOf(e.blockers)
+    const details = []
+    if (countOf(e.violated) > 0) details.push(`${countOf(e.violated)} violated`)
+    if (countOf(e.unresolved) > 0) details.push(`${countOf(e.unresolved)} unresolved`)
+    const why = details.length ? ` (${details.join(', ')})` : ''
+    const artifact = e.artifact_available === true ? '; artifact available' : ''
+    return `constraints checked: ${formatCount(blockers, 'blocker')}${why}${artifact}; production promotion blocked`
+  },
+
   'run.done': () => 'run complete',
 
   'run.error': (e) => {

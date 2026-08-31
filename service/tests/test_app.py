@@ -50,6 +50,25 @@ CIRCUIT = {
         "VOUT": ["U1.2", "C2.1"],
     },
 }
+
+
+def constraint_manifest(net="GND"):
+    """A strict v2 manifest for one net in the scripted regulator."""
+    return {
+        "version": 2,
+        "approved": True,
+        "board_layers": 2,
+        "net_classes": [
+            {
+                "name": "Demo signal",
+                "kind": "signal",
+                "nets": [net],
+                "allowed_layers": ["F.Cu", "B.Cu"],
+                "max_layer_transitions": 2,
+                "max_vias_per_net": 2,
+            }
+        ],
+    }
 #: One finding of each severity. Every ref named here exists in CIRCUIT --
 #: review_circuit drops part references the spec does not contain, so a made-up
 #: ref would arrive as a silently empty parts list.
@@ -246,6 +265,44 @@ def test_generate_returns_a_board(server):
     assert body["kicad_pcb"].startswith("(kicad_pcb")
     assert [p["ref"] for p in body["parts"]] == ["U1", "C1", "C2"]
     assert body["board_mm"][0] > 0
+
+
+def test_generate_returns_a_passing_v2_constraint_receipt(server):
+    status, body = post(
+        server,
+        {
+            "intent": "a 3.3V regulator",
+            "review": False,
+            "time_limit_s": 5,
+            "constraints": constraint_manifest(),
+        },
+    )
+
+    assert status == 200, body
+    assert body["constraint_manifest"]["version"] == 2
+    assert body["constraint_receipt"]["hard_gate"] == "passed"
+    assert body["constraint_receipt"]["promotable"] is True
+    assert body["promotion_status"] == "constraint_passed"
+    assert body["blockers"] == []
+
+
+def test_blocked_constraints_do_not_hide_the_generated_artifact(server):
+    status, body = post(
+        server,
+        {
+            "intent": "a 3.3V regulator",
+            "review": False,
+            "time_limit_s": 5,
+            "constraints": constraint_manifest("VIN"),
+        },
+    )
+
+    assert status == 200, body
+    assert body["constraint_receipt"]["hard_gate"] == "blocked"
+    assert body["constraint_receipt"]["promotable"] is False
+    assert body["promotion_status"] == "constraint_blocked"
+    assert any("constraint Demo signal/routing" in item for item in body["blockers"])
+    assert body["kicad_pcb"].startswith("(kicad_pcb")
 
 
 def test_generate_can_verify_and_apply_placement_before_routing(server):
@@ -2182,6 +2239,14 @@ def test_main_generate_preserves_the_requested_fast_policy(server, monkeypatch):
     class LocalPolicy:
         proposer_name = "ollama"
 
+    # The developer environment may carry a real Gemini key. This case is
+    # specifically the Ollama-only branch of the fast-policy resolver; without
+    # isolating provider availability, a configured Gemini correctly makes the
+    # best backend hybrid instead.
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    monkeypatch.delenv("GOOGLE_API_KEY", raising=False)
+    monkeypatch.delenv("TINKER_API_KEY", raising=False)
+    monkeypatch.delenv("TINKER_PLACEMENT_MODEL", raising=False)
     monkeypatch.setenv("SILKSCREEN_EXPERIMENTAL_PLACEMENT", "1")
     monkeypatch.setenv("OLLAMA_PLACEMENT_URL", "http://localhost:11434")
     monkeypatch.setattr(app, "build_ollama_model", LocalPolicy)
@@ -2309,6 +2374,42 @@ def test_chat_stream_wraps_the_pipeline_in_an_orchestrator_turn(
     assert orchestrator_calls[0]["before_model_call"] is not None
 
 
+def test_chat_stream_carries_constraint_verification_activity(server):
+    previous_catalog = Handler.__dict__["model_catalog_factory"]
+    previous_runner = Handler.__dict__["orchestrator_runner"]
+    Handler.model_catalog_factory = staticmethod(
+        lambda: {"auto_model": "gemini-test", "models": [{"id": "gemini-test"}]}
+    )
+
+    def orchestrate(**kwargs):
+        result = kwargs["generate"]()
+        return OrchestratorResult("Done.", result, False, str(kwargs["model"]))
+
+    Handler.orchestrator_runner = staticmethod(orchestrate)
+    try:
+        status, _, frames = post_stream(
+            server,
+            {
+                "intent": "a regulator",
+                "review": False,
+                "time_limit_s": 5,
+                "constraints": constraint_manifest(),
+            },
+            path="/chat/stream",
+        )
+    finally:
+        Handler.model_catalog_factory = previous_catalog
+        Handler.orchestrator_runner = previous_runner
+
+    assert status == 200
+    verified = [frame for frame in frames if frame["event"] == "constraints.verify"]
+    assert len(verified) == 1
+    assert verified[0]["hard_gate"] == "passed"
+    assert verified[0]["manifest_version"] == 2
+    assert verified[0]["artifact_available"] is True
+    assert frames[-1]["result"]["promotion_status"] == "constraint_passed"
+
+
 def test_chat_stream_rejects_an_invalid_reasoning_effort_before_streaming(server):
     previous_catalog = Handler.__dict__["model_catalog_factory"]
     Handler.model_catalog_factory = staticmethod(
@@ -2328,6 +2429,31 @@ def test_chat_stream_rejects_an_invalid_reasoning_effort_before_streaming(server
 
     assert status == 400
     assert "thinking_level" in body["error"]
+
+
+def test_chat_rejects_invalid_constraints_before_the_orchestrator(server):
+    previous_catalog = Handler.__dict__["model_catalog_factory"]
+    previous_runner = Handler.__dict__["orchestrator_runner"]
+    calls = []
+    Handler.model_catalog_factory = staticmethod(
+        lambda: {"auto_model": "gemini-test", "models": [{"id": "gemini-test"}]}
+    )
+    Handler.orchestrator_runner = staticmethod(lambda **kwargs: calls.append(kwargs))
+    invalid = constraint_manifest()
+    invalid["approved"] = False
+    try:
+        status, body = post(
+            server,
+            {"intent": "a regulator", "constraints": invalid},
+            path="/chat/stream",
+        )
+    finally:
+        Handler.model_catalog_factory = previous_catalog
+        Handler.orchestrator_runner = previous_runner
+
+    assert status == 400
+    assert "approved" in body["error"]
+    assert calls == []
 
 
 def test_chat_stream_rejects_an_invalid_quota_pace_before_streaming(server):
@@ -2488,6 +2614,25 @@ def test_a_stream_reports_the_run_and_ends_with_the_one_shot_body(server):
     del streamed["duration_s"]
     del once_body["duration_s"]
     assert streamed == once_body
+
+
+def test_generate_stream_reports_blocked_constraint_verification(server):
+    status, _, frames = post_stream(
+        server,
+        {
+            "intent": "a 3.3V regulator",
+            "review": False,
+            "time_limit_s": 5,
+            "constraints": constraint_manifest("VIN"),
+        },
+    )
+
+    assert status == 200
+    verified = [frame for frame in frames if frame["event"] == "constraints.verify"]
+    assert len(verified) == 1
+    assert verified[0]["hard_gate"] == "blocked"
+    assert verified[0]["blockers"] >= 1
+    assert frames[-1]["result"]["promotion_status"] == "constraint_blocked"
 
 
 #: Any valid request; these tests are about what comes back, not what goes in.
@@ -2908,6 +3053,42 @@ def test_a_rejected_order_option_costs_no_model_call(counting_server):
     status, _ = post(counting_server, ORDER_REQUEST)
     assert status == 200
     assert counting_server.model.calls, "the same counter does record a real run"
+
+
+def test_invalid_constraints_cost_no_worker_model_call(counting_server):
+    invalid = constraint_manifest()
+    invalid["approved"] = False
+
+    status, body = post(
+        counting_server,
+        {"intent": "a regulator", "constraints": invalid},
+    )
+
+    assert status == 400
+    assert "approved" in body["error"]
+    assert counting_server.model.calls == []
+
+
+def test_approved_constraints_are_added_to_the_proposal_context(counting_server):
+    status, body = post(
+        counting_server,
+        {
+            "intent": "a regulator",
+            "review": False,
+            "time_limit_s": 5,
+            "constraints": constraint_manifest(),
+        },
+    )
+
+    assert status == 200, body
+    proposal = next(
+        call["prompt"]
+        for call in counting_server.model.calls
+        if "designing a printed circuit board" in call["prompt"]
+    )
+    assert "APPROVED PCB CONSTRAINT MANIFEST" in proposal
+    assert '"version":2' in proposal
+    assert body["intent"] == "a regulator"
 
 
 def test_the_fab_files_are_json_safe_and_well_formed(server):

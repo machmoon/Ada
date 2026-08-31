@@ -275,6 +275,60 @@ describe('normalizeRequest', () => {
       normalizeRequest({ experimental_placement: true, record_trace: true }).record_trace,
     ).toBe(true)
   })
+
+  it('omits constraints by default so prompt-only demos remain valid', () => {
+    expect(normalizeRequest({ intent: 'a regulator' }).constraints).toBeUndefined()
+  })
+
+  it('normalizes an enabled manifest, drops unknown keys, and invalidates approval', () => {
+    const constraints = normalizeRequest({
+      constraints: {
+        version: 2,
+        approved: true,
+        board_layers: 2,
+        unexpected: 'drop me',
+        net_classes: [{
+          name: 'Signals',
+          kind: 'signal',
+          nets: ['LED'],
+          allowed_layers: ['F.Cu'],
+          max_layer_transitions: 0,
+          max_vias_per_net: 0,
+          unknown_limit: 99,
+        }],
+      },
+    }).constraints
+
+    expect(constraints).toMatchObject({
+      version: 2,
+      approved: false,
+      board_layers: 2,
+      net_classes: [{ name: 'Signals', nets: ['LED'], allowed_layers: ['F.Cu'] }],
+    })
+    expect(constraints.unexpected).toBeUndefined()
+    expect(constraints.net_classes[0].unknown_limit).toBeUndefined()
+  })
+
+  it('migrates restored version-one constraints and invalidates their approval', () => {
+    const constraints = normalizeRequest({
+      constraints: {
+        version: 1,
+        approved: true,
+        board_layers: 2,
+        net_classes: [{
+          name: 'Signals',
+          kind: 'signal',
+          nets: ['LED'],
+          allowed_layers: ['F.Cu'],
+          max_layer_transitions: 0,
+          max_vias_per_net: 0,
+        }],
+      },
+    }).constraints
+
+    expect(constraints.version).toBe(2)
+    expect(constraints.approved).toBe(false)
+  })
 })
 
 describe('normalizePlacementRequest', () => {
