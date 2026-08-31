@@ -23,6 +23,11 @@ adk = ["google-adk>=2.8,<3"]
 dev = ["pytest>=8.0", "ruff>=0.6"]
 
 [project.scripts]
+# `silkscreen setup` and `silkscreen serve` are subcommands of the dispatcher;
+# anything else is still the plain-language intent the generate CLI takes.
+silkscreen = "silkscreen.onboard:dispatch"
+silkscreen-setup = "silkscreen.onboard:main"
+silkscreen-serve = "silkscreen.serve:main"
 silkscreen-mcp = "silkscreen.mcp.server:main"
 silkscreen-review = "silkscreen.audit.cli:main"
 
@@ -32,6 +37,7 @@ build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]
 where = ["engine"]
+include = ["silkscreen*"]
 
 [tool.pytest.ini_options]
 testpaths = ["engine/tests", "service/tests"]
