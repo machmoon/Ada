@@ -61,6 +61,20 @@ with citations.**
 Each stage below is tagged **[built]** or **[not yet built]** against the code in this
 repository today.
 
+**Placement repair and company profiles. [built]**
+An engineer opens the placement lab, selects Compact Control or Thermal First, and
+watches the same broken motor-controller board become two different legal layouts.
+The screen shows the starting violations, accepted actions, exact score deltas, and
+the final geometry. The engineer can reject a move and pin that component into the
+company profile. The demo keeps that correction in browser-local storage, isolated
+from other visitors. The repaired placement downloads as JSON. Server-side team
+memory stays disabled until an authenticated tenant boundary exists.
+
+Hard rules cover board boundaries, clearance, fixed components, and keepouts. Soft
+preferences cover connector access, functional grouping, compactness, and thermal
+separation. Gemini may propose actions, but a deterministic verifier accepts or rejects
+every move.
+
 **1. Understand the parts. [not yet built]**
 Point Silkscreen at a component and it reads the actual datasheet. Gemini's native PDF
 vision matters here in a way that text extraction does not: pinout tables, package

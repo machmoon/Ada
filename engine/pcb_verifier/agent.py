@@ -18,12 +18,17 @@ from .pcb_repair import (
 
 __all__ = [
     "PlacementAgent",
+    "PlacementPolicyError",
     "PlacementReceipt",
     "PlacementRun",
     "PlacementStep",
     "TextModel",
     "placement_prompt",
 ]
+
+
+class PlacementPolicyError(RuntimeError):
+    """A proposal backend failed or returned an unusable response."""
 
 
 class TextModel(Protocol):
@@ -240,15 +245,20 @@ def _model_step(
 ) -> tuple[Board, PlacementStep]:
     before = evaluate(board, profile)
     prompt = placement_prompt(board, profile, turn)
-    response = model.generate(
-        prompt,
-        system=(
-            "You are a PCB placement repair policy. Emit placement action "
-            "lines only. The geometry verifier is authoritative."
-        ),
-        temperature=0.0,
-        max_output_tokens=256,
-    )
+    try:
+        response = model.generate(
+            prompt,
+            system=(
+                "You are a PCB placement repair policy. Emit placement action "
+                "lines only. The geometry verifier is authoritative."
+            ),
+            temperature=0.0,
+            max_output_tokens=256,
+        )
+    except Exception as exc:
+        raise PlacementPolicyError(f"{proposer} proposal failed") from exc
+    if not isinstance(response, str):
+        raise PlacementPolicyError(f"{proposer} returned non-text output")
     proposed = tuple(parse_actions(response))
     updated, accepted, receipts = _verified_prefix(board, proposed, profile)
     after = evaluate(updated, profile)

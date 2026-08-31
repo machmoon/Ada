@@ -19,6 +19,7 @@ from __future__ import annotations
 import contextlib
 import hashlib
 import json
+import math
 import os
 import sys
 import time
@@ -34,6 +35,7 @@ from urllib.parse import urlsplit
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "engine"))
 
+from pcb_verifier.agent import PlacementPolicyError  # noqa: E402
 from pcb_verifier.api import repair_request  # noqa: E402
 from pcb_verifier.traces import (  # noqa: E402
     FactFailureTraceStore,
@@ -86,7 +88,6 @@ __all__ = [
     "build_ollama_model",
     "build_pages_store",
     "build_failure_trace_store",
-    "build_profile_store",
     "build_store",
     "build_tinker_model",
     "placement_policy_status",
@@ -135,6 +136,17 @@ _CONTENT_TYPES = {
     ".woff2": "font/woff2",
 }
 _DEFAULT_CONTENT_TYPE = "application/octet-stream"
+
+
+def _reject_nonfinite_json(value: str) -> None:
+    raise ValueError(f"non-finite number {value} is not valid JSON")
+
+
+def _parse_json_float(value: str) -> float:
+    number = float(value)
+    if not math.isfinite(number):
+        _reject_nonfinite_json(value)
+    return number
 
 
 def _refs_by_spec_name(spec, board) -> dict[str, str]:
@@ -463,15 +475,6 @@ def build_pages_store() -> FactStore:
     return MemoryFactStore()
 
 
-def build_profile_store() -> FactStore:
-    """Firestore company memory in Cloud Run, in-memory everywhere else."""
-    if os.getenv("GOOGLE_CLOUD_PROJECT") and os.getenv("USE_FIRESTORE", "1") != "0":
-        from .cache import FirestoreFactStore
-
-        return FirestoreFactStore("placement_profiles")
-    return MemoryFactStore()
-
-
 def build_failure_trace_store() -> FailureTraceStore:
     """Firestore in Cloud Run, append-only JSONL for local post-training."""
     if os.getenv("GOOGLE_CLOUD_PROJECT") and os.getenv("USE_FIRESTORE", "1") != "0":
@@ -682,14 +685,12 @@ def _run_placement_policy(
     payload: dict[str, Any],
     policy: str,
     gemini_factory: Callable[[], Any],
-    profile_store: FactStore,
 ) -> dict[str, Any]:
     model, fallback_model = _placement_models(policy, gemini_factory)
     return repair_request(
         {**payload, "policy": policy},
         model=model,
         fallback_model=fallback_model,
-        profile_store=profile_store,
     )
 
 
@@ -958,7 +959,6 @@ class Handler(BaseHTTPRequestHandler):
     request_pacer: RequestPacer = GEMINI_REQUEST_PACER
     store: FactStore | None = None
     pages_store: FactStore | None = None
-    profile_store: FactStore | None = None
     failure_trace_store: FailureTraceStore | None = None
     embedder_factory = staticmethod(build_embedder)
 
@@ -970,7 +970,7 @@ class Handler(BaseHTTPRequestHandler):
     # Adding them defensively would only widen who may call /generate.
 
     def _send(self, code: int, payload: dict[str, Any]) -> None:
-        body = json.dumps(payload).encode()
+        body = json.dumps(payload, allow_nan=False).encode()
         self.send_response(code)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(body)))
@@ -1094,27 +1094,31 @@ class Handler(BaseHTTPRequestHandler):
             ).strip().lower()
             policy_status = placement_policy_status()
             policy = resolve_placement_policy(requested_policy, policy_status)
-            store = (
-                self.profile_store
-                if self.profile_store is not None
-                else build_profile_store()
-            )
             try:
-                result = _run_placement_policy(
-                    payload, policy, self.model_factory, store
-                )
-            except (OSError, TimeoutError):
+                result = _run_placement_policy(payload, policy, self.model_factory)
+            except (OSError, PlacementPolicyError, TimeoutError):
                 if requested_policy != "fast" or policy == "deterministic":
                     raise
                 unavailable_policy = policy
                 policy = "deterministic"
-                result = _run_placement_policy(
-                    payload, policy, self.model_factory, store
-                )
+                result = _run_placement_policy(payload, policy, self.model_factory)
                 result["policy_fallback"] = {
                     "from": unavailable_policy,
                     "to": policy,
                     "reason": "fast proposer unavailable",
+                }
+            if (
+                requested_policy == "fast"
+                and policy != "deterministic"
+                and not result.get("completed")
+            ):
+                incomplete_policy = policy
+                policy = "deterministic"
+                result = _run_placement_policy(payload, policy, self.model_factory)
+                result["policy_fallback"] = {
+                    "from": incomplete_policy,
+                    "to": policy,
+                    "reason": "fast proposer did not complete repair",
                 }
             result["requested_policy"] = requested_policy
             result["available_policies"] = policy_status
@@ -1153,8 +1157,12 @@ class Handler(BaseHTTPRequestHandler):
             self._send(413, {"error": "request body too large"})
             return None
         try:
-            payload = json.loads(self.rfile.read(length) or b"{}")
-        except json.JSONDecodeError as exc:
+            payload = json.loads(
+                self.rfile.read(length) or b"{}",
+                parse_constant=_reject_nonfinite_json,
+                parse_float=_parse_json_float,
+            )
+        except (json.JSONDecodeError, ValueError) as exc:
             self._send(400, {"error": f"invalid JSON: {exc}"})
             return None
         if not isinstance(payload, dict):
@@ -1414,8 +1422,6 @@ class Handler(BaseHTTPRequestHandler):
 
 def make_server(port: int | None = None) -> ThreadingHTTPServer:
     port = port if port is not None else int(os.getenv("PORT", "8080"))
-    if Handler.profile_store is None:
-        Handler.profile_store = build_profile_store()
     if Handler.failure_trace_store is None:
         Handler.failure_trace_store = build_failure_trace_store()
     return ThreadingHTTPServer(("0.0.0.0", port), Handler)

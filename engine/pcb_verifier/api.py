@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
+import math
 from dataclasses import asdict, replace
-from typing import Any, Protocol
+from typing import Any
 
 from .agent import PlacementAgent, PlacementRun
 from .grader import (
@@ -15,13 +16,7 @@ from .grader import (
 )
 from .pcb_repair import CompanyProfile, demo_board, evaluate, get_profile
 
-__all__ = ["ProfileStore", "apply_feedback", "repair_request", "run_to_dict"]
-
-
-class ProfileStore(Protocol):
-    def get(self, key: str) -> dict[str, Any] | None: ...
-
-    def put(self, key: str, value: dict[str, Any]) -> None: ...
+__all__ = ["apply_feedback", "repair_request", "run_to_dict"]
 
 
 def _strings(value: Any) -> tuple[str, ...]:
@@ -48,8 +43,11 @@ def _merged_thermal_pairs(
     for item in additions if isinstance(additions, list) else []:
         if not isinstance(item, (list, tuple)) or len(item) != 3:
             continue
-        pair = (str(item[0]), str(item[1]), float(item[2]))
-        if pair[2] > 0 and pair not in pairs:
+        distance = float(item[2])
+        if not math.isfinite(distance):
+            raise ValueError("thermal pair distance must be finite")
+        pair = (str(item[0]), str(item[1]), distance)
+        if distance > 0 and pair not in pairs:
             pairs.append(pair)
     return tuple(pairs)
 
@@ -66,6 +64,8 @@ def _feedback_weights(value: Any) -> dict[str, float]:
     if not isinstance(value, dict):
         return {}
     weights = {key: float(raw) for key, raw in value.items() if key in _WEIGHT_NAMES}
+    if any(not math.isfinite(weight) for weight in weights.values()):
+        raise ValueError("profile weights must be finite")
     if any(weight < 0 for weight in weights.values()):
         raise ValueError("profile weights cannot be negative")
     return weights
@@ -183,17 +183,6 @@ def run_to_dict(
     }
 
 
-def _load_profile_feedback(
-    profile_id: str, profile_store: ProfileStore | None
-) -> dict[str, Any]:
-    if not profile_id or profile_store is None:
-        return {}
-    saved = profile_store.get(profile_id) or {}
-    if not isinstance(saved, dict):
-        raise ValueError("saved profile feedback is invalid")
-    return saved
-
-
 def _supplied_feedback(payload: dict[str, Any]) -> dict[str, Any]:
     supplied = payload.get("feedback") or {}
     if not isinstance(supplied, dict):
@@ -201,20 +190,11 @@ def _supplied_feedback(payload: dict[str, Any]) -> dict[str, Any]:
     return supplied
 
 
-def _memory_status(profile_id: str, saved: dict, supplied: dict) -> str:
-    if profile_id and supplied:
-        return "stored"
-    if profile_id and saved:
-        return "loaded"
-    return "none"
-
-
 def repair_request(
     payload: dict[str, Any],
     *,
     model=None,
     fallback_model=None,
-    profile_store: ProfileStore | None = None,
 ) -> dict[str, Any]:
     if not isinstance(payload, dict):
         raise ValueError("body must be a JSON object")
@@ -223,20 +203,18 @@ def repair_request(
     policy = str(payload.get("policy", "deterministic")).strip().lower()
     profile = _profile(payload)
 
-    profile_id = str(payload.get("profile_id", "")).strip()
-    saved = _load_profile_feedback(profile_id, profile_store)
+    if "profile_id" in payload:
+        raise ValueError(
+            "profile_id is unavailable on the unauthenticated placement endpoint"
+        )
     supplied = _supplied_feedback(payload)
-    combined = {**saved, **supplied}
-    profile = apply_feedback(profile, combined)
-    if profile_id and supplied and profile_store is not None:
-        profile_store.put(profile_id, combined)
+    profile = apply_feedback(profile, supplied)
 
     run = PlacementAgent(
         model,
         fallback_model=fallback_model,
         max_turns=int(payload.get("max_turns", 8)),
     ).run(board, profile, policy=policy)
-    result = run_to_dict(run, combined)
-    result["profile_id"] = profile_id or None
-    result["profile_memory"] = _memory_status(profile_id, saved, supplied)
+    result = run_to_dict(run, supplied)
+    result["profile_memory"] = "request-only" if supplied else "none"
     return result

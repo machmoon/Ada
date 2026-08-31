@@ -68,7 +68,6 @@ export function normalizePlacementRequest(request = {}) {
   const normalized = {
     profile,
     policy: policies.has(requestedPolicy) ? requestedPolicy : 'deterministic',
-    profile_id: String(request.profile_id || '').trim(),
   }
   if (request.board && typeof request.board === 'object') normalized.board = request.board
   if (request.feedback && typeof request.feedback === 'object') {

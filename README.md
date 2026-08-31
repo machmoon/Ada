@@ -177,6 +177,7 @@ Platform-by-platform commands are in [docs/install.md](docs/install.md#kicad-opt
 | `service/` — Cloud Run + Firestore cache | **Working** · 108 tests · not deployed anywhere yet; no live URL |
 | `frontend/` — Svelte review UI, served by the service | **Working** · persistent orchestrator chat, expandable model/tool traces, session JSON, review, schematic and board tabs |
 | Voice / talk input | Not built |
+| `pcb_verifier/` — placement repair, company profiles, portable rewards | **Working** · deterministic and Gemini policies |
 | Overlay UI, guided cursor | Not built (mockups only) |
 
 Every module above is covered by tests that run with no network, no API key, and no
@@ -199,8 +200,9 @@ Gemini can propose `PLACE` and `MOVE` actions, but it cannot override the
 verifier. The model-free policy remains available for reproducible demos.
 
 An engineer can reject a move and pin that component into the company profile.
-Cloud Run persists the correction through Firestore; offline runs use the same
-interface with an in-memory store. The repaired placement downloads as JSON.
+The demo persists the correction in browser-local storage, isolated from other
+visitors. The public API applies feedback only to the current request and rejects
+caller-selected server memory IDs. The repaired placement downloads as JSON.
 
 See [the placement-agent architecture](docs/placement-agent.md) for the precise
 agent, supervised fine-tuning, reinforcement learning, and verifier boundary.

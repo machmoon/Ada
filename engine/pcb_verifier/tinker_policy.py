@@ -5,6 +5,8 @@ from __future__ import annotations
 import importlib
 from typing import Any
 
+from .agent import PlacementPolicyError
+
 __all__ = ["TinkerPlacementModel"]
 
 
@@ -74,14 +76,19 @@ class TinkerPlacementModel:
             stop=["\n\n"],
             seed=0,
         )
-        response = self._sampling.sample(
-            prompt=model_input,
-            sampling_params=params,
-            num_samples=1,
-        ).result()
-        if not response.sequences:
-            return ""
-        return self._tokenizer.decode(
-            response.sequences[0].tokens,
-            skip_special_tokens=True,
-        ).strip()
+        try:
+            response = self._sampling.sample(
+                prompt=model_input,
+                sampling_params=params,
+                num_samples=1,
+            ).result()
+            if not response.sequences:
+                raise PlacementPolicyError("Tinker returned no sequences")
+            return self._tokenizer.decode(
+                response.sequences[0].tokens,
+                skip_special_tokens=True,
+            ).strip()
+        except PlacementPolicyError:
+            raise
+        except Exception as exc:
+            raise PlacementPolicyError("Tinker placement request failed") from exc

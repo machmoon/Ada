@@ -28,6 +28,14 @@ __all__ = [
 ]
 
 
+def _require_finite(owner: str, **values: float) -> None:
+    for name, value in values.items():
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            raise ValueError(f"{owner} {name} must be a finite number")
+        if not math.isfinite(float(value)):
+            raise ValueError(f"{owner} {name} must be a finite number")
+
+
 @dataclass(frozen=True)
 class Component:
     ref: str
@@ -42,6 +50,13 @@ class Component:
     def __post_init__(self) -> None:
         if not self.ref.strip():
             raise ValueError("component ref cannot be empty")
+        _require_finite(
+            f"component {self.ref!r}",
+            x=self.x,
+            y=self.y,
+            width=self.width,
+            height=self.height,
+        )
         if self.width <= 0 or self.height <= 0:
             raise ValueError(f"component {self.ref!r} has a non-positive size")
         if self.angle not in (0, 90, 180, 270):
@@ -77,6 +92,13 @@ class Keepout:
     height: float
 
     def __post_init__(self) -> None:
+        _require_finite(
+            f"keepout {self.name!r}",
+            x=self.x,
+            y=self.y,
+            width=self.width,
+            height=self.height,
+        )
         if self.width <= 0 or self.height <= 0:
             raise ValueError(f"keepout {self.name!r} has a non-positive size")
 
@@ -100,6 +122,15 @@ class CompanyProfile:
     thermal_weight: float = 1.0
 
     def __post_init__(self) -> None:
+        _require_finite(
+            "profile",
+            clearance=self.clearance,
+            edge_margin=self.edge_margin,
+            compactness_weight=self.compactness_weight,
+            grouping_weight=self.grouping_weight,
+            connector_edge_weight=self.connector_edge_weight,
+            thermal_weight=self.thermal_weight,
+        )
         if self.clearance < 0 or self.edge_margin < 0:
             raise ValueError("profile clearance and edge margin cannot be negative")
         for weight in (
@@ -110,6 +141,12 @@ class CompanyProfile:
         ):
             if weight < 0:
                 raise ValueError("profile weights cannot be negative")
+        for left, right, minimum in self.thermal_pairs:
+            _require_finite(
+                f"thermal pair {left!r}/{right!r}", minimum=minimum
+            )
+            if minimum <= 0:
+                raise ValueError("thermal pair distance must be positive")
 
     @classmethod
     def from_dict(cls, value: dict[str, Any]) -> CompanyProfile:
@@ -141,6 +178,7 @@ class Board:
     keepouts: tuple[Keepout, ...] = ()
 
     def __post_init__(self) -> None:
+        _require_finite("board", width=self.width, height=self.height)
         if self.width <= 0 or self.height <= 0:
             raise ValueError("board dimensions must be positive")
         refs = [component.ref for component in self.components]
@@ -178,6 +216,11 @@ class PlacementAction:
     x: float
     y: float
     angle: int | None = None
+
+    def __post_init__(self) -> None:
+        _require_finite("placement action", x=self.x, y=self.y)
+        if self.angle is not None and self.angle not in (0, 90, 180, 270):
+            raise ValueError("placement action angle must be 0, 90, 180, or 270")
 
     def as_text(self) -> str:
         suffix = f" {self.angle}" if self.angle is not None else ""
@@ -489,6 +532,7 @@ def repair(
     grid: float = 1.0,
 ) -> tuple[Board, list[PlacementAction]]:
     """Repair hard violations, then coordinate-descent on profile preferences."""
+    _require_finite("repair", grid=grid)
     if max_steps < 0 or preference_steps < 0 or grid <= 0:
         raise ValueError(
             "repair budgets must be non-negative and grid must be positive"

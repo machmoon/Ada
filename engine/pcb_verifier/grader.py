@@ -95,7 +95,12 @@ def board_from_dict(value: dict[str, Any]) -> Board:
 
 
 def board_to_json(board: Board) -> str:
-    return json.dumps(board_to_dict(board), sort_keys=True, separators=(",", ":"))
+    return json.dumps(
+        board_to_dict(board),
+        sort_keys=True,
+        separators=(",", ":"),
+        allow_nan=False,
+    )
 
 
 def board_to_text(board: Board) -> str:

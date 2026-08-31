@@ -75,8 +75,10 @@ checkpoint still has to beat the frozen held-out legality and preference gates.
 
 Hard rules include boundaries, clearance, keepouts, and fixed components. Soft
 preferences include grouping, connector access, compactness, and thermal
-separation. Engineer corrections are structured profile updates. In Cloud Run,
-the service stores those updates in Firestore; local and test runs use memory.
+separation. Engineer corrections are structured profile updates. The demo stores
+them in browser-local storage so anonymous visitors never share a server record.
+The public API applies feedback to one request only. Durable team memory requires
+authentication and a real tenant ownership boundary.
 
 ## Honest claim
 

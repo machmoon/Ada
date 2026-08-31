@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 import json
+import math
 from dataclasses import dataclass, field
 from types import SimpleNamespace
 
 import pytest
-from pcb_verifier.agent import PlacementAgent
-from pcb_verifier.api import run_to_dict
+from pcb_verifier.agent import PlacementAgent, PlacementPolicyError
+from pcb_verifier.api import repair_request, run_to_dict
 from pcb_verifier.grader import (
     apply_model_output,
     board_from_dict,
@@ -117,6 +118,33 @@ def test_serialization_round_trip() -> None:
     board = demo_board()
     restored = board_from_dict(json.loads(board_to_json(board)))
     assert board_to_dict(restored) == board_to_dict(board)
+
+
+@pytest.mark.parametrize("value", [math.nan, math.inf, -math.inf])
+def test_non_finite_board_geometry_is_rejected(value: float) -> None:
+    board = board_to_dict(demo_board())
+    board["components"][0]["x"] = value
+
+    with pytest.raises(ValueError, match="finite number"):
+        board_from_dict(board)
+
+
+@pytest.mark.parametrize("value", [math.nan, math.inf, -math.inf])
+def test_non_finite_profile_values_are_rejected(value: float) -> None:
+    with pytest.raises(ValueError, match="finite"):
+        repair_request(
+            {"profile": {"name": "unsafe", "clearance": value}}
+        )
+
+
+def test_non_finite_feedback_values_are_rejected() -> None:
+    with pytest.raises(ValueError, match="finite"):
+        repair_request(
+            {
+                "profile": "compact-control",
+                "feedback": {"weights": {"thermal_weight": math.nan}},
+            }
+        )
 
 
 def test_scripted_agent_accepts_improving_move_and_ignores_hallucination() -> None:
@@ -357,6 +385,30 @@ def test_ollama_adapter_uses_private_chat_endpoint() -> None:
     assert calls[0]["url"].endswith("/api/chat")
     assert calls[0]["payload"]["model"] == "gemma3:4b"
     assert calls[0]["payload"]["stream"] is False
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [b"{not-json", b'{"message": {}}', b'{"message": {"content": 7}}'],
+)
+def test_ollama_adapter_normalizes_malformed_responses(payload: bytes) -> None:
+    class Response:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return None
+
+        def read(self):
+            return payload
+
+    model = OllamaPlacementModel(
+        base_url="http://127.0.0.1:11435",
+        opener=lambda *args, **kwargs: Response(),
+    )
+
+    with pytest.raises(PlacementPolicyError):
+        model.generate("board")
 
 
 @pytest.mark.parametrize("name", ["", "unknown", "Thermalish"])

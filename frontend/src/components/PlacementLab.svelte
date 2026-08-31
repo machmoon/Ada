@@ -13,6 +13,7 @@
 
   const hardExplanation = 'Illegal geometry measured in millimetres. The verifier accepts moves that reduce this first, and the final value must be 0.'
   const softExplanation = 'The selected team profile’s preference cost. Lower is better after legality is protected; it never makes an illegal move acceptable.'
+  const memoryKey = 'silkscreen-placement-feedback-v1'
 
   let profile = $state('compact-control')
   let policy = $state('fast')
@@ -20,6 +21,7 @@
   let busy = $state(false)
   let error = $state('')
   let teaching = $state(false)
+  let feedbackByProfile = $state({})
 
   const receipts = $derived(
     result
@@ -32,15 +34,46 @@
   const accepted = $derived(receipts.filter((item) => item.receipt.accepted))
   const teachRef = $derived(accepted.length ? accepted[0].action.ref : '')
 
+  function mergeFeedback(current = {}, supplied = {}) {
+    const merged = { ...current, ...supplied }
+    for (const key of ['fixed_refs_add', 'edge_refs_add']) {
+      const values = [...(current[key] || []), ...(supplied[key] || [])]
+      if (values.length) merged[key] = [...new Set(values)]
+    }
+    for (const key of ['groups_add', 'thermal_pairs_add']) {
+      const values = [...(current[key] || []), ...(supplied[key] || [])]
+      if (values.length) {
+        merged[key] = [...new Map(values.map((value) => [JSON.stringify(value), value])).values()]
+      }
+    }
+    if (current.weights || supplied.weights) {
+      merged.weights = { ...(current.weights || {}), ...(supplied.weights || {}) }
+    }
+    return merged
+  }
+
+  function remember(feedback) {
+    const merged = mergeFeedback(feedbackByProfile[profile], feedback)
+    feedbackByProfile = { ...feedbackByProfile, [profile]: merged }
+    try {
+      localStorage.setItem(memoryKey, JSON.stringify(feedbackByProfile))
+    } catch {
+      // Repair still works when browser storage is unavailable.
+    }
+    return merged
+  }
+
   async function run(feedback = null) {
     busy = true
     error = ''
     try {
+      const remembered = feedback
+        ? remember(feedback)
+        : feedbackByProfile[profile]
       result = await repairPlacement({
         profile,
         policy,
-        profile_id: `demo-team-${profile}`,
-        ...(feedback ? { feedback } : {}),
+        ...(remembered ? { feedback: remembered } : {}),
       })
     } catch (err) {
       error = err instanceof ApiError ? err.message : String(err)
@@ -66,7 +99,17 @@
     downloadText(JSON.stringify(result.board, null, 2), 'repaired-placement.json', 'application/json')
   }
 
-  onMount(() => run())
+  onMount(() => {
+    try {
+      const saved = JSON.parse(localStorage.getItem(memoryKey) || '{}')
+      if (saved && typeof saved === 'object' && !Array.isArray(saved)) {
+        feedbackByProfile = saved
+      }
+    } catch {
+      feedbackByProfile = {}
+    }
+    run()
+  })
 </script>
 
 <div class="lab" data-testid="placement-lab">
@@ -85,7 +128,7 @@
       <div class="control-group">
         <div class="control-label">
           <span class="lbl">Team placement profile</span>
-          <span>Choose how legal alternatives should be ranked.</span>
+          <span>Choose how legal alternatives should be ranked. Corrections stay in this browser.</span>
         </div>
         <div class="profiles">
           {#each profiles as item}

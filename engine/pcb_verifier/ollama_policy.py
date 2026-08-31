@@ -7,6 +7,8 @@ import urllib.request
 from collections.abc import Callable
 from typing import Any
 
+from .agent import PlacementPolicyError
+
 __all__ = ["OllamaPlacementModel"]
 
 
@@ -58,9 +60,14 @@ class OllamaPlacementModel:
             data=json.dumps(payload).encode(),
             headers={"Content-Type": "application/json"},
         )
-        with self._opener(request, timeout=self.timeout_s) as response:
-            result = json.loads(response.read())
+        try:
+            with self._opener(request, timeout=self.timeout_s) as response:
+                result = json.loads(response.read())
+        except Exception as exc:
+            raise PlacementPolicyError("Ollama placement request failed") from exc
         content = result.get("message", {}).get("content")
         if not isinstance(content, str):
-            raise RuntimeError("Ollama response did not contain message.content")
+            raise PlacementPolicyError(
+                "Ollama response did not contain message.content"
+            )
         return content.strip()

@@ -109,11 +109,9 @@ def scripted():
 @pytest.fixture
 def server():
     store = MemoryFactStore()
-    profile_store = MemoryFactStore()
     failure_trace_store = MemoryFailureTraceStore()
     Handler.model_factory = staticmethod(scripted)
     Handler.store = store
-    Handler.profile_store = profile_store
     Handler.failure_trace_store = failure_trace_store
     srv = make_server(port=0)
     thread = threading.Thread(target=srv.serve_forever, daemon=True)
@@ -124,7 +122,6 @@ def server():
     srv.shutdown()
     srv.server_close()
     Handler.store = None
-    Handler.profile_store = None
     Handler.failure_trace_store = None
 
 
@@ -327,27 +324,142 @@ def test_fast_policy_falls_back_safely(server, monkeypatch):
     assert body["completed"] is True
 
 
-def test_placement_feedback_is_saved_and_reloaded(server):
+def test_fast_policy_runtime_failure_falls_back_safely(server, monkeypatch):
+    class OfflinePolicy:
+        proposer_name = "ollama"
+
+        def generate(self, prompt, **kwargs):
+            del prompt, kwargs
+            raise OSError("local policy endpoint refused the connection")
+
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    monkeypatch.delenv("GOOGLE_API_KEY", raising=False)
+    monkeypatch.delenv("TINKER_API_KEY", raising=False)
+    monkeypatch.delenv("TINKER_PLACEMENT_MODEL", raising=False)
+    monkeypatch.setenv("OLLAMA_PLACEMENT_URL", "http://offline.invalid")
+    monkeypatch.setattr("service.app.build_ollama_model", OfflinePolicy)
+
+    status, body = post(
+        server,
+        {"profile": "compact-control", "policy": "fast"},
+        path="/placement/repair",
+    )
+
+    assert status == 200
+    assert body["requested_policy"] == "fast"
+    assert body["policy"] == "deterministic"
+    assert body["completed"] is True
+    assert body["policy_fallback"] == {
+        "from": "ollama",
+        "to": "deterministic",
+        "reason": "fast proposer unavailable",
+    }
+
+
+def test_fast_policy_provider_specific_failure_falls_back(server, monkeypatch):
+    class BrokenPolicy:
+        proposer_name = "gemma-local"
+
+        def generate(self, prompt, **kwargs):
+            del prompt, kwargs
+            raise RuntimeError("provider response schema changed")
+
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    monkeypatch.delenv("GOOGLE_API_KEY", raising=False)
+    monkeypatch.delenv("TINKER_API_KEY", raising=False)
+    monkeypatch.delenv("TINKER_PLACEMENT_MODEL", raising=False)
+    monkeypatch.setenv("OLLAMA_PLACEMENT_URL", "http://offline.invalid")
+    monkeypatch.setattr("service.app.build_ollama_model", BrokenPolicy)
+
+    status, body = post(
+        server,
+        {"profile": "compact-control", "policy": "fast"},
+        path="/placement/repair",
+    )
+
+    assert status == 200
+    assert body["policy"] == "deterministic"
+    assert body["completed"] is True
+    assert body["policy_fallback"]["reason"] == "fast proposer unavailable"
+
+
+def test_fast_policy_unusable_output_falls_back(server, monkeypatch):
+    class EmptyPolicy:
+        proposer_name = "gemma-local"
+
+        def generate(self, prompt, **kwargs):
+            del prompt, kwargs
+            return '{"message": {}}'
+
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    monkeypatch.delenv("GOOGLE_API_KEY", raising=False)
+    monkeypatch.delenv("TINKER_API_KEY", raising=False)
+    monkeypatch.delenv("TINKER_PLACEMENT_MODEL", raising=False)
+    monkeypatch.setenv("OLLAMA_PLACEMENT_URL", "http://offline.invalid")
+    monkeypatch.setattr("service.app.build_ollama_model", EmptyPolicy)
+
+    status, body = post(
+        server,
+        {"profile": "compact-control", "policy": "fast", "max_turns": 1},
+        path="/placement/repair",
+    )
+
+    assert status == 200
+    assert body["policy"] == "deterministic"
+    assert body["completed"] is True
+    assert body["policy_fallback"] == {
+        "from": "ollama",
+        "to": "deterministic",
+        "reason": "fast proposer did not complete repair",
+    }
+
+
+def test_placement_feedback_is_request_local_without_authentication(server):
     first_status, first = post(
         server,
         {
             "profile": "compact-control",
-            "profile_id": "acme-layout-v1",
             "feedback": {"fixed_refs_add": ["C1"]},
         },
         path="/placement/repair",
     )
     second_status, second = post(
         server,
-        {"profile": "compact-control", "profile_id": "acme-layout-v1"},
+        {"profile": "compact-control"},
         path="/placement/repair",
     )
 
     assert first_status == second_status == 200
-    assert first["profile_memory"] == "stored"
-    assert second["profile_memory"] == "loaded"
-    assert "C1" in second["profile"]["fixed_refs"]
-    assert second["feedback_applied"] == {"fixed_refs_add": ["C1"]}
+    assert first["profile_memory"] == "request-only"
+    assert second["profile_memory"] == "none"
+    assert "C1" in first["profile"]["fixed_refs"]
+    assert "C1" not in second["profile"]["fixed_refs"]
+
+
+def test_placement_rejects_unauthenticated_server_profile_memory(server):
+    status, body = post(
+        server,
+        {"profile": "compact-control", "profile_id": "shared-team"},
+        path="/placement/repair",
+    )
+
+    assert status == 400
+    assert "unauthenticated placement endpoint" in body["error"]
+
+
+@pytest.mark.parametrize("value", [b"NaN", b"Infinity", b"-Infinity", b"1e309"])
+def test_non_finite_json_is_rejected_before_placement(server, value):
+    raw = b'{"profile":{"clearance":' + value + b"}}"
+    status, _, body_bytes = post_raw(
+        server,
+        "/placement/repair",
+        body=raw,
+        content_length=len(raw),
+    )
+    body = json.loads(body_bytes)
+
+    assert status == 400
+    assert "non-finite number" in body["error"]
 
 
 def test_placement_rejects_unknown_profile(server):

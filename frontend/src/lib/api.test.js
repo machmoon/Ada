@@ -260,7 +260,6 @@ describe('normalizePlacementRequest', () => {
     expect(normalizePlacementRequest()).toEqual({
       profile: 'compact-control',
       policy: 'deterministic',
-      profile_id: '',
     })
   })
 
@@ -269,15 +268,19 @@ describe('normalizePlacementRequest', () => {
       normalizePlacementRequest({
         profile: 'thermal-first',
         policy: 'gemini',
-        profile_id: '  acme-v1  ',
         feedback: { fixed_refs_add: ['C1'] },
       }),
     ).toEqual({
       profile: 'thermal-first',
       policy: 'gemini',
-      profile_id: 'acme-v1',
       feedback: { fixed_refs_add: ['C1'] },
     })
+  })
+
+  it('does not forward caller-selected profile memory ids', () => {
+    expect(
+      normalizePlacementRequest({ profile_id: 'shared-team' }).profile_id,
+    ).toBeUndefined()
   })
 
   it.each(['fast', 'deterministic', 'gemini', 'ollama', 'tinker', 'hybrid'])(
