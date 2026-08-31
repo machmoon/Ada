@@ -28,6 +28,7 @@ from typing import Any
 
 from ..agents.model import Document, Model, ModelError, parse_json
 from .schema import (
+    CONFIDENCE_FLOOR,
     Decoupling,
     Limit,
     PowerSequencing,
@@ -48,7 +49,7 @@ __all__ = [
 ]
 
 #: Below this the extractor's own confidence forces human review.
-CONFIDENCE_FLOOR = 0.8
+
 
 #: Token overlap with the page text at or above this counts as "found".
 #: Tables extract as column soup, so demand most tokens, not all of them.
@@ -511,6 +512,80 @@ def _where_else(quote: str, pages: list[str]) -> int | None:
     return None
 
 
+#: Said of a constraint whose own number is absent from its own quote.
+UNSUPPORTED_NUMBER = "the quote does not contain the value this constraint asserts"
+
+
+def _asserted_numbers(constraint: Any) -> list[float]:
+    """The magnitudes a constraint *claims*, as opposed to any that happen to
+    appear in its quote.
+
+    ``count`` is excluded: "one capacitor per VDD pin" states its count in
+    words, so requiring the digit would flag correct extractions.
+    """
+    out = []
+    limit = getattr(constraint, "limit", None)
+    for name in ("min", "typ", "max"):
+        v = getattr(limit, name, None) if limit is not None else None
+        if isinstance(v, (int, float)) and not isinstance(v, bool):
+            out.append(float(v))
+    for name in ("value", "resistor_value", "max_distance_mm"):
+        v = getattr(constraint, name, None)
+        if isinstance(v, (int, float)) and not isinstance(v, bool):
+            out.append(float(v))
+    return out
+
+
+def _quote_numbers(quote: str) -> set[float]:
+    """Every number a quote can be read as stating.
+
+    Read from the quote *before* :func:`_normalise`, which is tuned for
+    matching text against a page and is lossy about sign in exactly the two
+    ways that matter here: it strips ``±``, and it glues a spaced dash onto
+    the following digits, so a table's "- 2.4" column separator becomes the
+    number -2.4. Both make a sign genuinely ambiguous in the source, so both
+    readings are admitted -- ``±225`` supports -225 and 225 alike. A sign
+    the datasheet states unambiguously is still held to.
+    """
+    text = quote.casefold().replace("\u2013", "-").replace("\u2212", "-")
+    text = re.sub(r"(\d),(?=\d{3})", r"\1", text)
+    out: set[float] = set()
+    for m in re.finditer(r"(?<![a-z0-9])(\u00b1)?\s*(-)?\s*(\d*\.?\d+)", text):
+        pm, neg, num = m.groups()
+        try:
+            value = float(num)
+        except ValueError:
+            continue
+        out.add(value)
+        if pm or neg:
+            out.add(-value)
+    return out
+
+
+def _unsupported_numbers(constraint: Any) -> list[float]:
+    """Numbers the constraint asserts that its quote does not contain.
+
+    Quote verification answers "is this text on that page". It does not
+    answer "does that text say this", and the gap between those two is where
+    a fabrication wearing real provenance lives. Measured on the AMS1117
+    datasheet: a model returned a 10 uF adjust-terminal bypass whose quote --
+    genuine, verbatim, on the right page -- says only that bypassing the
+    adjust terminal increases the *output* capacitor requirement, and that
+    22 uF covers every case. No 10 appears anywhere in it. That constraint
+    verified, passed the gate at 0.9 confidence, and would have been
+    enforced against a board.
+
+    Comparison is numeric, so 1.250 in the quote supports a typ of 1.25.
+    Units are deliberately not converted: a value is checked against the
+    text it was read from, where it stands in the datasheet's own units.
+    """
+    prov = constraint.provenance
+    if not prov.quote:
+        return []
+    in_quote = _quote_numbers(prov.quote)
+    return [n for n in _asserted_numbers(constraint) if n not in in_quote]
+
+
 def gate(constraint: Any, pages: list[str] | None = None) -> Any:
     """Decide ``needs_review`` honestly. Only ever adds reasons, never removes.
 
@@ -533,6 +608,15 @@ def gate(constraint: Any, pages: list[str] | None = None) -> Any:
             if elsewhere is not None:
                 reason += f" (found on page {elsewhere})"
         reasons.append(reason)
+    # Skipped for a human-confirmed constraint: this check is a proxy for
+    # "did a person read the PDF and agree", and there the person already
+    # has. It is the legitimate case too -- a decoupling value read off a
+    # figure is nowhere in the quotable text, which is precisely why the
+    # reference sets record it with a note and a human's signature.
+    unsupported = [] if constraint.confirmed else _unsupported_numbers(constraint)
+    if unsupported:
+        shown = ", ".join(f"{n:g}" for n in unsupported)
+        reasons.append(f"{UNSUPPORTED_NUMBER} ({shown})")
     if not constraint.confidence >= CONFIDENCE_FLOOR:  # NaN-safe ordering
         reasons.append(
             f"extractor confidence {constraint.confidence:.2f} is below "

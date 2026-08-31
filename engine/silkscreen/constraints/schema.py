@@ -106,6 +106,12 @@ class RatingKind(StrEnum):
     PIN_ELECTRICAL = "pin_electrical"
 
 
+#: The extractor confidence a constraint must clear to be trusted without a
+#: human. Defined here rather than in extract.py because the loader enforces
+#: the same floor: a file may not simply declare needs_review=false.
+CONFIDENCE_FLOOR = 0.8
+
+
 @dataclass(frozen=True)
 class _Constraint:
     """Fields every constraint kind shares. Not serialized on its own."""
@@ -381,6 +387,23 @@ def _load_constraint(cls: type, data: Any) -> Any:
         for name in ("min", "typ", "max"):
             _valid_real(getattr(kwargs["limit"], name), f"limit.{name}")
         _check(isinstance(kwargs["limit"].unit, str), "limit.unit must be a string")
+    if "required_state" in kwargs:
+        _check(isinstance(kwargs["required_state"], str),
+               f"required_state must be a string, got "
+               f"{kwargs['required_state']!r}")
+
+    # A file may not simply declare itself trusted. needs_review=false is a
+    # conclusion the gate reaches from verified provenance and confidence, so
+    # a file asserting it without them would walk straight into check_board
+    # past the whole trust ladder. confirmed=true is the one legitimate way
+    # in, because it means a person read the PDF.
+    if kwargs.get("needs_review") is False and not kwargs.get("confirmed"):
+        _check(prov.verified,
+               "needs_review=false needs verified provenance or confirmed=true")
+        _check(kwargs.get("confidence", 0.0) >= CONFIDENCE_FLOOR,
+               f"needs_review=false needs confidence >= {CONFIDENCE_FLOOR} "
+               f"or confirmed=true, got {kwargs.get('confidence', 0.0)!r}")
+
     if "kind" in kwargs:
         # StrEnum serializes as its value; rebuild the enum member. An unknown
         # kind is malformed data, and ValueError is already our contract.

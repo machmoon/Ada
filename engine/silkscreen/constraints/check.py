@@ -477,6 +477,13 @@ def _tied_level(board: AuditBoard, pad: AuditPad) -> str:
     return pulled
 
 
+#: Required states that name a direction, and those that only demand a
+#: defined level. Anything else is a state this checker cannot enforce, and
+#: it says so rather than passing the pin in silence.
+_DIRECTED = {"high", "low", "pull-up", "pull-down"}
+_UNDIRECTED = {"no-float", "not floating", "defined", "tied", "connected"}
+
+
 def _check_strap(
     board: AuditBoard,
     c: StrapPin,
@@ -558,7 +565,20 @@ def _check_strap(
         return
 
     # Tied to something defined. Direction checks need the required state.
-    want = c.required_state.lower()
+    want = (c.required_state or "").strip().lower()
+    if want not in _DIRECTED and want not in _UNDIRECTED:
+        # An unrecognised state used to fall through every branch below and
+        # return quietly, which reads as "checked, and the pin is fine".
+        result.unchecked.append(
+            (c.id,
+             f"required_state {c.required_state!r} is not one this checker "
+             f"understands ({', '.join(sorted(_DIRECTED | _UNDIRECTED))})")
+        )
+        return
+    if want in _UNDIRECTED:
+        # "no-float" and friends ask only for a defined level, which the pin
+        # has by this point. Nothing further to check.
+        return
     tied_low = level in ("low", "pulled-low")
     tied_high = level in ("high", "pulled-high")
     if want in ("high", "pull-up") and tied_low or \

@@ -230,9 +230,25 @@ feature is tracked under feature 12.
                                                                      pypdf page text, gate only ever adds reasons
  ----- Board checker bridge into audit Findings       [DONE]        check.py; decoupling + strap pins; the rest is
                                                                      returned as unchecked, never dropped
- ----- Ground truth: 2-3 real datasheets, hand-checked [OPEN]       extraction accuracy must be measured against
-                                                                     the PDFs and reported honestly before the
-                                                                     schema is trusted at all
+ ----- Ground truth: 2-3 real datasheets, hand-checked [PARTIAL]    52 reference constraints over AMS1117, NE555
+                                                                     and STM32F030F4; live run measured 2026-08-31
+                                                                     on gemini-3.1-flash-lite and written up in
+                                                                     eval/README.md. AMS1117 hand-checked in full
+                                                                     (13 of 14 correct, 1 fabricated); NE555 and
+                                                                     STM32 still need the line-by-line pass
+ ----- Entailment: does the quote SAY the constraint  [OPEN]        the open hole. Quote verification proves the
+                                                                     text is on the page, not that it supports the
+                                                                     claim. The gate now requires an asserted
+                                                                     NUMBER to appear in its quote, which caught a
+                                                                     fabricated 10 uF; it cannot catch a
+                                                                     requirement with no number, e.g. the STM32
+                                                                     BOOT0 "no-float" strap this corpus exists to
+                                                                     trap, inferred from a Boot modes paragraph
+                                                                     and gated as trusted at 0.8 confidence
+ ----- Eval matcher pairs by subject tokens           [OPEN]        it conflates naming (thermal.theta-ja-sot-223
+                                                                     vs thermal.ja-3 are one row), so `matched` is
+                                                                     a lower bound and must not be quoted as an
+                                                                     accuracy percentage
  ----- Constraint library + pipeline integration      [IDEA]        checked-in verified sets per part; feed
                                                                      review.py and the repair loop from them
 

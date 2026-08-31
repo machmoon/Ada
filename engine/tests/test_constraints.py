@@ -9,6 +9,7 @@ contains them, the gate only ever adds review reasons, and board findings are
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 
 import pytest
 from silkscreen.agents.model import ScriptedModel
@@ -33,6 +34,7 @@ from silkscreen.constraints import (
     verify_provenance,
 )
 from silkscreen.constraints.extract import (
+    UNSUPPORTED_NUMBER,
     WEAK_PROVENANCE,
     extract_design_requirements,
     extract_ratings,
@@ -1076,3 +1078,113 @@ def test_floating_strap_is_a_blocker_even_under_a_condition():
     result = check_board(board, ConstraintSet(part_number="X", strap_pins=[c]),
                          ref="U1", pin_map={"RESET": "4"})
     assert [f.severity for f in result.findings] == [Severity.BLOCKER]
+
+
+def test_number_absent_from_its_own_quote_is_flagged():
+    """The real AMS1117 case: gemini-3.1-flash-lite returned a 10 uF
+    adjust-terminal bypass whose quote is genuine, verbatim and on the right
+    page -- and says only that bypassing the adjust terminal increases the
+    *output* capacitor requirement, which 22 uF covers. No 10 in it. It
+    verified and passed the gate at 0.9 confidence."""
+    quote = ("When the adjustment terminal is bypassed with a capacitor to "
+             "improve the ripple rejection, the requirement for an output "
+             "capacitor increases. The value of 22 uF tantalum covers all "
+             "cases of bypassing the adjustment terminal.")
+    fabricated = Decoupling(id="d", rail="adjust", value=10.0, unit="uF",
+                            confidence=1.0,
+                            provenance=Provenance(4, "Stability", quote, True))
+    assert gate(fabricated).needs_review is True
+    assert UNSUPPORTED_NUMBER in gate(fabricated).review_reason
+
+    supported = replace(fabricated, value=22.0)
+    assert gate(supported).needs_review is False
+
+
+def test_sign_ambiguous_quotes_still_support_their_value():
+    """"±225 mA" states both readings, and a table's "- 2.4" column
+    separator is not a minus. Neither may be read as a contradiction."""
+    pm = Rating(
+        id="r", confidence=1.0,
+        limit=Limit(min=-225.0, max=225.0, unit="mA"),
+        provenance=Provenance(2, "T", "Output current ±225 mA", True),
+    )
+    assert gate(pm).needs_review is False
+
+    dash = Rating(
+        id="r", confidence=1.0, limit=Limit(min=2.4, max=3.6, unit="V"),
+        provenance=Provenance(
+            44, "T", "VDD Standard operating voltage - 2.4 3.6 V", True),
+    )
+    assert gate(dash).needs_review is False
+
+
+def test_a_human_confirmed_value_may_come_from_a_figure():
+    """The legitimate case the check must not break: the STM32's 100 nF
+    decoupling value is drawn in Figure 13, so it appears in no quotable
+    sentence. A person signed for it."""
+    quote = ("Each power supply pair (VDD/VSS, VDDA/VSSA etc.) must be "
+             "decoupled with filtering ceramic capacitors as shown above.")
+    c = Decoupling(id="d", rail="VDD", value=100.0, unit="nF", per_pin=True,
+                   confidence=1.0, confirmed=True,
+                   provenance=Provenance(31, "Power supply scheme", quote, True))
+    assert gate(c).needs_review is False
+    assert gate(replace(c, confirmed=False)).needs_review is True
+
+
+def test_a_file_may_not_declare_itself_trusted():
+    """needs_review=false is a conclusion the gate reaches, not a field a
+    file gets to assert. Without this, a hand-edited or mis-generated set
+    walks past the entire trust ladder into check_board."""
+    def build(**over):
+        entry = {"id": "r", "confidence": 0.95, "needs_review": False,
+                 "provenance": {"page": 1, "quote": "VDD max 3.6 V",
+                                "verified": True}}
+        entry.update(over)
+        return {"part_number": "X", "schema_version": SCHEMA_VERSION,
+                "ratings": [entry]}
+
+    assert ConstraintSet.from_dict(build()).trusted()
+
+    with pytest.raises(ValueError, match="verified provenance"):
+        ConstraintSet.from_dict(build(
+            provenance={"page": 1, "quote": "q", "verified": False}))
+    with pytest.raises(ValueError, match="confidence >="):
+        ConstraintSet.from_dict(build(confidence=0.4))
+
+    # confirmed is the one legitimate way in: a person read the PDF.
+    assert ConstraintSet.from_dict(build(
+        confidence=0.1, confirmed=True,
+        provenance={"page": 1, "quote": "q", "verified": False})).trusted()
+
+
+def test_unrecognised_required_state_is_unchecked_not_silently_passed():
+    c = _trusted(StrapPin(id="s", pin="MODE", required_state="mid-rail",
+                          provenance=_prov()))
+    board = _board([
+        _part("U1", "MCU", [
+            _pad("U1", "1", "VDD", 0.0, 0.0),
+            _pad("U1", "2", "GND", 0.0, 2.0),
+        ]),
+        _part("U2", "X", [_pad("U2", "1", "VDD", 5.0, 0.0)]),
+    ])
+    result = check_board(board, ConstraintSet(part_number="X", strap_pins=[c]),
+                         ref="U1", pin_map={"MODE": "1"})
+    assert result.findings == []
+    assert any(cid == "s" and "mid-rail" in why for cid, why in result.unchecked)
+
+
+def test_no_float_is_satisfied_by_any_defined_level():
+    """"no-float" asks only for a defined level, either way."""
+    c = _trusted(StrapPin(id="s", pin="BOOT0", required_state="no-float",
+                          provenance=_prov()))
+    board = _board([
+        _part("U1", "MCU", [
+            _pad("U1", "1", "GND", 0.0, 0.0),
+            _pad("U1", "2", "VDD", 0.0, 2.0),
+        ]),
+        _part("U2", "X", [_pad("U2", "1", "GND", 5.0, 0.0)]),
+    ])
+    result = check_board(board, ConstraintSet(part_number="X", strap_pins=[c]),
+                         ref="U1", pin_map={"BOOT0": "1"})
+    assert result.findings == []
+    assert result.unchecked == []
