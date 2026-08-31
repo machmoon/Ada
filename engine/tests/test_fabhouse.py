@@ -119,6 +119,24 @@ def test_a_board_larger_than_the_house_panel_is_blocked(routed):
     )
 
 
+def test_the_outline_margin_counts_against_the_house_panel(routed):
+    """The fab cuts the profile, not the placement (PR #27 review, P1).
+
+    A placement within one margin of the panel maximum used to pass, even
+    though the emitted outline -- the rectangle the house actually builds and
+    the quote already bills -- exceeds it.
+    """
+    service = service_by_id("pcbway-2layer")
+    routed.width_nm, original = service.max_width_nm - mm(1), routed.width_nm
+    try:
+        issues = check_capabilities(routed, service)
+        unmargined = check_capabilities(routed, service, margin_nm=0)
+    finally:
+        routed.width_nm = original
+    assert "board-too-large" in _codes(issues)
+    assert "board-too-large" not in _codes(unmargined)
+
+
 def test_a_board_smaller_than_the_house_minimum_is_blocked(routed):
     service = service_by_id(DEFAULT_SERVICE_ID)
     original = routed.height_nm
@@ -143,20 +161,29 @@ def test_a_track_under_the_house_minimum_is_blocked(routed):
 
 
 def test_a_thin_annular_ring_is_blocked_at_the_house_that_forbids_it(routed):
-    """The same via clears OSH Park and fails JLCPCB. Both answers are right."""
-    assert routed.vias, "this fixture is meant to have vias"
-    ring_nm = (routed.vias[0].diameter_nm - routed.vias[0].drill_nm) // 2
+    """The same via clears OSH Park and fails JLCPCB. Both answers are right.
 
-    oshpark = service_by_id("oshpark-2layer")
-    jlcpcb = service_by_id("jlcpcb-2layer")
-    assert oshpark.min_annular_ring_nm <= ring_nm < jlcpcb.min_annular_ring_nm
+    The via is injected with the router's own geometry rather than taken from
+    the fixture, because whether this small board routes with a via at all is
+    the solver's choice and differs between platforms.
+    """
+    original = list(routed.vias)
+    routed.vias = [*original, Via(0, 0, "GND", mm(0.6), mm(0.3))]
+    try:
+        ring_nm = (routed.vias[-1].diameter_nm - routed.vias[-1].drill_nm) // 2
 
-    assert "annular-ring-below-fab-minimum" not in _codes(
-        check_capabilities(routed, oshpark)
-    )
-    assert "annular-ring-below-fab-minimum" in _codes(
-        check_capabilities(routed, jlcpcb)
-    )
+        oshpark = service_by_id("oshpark-2layer")
+        jlcpcb = service_by_id("jlcpcb-2layer")
+        assert oshpark.min_annular_ring_nm <= ring_nm < jlcpcb.min_annular_ring_nm
+
+        assert "annular-ring-below-fab-minimum" not in _codes(
+            check_capabilities(routed, oshpark)
+        )
+        assert "annular-ring-below-fab-minimum" in _codes(
+            check_capabilities(routed, jlcpcb)
+        )
+    finally:
+        routed.vias = original
 
 
 def test_a_drill_under_the_house_minimum_is_blocked(routed):

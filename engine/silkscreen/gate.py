@@ -39,7 +39,7 @@ from dataclasses import dataclass, field
 from enum import StrEnum
 from pathlib import Path
 
-from .board import BoardResult, emit_kicad_pcb
+from .board import DEFAULT_BOARD_MARGIN_NM, BoardResult, emit_kicad_pcb
 from .fab import FabLayer, fab_files
 from .fabhouse import DEFAULT_SERVICE_ID, FabService, check_capabilities, service_by_id
 from .netlist import CircuitSpec, ValidationError
@@ -396,7 +396,10 @@ def _check_capabilities(
     rings = [(v.diameter_nm - v.drill_nm) // 2 for v in board.vias]
     evidence = [
         f"house {service.house}, service {service.service} ({service.source_url})",
-        f"board {_mm3(board.width_nm)} x {_mm3(board.height_nm)} mm against a "
+        # The profile the fab cuts -- placement plus outline margin -- which is
+        # the rectangle check_capabilities compares and quote() bills.
+        f"board profile {_mm3(board.width_nm + 2 * DEFAULT_BOARD_MARGIN_NM)} x "
+        f"{_mm3(board.height_nm + 2 * DEFAULT_BOARD_MARGIN_NM)} mm against a "
         f"{_mm3(service.max_width_nm)} x {_mm3(service.max_height_nm)} mm maximum",
     ]
     if tracks:

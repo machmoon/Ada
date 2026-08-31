@@ -26,6 +26,8 @@ from silkscreen.netlist import (
     parse_circuit_spec,
 )
 from silkscreen.order import OrderOptions
+from silkscreen.routing import Via
+from silkscreen.units import mm
 
 CIRCUIT = {
     "devices": {"U1": {"pins": {"GND": "1", "VOUT": "2", "VIN": "3"}}},
@@ -209,11 +211,21 @@ def test_assembly_without_part_numbers_fails_but_bare_boards_only_warn(
 
 
 def test_the_same_board_can_be_buildable_at_one_house_and_not_another(routed, spec):
-    """The router's vias clear OSH Park's annular ring and fail JLCPCB's."""
-    oshpark = _check(run_gate(routed, spec=spec, service="oshpark-2layer"),
-                     "fab-capabilities")
-    jlcpcb = _check(run_gate(routed, spec=spec, service="jlcpcb-2layer"),
-                    "fab-capabilities")
+    """The router's vias clear OSH Park's annular ring and fail JLCPCB's.
+
+    The via is injected with the router's own 0.6/0.3 mm geometry rather than
+    taken from the fixture: whether this small board routes with a via at all
+    is the solver's choice, and it differs between platforms.
+    """
+    original = list(routed.vias)
+    routed.vias = [*original, Via(0, 0, "GND", mm(0.6), mm(0.3))]
+    try:
+        oshpark = _check(run_gate(routed, spec=spec, service="oshpark-2layer"),
+                         "fab-capabilities")
+        jlcpcb = _check(run_gate(routed, spec=spec, service="jlcpcb-2layer"),
+                        "fab-capabilities")
+    finally:
+        routed.vias = original
     assert oshpark.status is CheckStatus.PASS
     assert jlcpcb.status is CheckStatus.FAIL
     assert any("annular" in i.code for i in jlcpcb.issues)
@@ -277,17 +289,26 @@ def test_a_via_in_the_non_plated_program_fails(routed, spec):
 
 
 def test_a_drill_hit_with_no_tool_defined_fails(routed, spec):
-    files = fab_files(routed)
-    plated = next(f.content for f in files if f.filename == "silkscreen-PTH.DRL")
-    stripped = "\n".join(
-        line for line in plated.splitlines() if not line.startswith("T1C")
-    ) + "\n"
-    check = _check(
-        run_gate(
-            routed, spec=spec, files=_swap(files, "silkscreen-PTH.DRL", stripped)
-        ),
-        "drill-consistent",
-    )
+    # A via is injected so the plated program is guaranteed a hit to strip the
+    # tool out from under; whether the router used one is platform-dependent.
+    original = list(routed.vias)
+    routed.vias = [*original, Via(0, 0, "GND", mm(0.6), mm(0.3))]
+    try:
+        files = fab_files(routed)
+        plated = next(
+            f.content for f in files if f.filename == "silkscreen-PTH.DRL"
+        )
+        stripped = "\n".join(
+            line for line in plated.splitlines() if not line.startswith("T1C")
+        ) + "\n"
+        check = _check(
+            run_gate(
+                routed, spec=spec, files=_swap(files, "silkscreen-PTH.DRL", stripped)
+            ),
+            "drill-consistent",
+        )
+    finally:
+        routed.vias = original
     assert check.status is CheckStatus.FAIL
 
 

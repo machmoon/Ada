@@ -36,7 +36,7 @@ import math
 from dataclasses import dataclass, field
 from enum import StrEnum
 
-from .board import BoardResult
+from .board import DEFAULT_BOARD_MARGIN_NM, BoardResult
 from .fab import SILK_WIDTH_NM
 from .order import OrderIssue, OrderIssueSeverity, OrderOptions
 from .units import mil, mm, to_mm
@@ -276,6 +276,7 @@ def check_capabilities(
     *,
     options: OrderOptions | None = None,
     silk_width_nm: int = SILK_WIDTH_NM,
+    margin_nm: int = DEFAULT_BOARD_MARGIN_NM,
 ) -> tuple[OrderIssue, ...]:
     """Compare the board and the requested options against one house's limits.
 
@@ -284,13 +285,18 @@ def check_capabilities(
     house states as absolute produces a blocker; a mismatch the house would
     silently substitute produces a warning, because a substitution the buyer
     did not ask for is a surprise on arrival rather than a refusal at checkout.
+
+    The dimensions checked are the emitted profile -- the placement plus the
+    outline margin on all four sides -- because that is the rectangle the fab
+    actually cuts, the same one :func:`quote` bills. Checking the placement
+    alone approves a board whose shipped outline exceeds the house maximum.
     """
     options = options or OrderOptions()
     issues: list[OrderIssue] = []
     where = f"{service.house} {service.service}"
 
-    width_nm = board.width_nm
-    height_nm = board.height_nm
+    width_nm = board.width_nm + 2 * margin_nm
+    height_nm = board.height_nm + 2 * margin_nm
     if width_nm > service.max_width_nm or height_nm > service.max_height_nm:
         issues.append(
             OrderIssue(
