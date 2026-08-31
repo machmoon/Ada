@@ -34,7 +34,7 @@ jobs:
         if: runner.os == 'macOS'
         run: brew install ngspice
       - run: pip install -e ".[dev,agents,cloud,adk]"
-      - run: ruff check engine service scripts
+      - run: ruff check engine service scripts desktop googleapps
       - run: pytest -q
       # Fails if README/DEVPOST quote a test count that is no longer true.
       # That figure has gone stale repeatedly (40 -> 54 -> 143 -> 160 -> 183).
@@ -80,6 +80,29 @@ jobs:
         working-directory: app
       - run: npx vitest run
         working-directory: app
+
+  desktop:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: rustup component add rustfmt clippy
+      - run: npm ci
+        working-directory: frontend
+      - run: npm test
+        working-directory: frontend
+      - run: npm run build
+        working-directory: frontend
+      - run: cargo fmt --manifest-path desktop/src-tauri/Cargo.toml -- --check
+      - run: cargo clippy --manifest-path desktop/src-tauri/Cargo.toml --locked --all-targets -- -D warnings
+      - run: cargo test --manifest-path desktop/src-tauri/Cargo.toml --locked --all-targets
+      # This compiles the embedded Svelte bundle and validates Tauri's config
+      # without producing an installer. Python bundling/signing are not ready.
+      - run: cargo build --manifest-path desktop/src-tauri/Cargo.toml --locked
 
   docker:
     runs-on: ubuntu-latest

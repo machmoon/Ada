@@ -101,15 +101,15 @@ Every stage is a real KiCad file you can open and inspect on its own, so you can
 where a design went wrong instead of only seeing the last artifact.
 
 ```
-884 tests collected — no network, no API key, no KiCad install
+1108 tests collected — no network, no API key, no KiCad install
 ```
 
 **Next:** [full install guide and troubleshooting](docs/install.md) ·
 [contributing](CONTRIBUTING.md) · [how it works](#prompt-to-pcb)
 
 **Download:** [tagged releases](https://github.com/machmoon/silkscreen/releases) carry the
-Python wheel, the built web UI, and the **Kaleo** desktop app (macOS `.dmg`,
-Apple Silicon, ad-hoc signed — right-click → Open on first launch).
+Python wheel and built web UI. The native **Ada** macOS shell currently runs
+from a checkout; `.dmg` packaging, signing, and notarization are not yet built.
 
 ---
 
@@ -131,7 +131,7 @@ placement diagram, review, and final `.kicad_pcb`. It still does not return the 
 
 ---
 
-## Do I need KiCad?
+## How you are meant to run this
 
 **Not to run Silkscreen. Yes, strongly recommended, to do anything with what it makes.**
 
@@ -145,7 +145,7 @@ work you do in KiCad. Install it unless you have a specific reason not to.
 |---|---|---|
 | Generate a schematic and a routed board from a prompt | ✅ | ✅ |
 | Run the test suite | ✅ | ✅ |
-| Deploy the service, use the MCP server | ✅ | ✅ |
+| Deploy the service, use the MCP server, the Slack bot or the Google Workspace CLI | ✅ | ✅ |
 | **See the schematic and the board** | ❌ | ✅ |
 | **Finish the nets the router left unrouted** | ❌ | ✅ |
 | **Run DRC and electrical rules check** | ❌ | ✅ |
@@ -175,7 +175,9 @@ Platform-by-platform commands are in [docs/install.md](docs/install.md#kicad-opt
 | `order.py` — order options, manufacturability preflight | **Working** · blocks an unrouted board |
 | `mcp/` — MCP server over stdio | **Working** · 43 tests |
 | `audit/` — optional visual design review | **Working** · 52 tests |
-| `service/` — Cloud Run + Firestore cache | **Working** · 144 tests · not deployed anywhere yet; no live URL |
+| `service/` — Cloud Run + Firestore cache | **Working** · 146 tests · live at <https://silkscreen-vqdj4x5qbq-uc.a.run.app> |
+| `slackbot/` — Slack bot over the pipeline | **Working** · untested against a live workspace |
+| `googleapps/` — Chat, Gmail and Calendar delivery over the pipeline | **Working** · untested against live Google APIs |
 | `frontend/` — Svelte review UI, served by the service | **Working** · persistent orchestrator chat, expandable traces, session JSON, review, schematic, placement and board tabs |
 | `engine/silkscreen/placement/` — verifier-grounded repair and company profiles | **Working** · deterministic and Gemini policies; experimental providers are opt-in |
 | `constraints.py` — approved build contract and post-route receipt | **Working** · opt-in, fail-closed, and deterministically tested |
@@ -437,7 +439,7 @@ treats the board file as the interface.
 | Requires KiCad running | Yes | **No** |
 | Headless / CI | Hard | **Native** |
 | Platform lock | KiCad's plugin loader | **None — pure Python** |
-| Testable without KiCad | No | **Yes, all 884 tests** |
+| Testable without KiCad | No | **Yes, all 1108 tests** |
 
 ### What it reads
 
@@ -538,11 +540,17 @@ by unit tests, not by the number above.
 
 ```bash
 gcloud run deploy silkscreen --source . --region us-central1 \
-  --set-env-vars GOOGLE_API_KEY=...,GOOGLE_CLOUD_PROJECT=your-project
+  --set-secrets GOOGLE_API_KEY=google-api-key:latest \
+  --set-env-vars GOOGLE_CLOUD_PROJECT=your-project
 ```
 
-Nothing in this repo performs a deploy and no instance is running anywhere — that
-command is the recipe, not a description of something live.
+A live instance is running at
+<https://silkscreen-vqdj4x5qbq-uc.a.run.app> (deployed 2026-08-31, project
+`project-e9121780-d00d-4f9b-8b5`; the Gemini key comes from Secret Manager and
+`POST /generate` requires an access token, so browsing to it costs nobody
+anything). Probe liveness with `GET /`, not `/healthz` — Google's frontend
+intercepts `/healthz` on `run.app` domains at the edge and answers 404 before
+the request reaches the container.
 
 `POST /generate` with `{"intent": "...", "datasheets": {"PART": "url"}}` returns
 the board, the emitted `.kicad_pcb`, and a versioned `schematic` topology block
@@ -563,7 +571,104 @@ and notices local `.env` edits that require a backend restart. The response cont
 variable names and status messages only; it never returns configuration values or
 credentials. These checks do not make paid generation calls.
 
+### In Slack
+
+`slackbot/` puts the pipeline in a hardware team's channel. Mention the bot with
+what you want built and it replies **in a thread under your message** — a live
+stage list, the review, a rendered preview of the placement, and the emitted
+`.kicad_pcb` — so the whole team can read the run later, not just whoever asked.
+
+```
+@silkscreen design a 3.3V buck converter from 12V --datasheet TPS62840=https://…
+@silkscreen place an stm32f103 breakout      # skip the review: faster and cheaper
+@silkscreen review                           # re-run the critic on this thread's run
+@silkscreen order 25                         # prepare a fab order (never submits one)
+@silkscreen help
+```
+
+`order` **prepares** a fabrication order and stops: board size, stackup, the files
+the run produced, any blocking findings from the review, and what a fabricator still
+needs. It posts that draft as a message and a JSON attachment. It does not contact a
+vendor, submit anything, or touch a payment method — none of that exists in this
+codebase, and a test enforces it by import. A human places the order.
+
+**Running it:**
+
+```bash
+./.venv/bin/pip install -e ".[dev,agents,slack]"
+export SLACK_BOT_TOKEN=xoxb-… SLACK_SIGNING_SECRET=… GOOGLE_API_KEY=…
+python -m slackbot                      # POST /slack/events on :3000
+```
+
+Slack has to reach that port, so in development put a tunnel in front of it
+(`ngrok http 3000` or equivalent) and give Slack the public URL.
+
+**Creating the app** (once, in your workspace, at <https://api.slack.com/apps>):
+
+1. **Create New App → From scratch**, pick your workspace.
+2. **OAuth & Permissions → Bot Token Scopes**: `app_mentions:read`, `chat:write`,
+   `files:write`, `reactions:write`. Add `commands` if you want the slash command.
+3. **Install to Workspace**, then copy the **Bot User OAuth Token** (`xoxb-…`) into
+   `SLACK_BOT_TOKEN`.
+4. **Basic Information → Signing Secret** goes into `SLACK_SIGNING_SECRET`. Every
+   request is HMAC-verified against it before it is parsed, and requests older than
+   five minutes are refused, so a captured one cannot be replayed.
+5. **Event Subscriptions → Enable**, request URL `https://your-host/slack/events`.
+   Slack verifies the URL with a challenge the bot answers automatically. Under
+   **Subscribe to bot events** add `app_mention`.
+6. Optionally **Slash Commands → Create**: `/silkscreen`, request URL
+   `https://your-host/slack/commands`.
+7. Invite the bot to the channel: `/invite @silkscreen`.
+
+Set `SILKSCREEN_SLACK_CHANNELS` to a comma-separated list of channel IDs to confine
+runs to the channels that are paying for them; leave it unset to allow any channel
+the bot is in. `SILKSCREEN_SLACK_MAX_RUNS` (default 2) caps concurrent runs — a
+design run costs model calls and a CP-SAT solve, so six people asking at once should
+not start six.
+
+Runs are remembered per thread **in memory**, so `review` and `order` work on the
+run above them and a restart forgets them; the bot says so rather than acting on the
+wrong board. Artifacts are also written under `SILKSCREEN_SLACK_WORKDIR`
+(default `slack-runs/`).
+
+### In Google Workspace
+
+`googleapps/` delivers a finished run to the places a hardware team already
+looks: a **Google Chat** space gets a run card, **Gmail** gets the summary with
+the emitted `.kicad_pcb` attached, and — only when the adversarial review found
+blockers — **Calendar** gets a design-review event with a Meet link:
+
+```bash
+python -m googleapps auth        # one command, one browser click-through
+python -m googleapps check      # what is configured, is the token valid — no network
+python -m googleapps run "a 3.3V LDO board" -o out/board.kicad_pcb \
+    --chat \
+    --email lead@example.com \
+    --schedule --attendee lead@example.com
+```
+
+`--schedule` creates the event **only** when the review produced blockers, and
+says which way that went either way — a clean review schedules nothing. The
+card and the email follow the same honesty rule as every other surface here:
+every net the router left unrouted is named, verbatim, with the router's
+reason; nothing ever says "board ready" over a ratsnest.
+
+Auth is a stdlib OAuth 2.0 installed-app flow with PKCE — no Google client
+libraries. The token lands at `~/.config/silkscreen/google-token.json` with
+mode 0600 and refreshes transparently; the Chat webhook URL is itself the
+credential and is validated (https, `chat.googleapis.com`, a `/v1/spaces/…`
+path) before anything is sent to it. Nothing in the package will address a
+non-Google host.
+
+Setup — Cloud project, enabling the Gmail and Calendar APIs, creating the
+Desktop-app OAuth client and the Chat webhook — is walked through in
+[docs/googleapps.md](docs/googleapps.md). **It has not been run against live
+Google APIs yet**; the offline tests cover request construction against a
+recorded transport, and the first live run should be treated as the real test.
+
 ### Running the web UI
+
+> Secondary and not well supported — see [How you are meant to run this](#how-you-are-meant-to-run-this).
 
 The UI is a Svelte SPA in `frontend/`, and it needs Node 22 or newer
 (`node --version`). In development it runs on Vite's dev server, which proxies
@@ -633,6 +738,48 @@ analyses only. Unknown fields and raw model/directive text are rejected before a
 simulator starts; runtime is capped at 120 seconds and returned waveforms at 2,000
 points per signal. `spice_capabilities` reports simulator names without exposing local
 executable paths.
+
+### In Google Meet
+
+`meetings/` reads the transcript of a meeting that already happened and drafts a
+board for what the meeting asked for. **Read the limits before the feature:**
+
+- It reads a conference **after it ends**, not while it runs. Nothing listens
+  live; a live listener would need the Meet Media API, which is a different and
+  much larger piece of work.
+- It only sees a meeting where the **organiser turned transcription on**. No
+  transcript means no input, and the run says so rather than reporting an empty
+  meeting.
+- It does **not** join the call. There is no headless browser, no fake
+  participant, and no media plumbing — every open-source meeting bot works that
+  way, and this deliberately does not. It is the Google Meet REST API v2 and
+  nothing else.
+- It has **never been run against a live Google Workspace account**. The Meet
+  API path is unverified live: every test drives a recorded transport offline.
+
+Configuration is environment only, and the package does **not** perform the
+OAuth flow — the host supplies an already-obtained bearer token:
+
+```bash
+export MEET_ACCESS_TOKEN=...   # required; scope meetings.space.readonly
+export MEET_SPACES=spaces/abc,spaces/def  # optional allowlist; empty = every conference the token can see
+export MEET_API_BASE=https://meet.googleapis.com/v2  # optional, pinned by default
+export MEET_MAX_AGE_HOURS=24   # ignore conferences that ended longer ago
+export MEET_MAX_RUNS_PER_POLL=3  # cap the board runs one poll may start
+```
+
+Token acquisition, refresh and storage belong to the host application. The scope
+is read-only on purpose: nothing here creates, modifies or joins a meeting.
+
+What survives the meeting is **drafted, not ordered**. A request whose quote is
+not in the transcript is dropped, a request below the confidence floor is
+recorded but not built, and every skipped request is still reported — a bot that
+quietly ignores what someone asked for is the failure people actually hit.
+Nothing is ever purchased.
+
+The board itself comes from the same generator the CLI uses, so this is a
+different way to supply the sentence, not a second pipeline. When the output
+files matter, `python -m silkscreen "..."` remains the complete path.
 
 ---
 
@@ -793,7 +940,7 @@ engine/
       pipeline.py   prompt -> PCB
       adk/          ADK dynamic workflow over the same stage bodies
     audit/        optional visual review of a finished board
-  tests/          884 tests — no network, no API keys, no KiCad
+  tests/          1108 tests — no network, no API keys, no KiCad
     fixtures/     ref.kicad_pcb -- 11-footprint board fixture
 scripts/
   demo.py         end-to-end: read -> place -> write -> verify

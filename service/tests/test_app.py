@@ -1172,6 +1172,15 @@ def test_healthz_beats_a_bundle_file_of_the_same_name(server, web_dist):
     assert json.loads(body)["ok"] is True
 
 
+def test_readyz_answers_like_healthz(server, web_dist):
+    # Google's frontend intercepts /healthz on run.app domains before the
+    # container sees it, so external smoke checks probe /readyz instead.
+    status, headers, body = get(server, "/readyz")
+    assert status == 200
+    assert headers["Content-Type"] == "application/json"
+    assert json.loads(body)["ok"] is True
+
+
 def test_generate_is_unaffected_by_the_bundle(server, web_dist):
     status, body = post(server, {"intent": "a 3.3V regulator", "time_limit_s": 5})
     assert status == 200
@@ -3166,3 +3175,30 @@ def test_an_order_and_grounding_coexist(ground_server):
 
     assert body["kicad_pcb"].startswith("(kicad_pcb")
     assert [p["ref"] for p in body["parts"]] == ["U1", "C1", "C2"]
+
+
+def test_build_model_chain_ends_on_the_gemma_rung(monkeypatch):
+    """Two Gemini tiers, then open-weights Gemma as the last resort.
+
+    Gemma is a different model family behind the same API, so an outage or a
+    quota pool shared by the Gemini tiers still leaves one rung standing. One
+    attempt only: by then the caller has waited through four Gemini attempts.
+    """
+    from silkscreen.agents.model import CHEAP_MODEL, DEFAULT_MODEL, GEMMA_MODEL
+
+    from service.app import build_model
+
+    monkeypatch.setenv("GOOGLE_API_KEY", "test-key")
+    chain = build_model()
+
+    assert [p.name for p in chain.providers] == [
+        "gemini-primary",
+        "gemini-cheap",
+        "gemma-open",
+    ]
+    assert [p.model.model for p in chain.providers] == [
+        DEFAULT_MODEL,
+        CHEAP_MODEL,
+        GEMMA_MODEL,
+    ]
+    assert chain.providers[-1].attempts == 1

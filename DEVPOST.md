@@ -156,6 +156,15 @@ before it is shown. **[not yet built]** The approval gate that would let you acc
 suggested fix and have it applied: the fix buttons in the review UI are deliberately
 inert until that exists.
 
+**6½. Deliver it where the team already lives. [built, untested against live Google APIs]**
+A finished run can leave the terminal on its own: `python -m googleapps` posts a
+run card into a Google Chat space, emails the summary with the `.kicad_pcb`
+attached via Gmail, and — only when the adversarial review found blockers —
+schedules a design-review Calendar event with a Meet link. Stdlib OAuth with
+PKCE, one `auth` command, and the same honesty contract as every other surface:
+unrouted nets are named verbatim on the card, never papered over. Written
+offline against the documented REST APIs; it has not yet made a live call.
+
 **7. Show, don't tell. [not yet built]**
 Professional EDA tools are dense — KiCad has dozens of panels, and knowing *where to
 click* is a real barrier that no chatbot removes. Silkscreen drives an animated cursor
@@ -231,7 +240,7 @@ network calls; Gemini and the opt-in placement providers sit behind policy adapt
 - Pure-integer nanometre arithmetic end to end, because unit confusion between
   millimetres, mils, and KiCad's internal nanometres is a silent, board-destroying class
   of bug
-- 884 tests that run with no network, no API key, and no KiCad installed
+- 1108 tests that run with no network, no API key, and no KiCad installed
 
 Splitting it this way is the point. The parts that must be *correct* are testable
 offline. The parts that must be *smart* are the ones talking to a model.
@@ -289,7 +298,7 @@ valuable engineering artifact we produced was an honest list of what was actuall
 What we're proud of in the new one:
 
 - **The deterministic kernel has no network calls.** Every correctness-critical path is tested offline.
-- **884 tests, and the interesting ones are regressions** — each pins down a specific bug
+- **1108 tests, and the interesting ones are regressions** — each pins down a specific bug
   that shipped in the previous version and can never ship again.
 - **A validation layer whose job is to say no.** The IR makes a floating capacitor and a
   hallucinated pin unrepresentable rather than merely unlikely.
@@ -326,7 +335,7 @@ meant to build. The lesson we took is that the README should be written from the
 at revision `ad58192`, MIT licensed, included unmodified with its licence file
 intact as a working reference for the guided-cursor overlay we have not built
 yet. Nothing in `engine/`, `service/`, or `scripts/` imports from it, it is
-excluded from lint and tests, and it contributes nothing to the 884 tests or to
+excluded from lint and tests, and it contributes nothing to the 1108 tests or to
 any figure quoted in this document. Everything else in the repository was
 written during the submission period.
 

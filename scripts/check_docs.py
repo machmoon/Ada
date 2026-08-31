@@ -60,6 +60,27 @@ MODULES: dict[str, tuple[str, ...]] = {
     "mcp/": ("test_mcp.py",),
     "audit/": ("test_audit.py",),
     "service/": ("test_app.py", "test_cache.py"),
+    "slackbot/": (
+        "test_commands.py",
+        "test_slack.py",
+        "test_render.py",
+        "test_blocks.py",
+        "test_order.py",
+        "test_config.py",
+        "test_runner.py",
+        "test_http.py",
+        "test_end_to_end.py",
+    ),
+    "googleapps/": (
+        "test_auth.py",
+        "test_calendar.py",
+        "test_chat.py",
+        "test_gmail.py",
+        "test_transport.py",
+        "test_workspace_cli.py",
+        "test_workspace_config.py",
+        "test_workspace_end_to_end.py",
+    ),
 }
 
 

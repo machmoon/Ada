@@ -63,11 +63,11 @@ export function parseSession(text) {
     throw new Error('Session file is not valid JSON.')
   }
   if (!document || document.schema !== 'silkscreen.session' || document.version !== VERSION) {
-    throw new Error('This is not a supported Silkscreen session file.')
+    throw new Error('This is not a supported Ada session file.')
   }
   const session = objectOf(document.session)
   if (!PHASES.includes(session.phase) || !Array.isArray(session.entries)) {
-    throw new Error('The Silkscreen session is incomplete.')
+    throw new Error('The Ada session is incomplete.')
   }
   return {
     ...session,
