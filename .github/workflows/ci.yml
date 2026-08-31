@@ -28,7 +28,7 @@ jobs:
         if: runner.os == 'macOS'
         run: brew install ngspice
       - run: pip install -e ".[dev,agents,cloud,adk]"
-      - run: ruff check engine service scripts desktop
+      - run: ruff check engine service scripts desktop googleapps
       - run: pytest -q
       # Fails if README/DEVPOST quote a test count that is no longer true.
       # That figure has gone stale repeatedly (40 -> 54 -> 143 -> 160 -> 183).
