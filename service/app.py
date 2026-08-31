@@ -98,7 +98,7 @@ __all__ = [
 ]
 
 MAX_BODY_BYTES = 1 << 20
-DEFAULT_TIME_LIMIT = 20.0
+DEFAULT_TIME_LIMIT = 5.0
 PAGES_COLLECTION = "datasheet_pages"
 MAX_GROUND_PARTS = 25
 
@@ -678,6 +678,21 @@ def _placement_models(
     return None, None
 
 
+def _run_placement_policy(
+    payload: dict[str, Any],
+    policy: str,
+    gemini_factory: Callable[[], Any],
+    profile_store: FactStore,
+) -> dict[str, Any]:
+    model, fallback_model = _placement_models(policy, gemini_factory)
+    return repair_request(
+        {**payload, "policy": policy},
+        model=model,
+        fallback_model=fallback_model,
+        profile_store=profile_store,
+    )
+
+
 def _record_failure_trace_ids(
     payload: dict[str, Any],
     result: dict[str, Any],
@@ -1079,21 +1094,28 @@ class Handler(BaseHTTPRequestHandler):
             ).strip().lower()
             policy_status = placement_policy_status()
             policy = resolve_placement_policy(requested_policy, policy_status)
-            resolved_payload = {**payload, "policy": policy}
-            model, fallback_model = _placement_models(
-                policy, self.model_factory
-            )
             store = (
                 self.profile_store
                 if self.profile_store is not None
                 else build_profile_store()
             )
-            result = repair_request(
-                resolved_payload,
-                model=model,
-                fallback_model=fallback_model,
-                profile_store=store,
-            )
+            try:
+                result = _run_placement_policy(
+                    payload, policy, self.model_factory, store
+                )
+            except (OSError, TimeoutError):
+                if requested_policy != "fast" or policy == "deterministic":
+                    raise
+                unavailable_policy = policy
+                policy = "deterministic"
+                result = _run_placement_policy(
+                    payload, policy, self.model_factory, store
+                )
+                result["policy_fallback"] = {
+                    "from": unavailable_policy,
+                    "to": policy,
+                    "reason": "fast proposer unavailable",
+                }
             result["requested_policy"] = requested_policy
             result["available_policies"] = policy_status
             trace_store = self.failure_trace_store or build_failure_trace_store()

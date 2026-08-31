@@ -1,5 +1,10 @@
 <script>
+  import MetricHelp from './MetricHelp.svelte'
+
   let { board, label = '', score = null } = $props()
+
+  const hardExplanation = 'Illegal geometry measured in millimetres: board-boundary, component-clearance, and keepout penetration. It must reach 0 for a legal placement.'
+  const softExplanation = 'Preference cost for grouping, connector access, compactness, and thermal spacing. Lower is better, but it can never override a hard rule.'
 
   function size(component) {
     return component.angle === 90 || component.angle === 270
@@ -12,7 +17,12 @@
   <div class="head">
     <div>
       <div class="lbl">{label}</div>
-      <strong>{score ? `hard ${Number(score.hard).toFixed(3)} · soft ${Number(score.soft).toFixed(3)}` : ''}</strong>
+      {#if score}
+        <div class="metrics" aria-label="Placement scores">
+          <span><b>Hard</b><MetricHelp label="Hard score" explanation={hardExplanation} align="left" />{Number(score.hard).toFixed(3)} mm</span>
+          <span><b>Soft</b><MetricHelp label="Soft score" explanation={softExplanation} />{Number(score.soft).toFixed(3)}</span>
+        </div>
+      {/if}
     </div>
     {#if score}<span class:legal={Number(score.hard) === 0}>{Number(score.hard) === 0 ? 'legal' : 'faulty'}</span>{/if}
   </div>
@@ -50,11 +60,13 @@
 
 <style>
   .panel { min-width: 0; border: 1px solid var(--rule); background: var(--surface); }
-  .head { min-height: 58px; display: flex; align-items: center; justify-content: space-between; padding: 10px 13px; border-bottom: 1px solid var(--rule-soft); }
-  .head strong { display: block; margin-top: 5px; font-family: var(--font-mono); font-size: var(--fs-mono-sm); font-weight: 400; color: var(--ink-mid); }
+  .head { min-height: 78px; display: flex; align-items: center; justify-content: space-between; gap: 18px; padding: 13px 16px; border-bottom: 1px solid var(--rule-soft); }
+  .metrics { display: flex; flex-wrap: wrap; gap: 8px 18px; margin-top: 9px; color: var(--ink-mid); font-family: var(--font-mono); font-size: var(--fs-mono-sm); font-variant-numeric: tabular-nums; }
+  .metrics > span { display: inline-flex; align-items: center; gap: 6px; }
+  .metrics b { color: var(--ink); font-family: var(--font-sans); font-size: var(--fs-ui); font-weight: 650; }
   .head > span { font-family: var(--font-mono); font-size: var(--fs-lbl); text-transform: uppercase; color: var(--sev-blocker-fg); }
   .head > span.legal { color: var(--green); }
-  .well { padding: 12px; background: var(--well-bg); }
+  .well { padding: clamp(14px, 2vw, 22px); background: var(--well-bg); }
   svg { display: block; width: 100%; max-height: 360px; }
   .edge { fill: var(--board-fill); stroke: var(--board-edge-cuts); stroke-width: .35; }
   g rect { fill: var(--board-component-fill); stroke: var(--board-courtyard); stroke-width: .28; }
