@@ -33,6 +33,8 @@
 
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { emit as tauriEmit, listen as tauriListen } from "@tauri-apps/api/event";
+import { safeLocalStorage } from "@/lib/storage/helper";
+import { KALEO_STORAGE_KEYS } from "@/config/kaleo.constants";
 
 import { SilkscreenError, type ErrorKind } from "./client";
 import type { RunProgress } from "./describe";
@@ -430,3 +432,78 @@ export function mirrorRun(local: SilkscreenRun, view: MirrorView): SilkscreenRun
 }
 
 export type { RunResult, RunProgress };
+
+// ---------------------------------------------------------------------------
+// The storage hand-off (from the feat/kaleo lineage).
+//
+// A second, deliberately simpler channel next to the Tauri event bridge above:
+// one FINISHED run, written to same-origin localStorage, heard via the
+// `storage` event by every window except the writer. The dashboard uses it to
+// adopt a run published before that window existed — something the live event
+// stream cannot replay. Frames are excluded from the payload (bounded but
+// bulky), and an unparseable or half-shaped stored value reads as null, never
+// as a run.
+// ---------------------------------------------------------------------------
+
+
+/** What actually crosses the window boundary: an entry minus its frame log. */
+export type PublishedRun = Omit<RunHistoryEntry, "frames">;
+
+/** Announce a finished run to the other windows. Never throws. */
+export function publishRun(entry: RunHistoryEntry): void {
+  try {
+    const { frames: _frames, ...payload } = entry;
+    safeLocalStorage.setItem(
+      KALEO_STORAGE_KEYS.LAST_RUN,
+      JSON.stringify(payload satisfies PublishedRun)
+    );
+  } catch (error) {
+    // The hand-off is a courtesy on top of a run that already succeeded in
+    // this window; failing to announce it must not fail the run.
+    console.warn("[kaleo bridge] could not publish the finished run:", error);
+  }
+}
+
+/**
+ * The most recently published run, or null when there is none or the stored
+ * value is not one this build can trust. Storage is never trusted blindly:
+ * an older build (or a hand edit) must produce null, not a half-shaped entry.
+ */
+export function readPublishedRun(): RunHistoryEntry | null {
+  const raw = safeLocalStorage.getItem(KALEO_STORAGE_KEYS.LAST_RUN);
+  if (!raw) return null;
+  try {
+    const parsed = JSON.parse(raw) as Partial<PublishedRun> | null;
+    if (
+      !parsed ||
+      typeof parsed.id !== "string" ||
+      typeof parsed.at !== "number" ||
+      typeof parsed.intent !== "string" ||
+      !parsed.request ||
+      !parsed.result ||
+      !parsed.progress
+    ) {
+      return null;
+    }
+    return { ...(parsed as PublishedRun), frames: [] };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Hear runs finished in OTHER windows. Returns the unsubscribe function.
+ * The writer never receives its own event — that is the `storage` event's
+ * contract, not a guard this module has to maintain.
+ */
+export function subscribePublishedRun(
+  onRun: (entry: RunHistoryEntry) => void
+): () => void {
+  const handler = (event: StorageEvent) => {
+    if (event.key !== KALEO_STORAGE_KEYS.LAST_RUN) return;
+    const entry = readPublishedRun();
+    if (entry) onRun(entry);
+  };
+  window.addEventListener("storage", handler);
+  return () => window.removeEventListener("storage", handler);
+}

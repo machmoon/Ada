@@ -26,6 +26,11 @@ import {
   type RunHistoryStore,
 } from "@/lib/silkscreen/history.store";
 import { logError, logEvent, logServer } from "@/lib/silkscreen/log";
+import {
+  publishRun,
+  readPublishedRun,
+  subscribePublishedRun,
+} from "@/lib/silkscreen/bridge";
 
 /**
  * `cancelled` is deliberately its own status and not an error: the user asked
@@ -351,6 +356,37 @@ export function useSilkscreenRunState(
     };
   }, [store, historyLimit]);
 
+  // The internal status, readable from long-lived closures. `status` itself is
+  // render state; the bridge subscription below outlives any one render.
+  const statusRef = useRef<RunStatus>("idle");
+  useEffect(() => {
+    statusRef.current = status;
+  }, [status]);
+
+  // A run finished in ANOTHER window (the overlay, usually) arrives over the
+  // storage bridge and joins this provider's history — this is what lets the
+  // dashboard show a board it never generated. A live run in this window
+  // always wins: adoption never interrupts one, and an entry already in
+  // history (same id) is left alone. On mount, a run published before this
+  // window existed is restored into history only; a live event additionally
+  // lands on screen when this window is sitting idle.
+  useEffect(() => {
+    const adopt = (entry: RunHistoryEntry, show: boolean) => {
+      if (inFlightRef.current) return;
+      setHistory((previous) =>
+        previous.some((h) => h.id === entry.id)
+          ? previous
+          : [entry, ...previous].slice(0, historyLimit)
+      );
+      if (show && statusRef.current === "idle") {
+        setViewingId(entry.id);
+      }
+    };
+    const existing = readPublishedRun();
+    if (existing) adopt(existing, false);
+    return subscribePublishedRun((entry) => adopt(entry, true));
+  }, [historyLimit]);
+
   // The clock is independent of the event stream on purpose: if the engine goes
   // quiet for ninety seconds, the user should see ninety seconds pass, not a
   // frozen number that reads as "finished".
@@ -513,6 +549,10 @@ export function useSilkscreenRunState(
             detail: (error as Error)?.message ?? "",
           });
         });
+
+        // Announce across windows: the dashboard adopts this entry and shows
+        // the board without this window having to push anything else.
+        publishRun(entry);
         logEvent("run.finished", `Run finished in ${entry.elapsedS.toFixed(1)} s.`);
       } catch (caught) {
         if (!mountedRef.current) return;

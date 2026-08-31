@@ -48,9 +48,10 @@ pub fn run() {
         // text-file commands with NO static scope -- the dialog plugin adds
         // the user-picked path to the fs scope at runtime, so the webview can
         // only ever write (and read back) files the user chose in a native
-        // save dialog.
-        .plugin(tauri_plugin_dialog::init())
+        // save dialog. fs initialises before dialog so the dialog plugin
+        // finds a managed fs scope to extend.
         .plugin(tauri_plugin_fs::init())
+        .plugin(tauri_plugin_dialog::init())
         // The fork deliberately ships no updater: upstream's endpoint was
         // removed from tauri.conf.json so a build phones nobody. Registering
         // the plugin anyway makes it read a `plugins.updater` block that is

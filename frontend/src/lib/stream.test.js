@@ -545,6 +545,30 @@ describe('describeStageEvent', () => {
     )
   })
 
+  it('summarizes constraint eligibility without hiding a blocked artifact', () => {
+    expect(
+      describeStageEvent({
+        event: 'constraints.verify',
+        promotable: true,
+        verified: 12,
+        blockers: 0,
+        artifact_available: true,
+      }),
+    ).toBe('constraints verified: 12 checks; production promotion eligible')
+    expect(
+      describeStageEvent({
+        event: 'constraints.verify',
+        promotable: false,
+        blockers: 2,
+        violated: 1,
+        unresolved: 1,
+        artifact_available: true,
+      }),
+    ).toBe(
+      'constraints checked: 2 blockers (1 violated, 1 unresolved); artifact available; production promotion blocked',
+    )
+  })
+
   it('announces a finished run', () => {
     expect(describeStageEvent({ event: 'run.done', t_s: 41.2 })).toBe('run complete')
   })
@@ -608,6 +632,7 @@ describe('describeStageEvent', () => {
       'tool.done',
       'tool.error',
       'ground.part',
+      'constraints.verify',
       'run.done',
       'run.error',
       'assistant.message',

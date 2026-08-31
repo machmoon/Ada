@@ -1,5 +1,5 @@
 import { useEffect, useState, useCallback, useRef } from "react";
-import { useWindowResize, useGlobalShortcuts } from ".";
+import { useGlobalShortcuts } from ".";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { useApp } from "@/contexts";
@@ -65,7 +65,6 @@ export interface ChatConversation {
 export type useSystemAudioType = ReturnType<typeof useSystemAudio>;
 
 export function useSystemAudio() {
-  const { resizeWindow } = useWindowResize();
   const globalShortcuts = useGlobalShortcuts();
   const [isPopoverOpen, setIsPopoverOpen] = useState(false);
   const [capturing, setCapturing] = useState(false);
@@ -685,14 +684,12 @@ export function useSystemAudio() {
       !!lastAIResponse ||
       !!error;
     setIsPopoverOpen(shouldOpenPopover);
-    resizeWindow(shouldOpenPopover);
   }, [
     capturing,
     setupRequired,
     isAIProcessing,
     lastAIResponse,
     error,
-    resizeWindow,
   ]);
 
   useEffect(() => {
@@ -899,8 +896,6 @@ export function useSystemAudio() {
     contextContent,
     setContextContent: updateContextContent,
     startNewConversation,
-    // Window resize
-    resizeWindow,
     quickActions,
     addQuickAction,
     removeQuickAction,

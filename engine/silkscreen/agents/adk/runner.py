@@ -29,6 +29,7 @@ from google.adk.sessions import InMemorySessionService
 
 from ...board import BoardResult
 from ...netlist import CircuitSpec
+from ...placement.adapter import GeneratedPlacement
 from ...routing import RouteResult
 from ..datasheet import PartFacts
 from ..model import Model
@@ -67,10 +68,17 @@ class _RunContext:
     emit: Callable[[dict[str, Any]], None]
     enter: Callable[[str], None]
     propose_on_event: Callable[[dict[str, Any]], None] | None
+    placement_profile: str | None
+    placement_policy: str
+    placement_feedback: dict[str, Any] | None
+    placement_model: Model | None
+    placement_fallback_model: Model | None
+    placement_max_turns: int
     facts: list[PartFacts] = field(default_factory=list)
     spec: CircuitSpec | None = None
     attempts: list[ProposalAttempt] = field(default_factory=list)
     board: BoardResult | None = None
+    placement: GeneratedPlacement | None = None
     artifacts: SchematicArtifacts = NO_ARTIFACTS
     route_result: RouteResult | None = None
     findings: list[Finding] = field(default_factory=list)
@@ -214,6 +222,12 @@ def generate_pcb_adk(
     emit_stages: bool = True,
     on_event: Callable[[dict[str, Any]], None] | None = None,
     include_responses: bool = False,
+    placement_profile: str | None = None,
+    placement_policy: str = "deterministic",
+    placement_feedback: dict[str, Any] | None = None,
+    placement_model: Model | None = None,
+    placement_fallback_model: Model | None = None,
+    placement_max_turns: int = 8,
 ) -> PipelineResult:
     """Run the stages as an ADK workflow. See :func:`silkscreen.agents.generate_pcb`.
 
@@ -221,7 +235,15 @@ def generate_pcb_adk(
     ``ModelError``, a ``ProposalError`` or an event callback that hangs up all
     leave here as themselves, with their cause chain intact.
     """
-    emit, agent_model, enter = _wire_events(model, on_event, include_responses)
+    emit, agent_model, enter, observe = _wire_events(
+        model, on_event, include_responses
+    )
+    placement_model = observe(
+        placement_model, "placement_repair", "placement"
+    )
+    placement_fallback_model = observe(
+        placement_fallback_model, "placement_repair", "placement-fallback"
+    )
     run = _RunContext(
         agent_model=agent_model,
         intent=intent,
@@ -236,6 +258,12 @@ def generate_pcb_adk(
         emit=emit,
         enter=enter,
         propose_on_event=emit if on_event is not None else None,
+        placement_profile=placement_profile,
+        placement_policy=placement_policy,
+        placement_feedback=placement_feedback,
+        placement_model=placement_model,
+        placement_fallback_model=placement_fallback_model,
+        placement_max_turns=placement_max_turns,
     )
     token = secrets.token_hex(8)
     _RUNS[token] = run
@@ -267,4 +295,5 @@ def generate_pcb_adk(
         output=output,
         route=run.route_result,
         artifacts=run.artifacts,
+        placement=run.placement,
     )

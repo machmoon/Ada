@@ -4,6 +4,8 @@
   import ConversationView from './components/ConversationView.svelte'
   import DebugConsole from './components/DebugConsole.svelte'
   import GuidePointer from './components/GuidePointer.svelte'
+  import PlacementLab from './components/PlacementLab.svelte'
+  import PlacementResults from './components/PlacementResults.svelte'
   import ReviewResults from './components/ReviewResults.svelte'
   import SchematicWell from './components/SchematicWell.svelte'
   import SideRail from './components/SideRail.svelte'
@@ -11,6 +13,7 @@
   import TitleBar from './components/TitleBar.svelte'
   import { ApiError, chatStream, normalizeRequest } from './lib/api.js'
   import { highlightRefs, readPlacements } from './lib/board.js'
+  import { readPlacementRepair } from './lib/placement.js'
   import { resetGuide } from './lib/guide.js'
   import { pcbText } from './lib/download.js'
   import { logEvent } from './lib/log.js'
@@ -31,6 +34,7 @@
   let hash = $state(window.location.hash)
   let selected = $state(-1)
   let debugOpen = $state(false)
+  const placementMode = new URLSearchParams(window.location.search).get('mode') === 'placement'
 
   $effect(() => {
     const onhash = () => {
@@ -86,11 +90,16 @@
 
   const placements = $derived($run.phase === 'done' ? readPlacements($run.result) : null)
   const schematic = $derived($run.phase === 'done' ? readSchematic($run.result) : null)
+  const placement = $derived(
+    $run.phase === 'done' ? readPlacementRepair($run.result) : null,
+  )
   const boardEnabled = $derived(placements !== null)
   const schematicEnabled = $derived(schematic !== null)
+  const placementEnabled = $derived(placement !== null)
   const tab = $derived(
     resolveTab(hash, {
       schematic: schematicEnabled,
+      placement: placementEnabled,
       board: boardEnabled,
       review: $run.phase === 'done',
     }),
@@ -200,6 +209,9 @@
   }
 </script>
 
+{#if placementMode}
+  <PlacementLab />
+{:else}
 <div class="app" data-testid="app-root">
   <TitleBar intent={$run.request ? $run.request.intent : ''} result={$run.result} />
 
@@ -231,6 +243,8 @@
             {/if}
           </div>
           <BoardWell {placements} {highlightedRefs} {pcb} />
+      {:else if tab === 'placement' && placement}
+          <PlacementResults {placement} />
       {:else if tab === 'review' && $run.phase === 'done' && $run.result}
           <ReviewResults
             result={$run.result}
@@ -252,6 +266,7 @@
           onnew={newBoard}
           onopen={goTab}
           {schematicEnabled}
+          {placementEnabled}
           {boardEnabled}
         />
       {/if}
@@ -276,11 +291,13 @@
     {reviewed}
     {tab}
     {schematicEnabled}
+    {placementEnabled}
     {boardEnabled}
     {debugOpen}
     ondebug={() => (debugOpen = !debugOpen)}
   />
 </div>
+{/if}
 
 <style>
   .app { height: 100%; display: flex; flex-direction: column; overflow: hidden; }

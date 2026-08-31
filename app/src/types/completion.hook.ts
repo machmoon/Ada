@@ -110,9 +110,6 @@ export interface UseCompletionReturn {
   isPopoverOpen: boolean;
   /** Ref for the scroll area container (for auto-scrolling) */
   scrollAreaRef: RefObject<HTMLDivElement | null>;
-  /** Function to resize the application window based on UI state */
-  resizeWindow: (expanded: boolean) => Promise<void>;
-
   // Files popover management
   /** Whether the files attachment popover is open */
   isFilesPopoverOpen: boolean;

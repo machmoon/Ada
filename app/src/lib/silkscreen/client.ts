@@ -65,10 +65,30 @@ export class SilkscreenError extends Error {
  * The caller's abort signal combined with this client's own ceiling. Passing
  * a signal must not silently remove the timeout — the app always passes one,
  * so `signal ?? timeout` would leave every real request without a deadline.
+ *
+ * The ceiling's own leg is kept visible: when the deadline (not the caller)
+ * is what killed the request, the plugin surfaces a bare cancellation with no
+ * usable name, so the only way to report an honest `timeout` kind is to ask
+ * this signal afterwards.
  */
-function withTimeout(signal?: AbortSignal): AbortSignal {
+function withTimeout(signal?: AbortSignal): {
+  signal: AbortSignal;
+  timedOut: () => boolean;
+} {
   const timeout = AbortSignal.timeout(REQUEST_TIMEOUT_MS);
-  return signal ? AbortSignal.any([signal, timeout]) : timeout;
+  return {
+    signal: signal ? AbortSignal.any([signal, timeout]) : timeout,
+    timedOut: () => timeout.aborted,
+  };
+}
+
+function timeoutError(): SilkscreenError {
+  return new SilkscreenError(
+    "timeout",
+    `The engine did not finish within this app's ${Math.round(
+      REQUEST_TIMEOUT_MS / 60_000
+    )}-minute ceiling.`
+  );
 }
 
 function clampTimeLimit(value: number | undefined): number {
@@ -182,12 +202,19 @@ export async function generate(
   signal?: AbortSignal,
   token?: string
 ): Promise<RunResult> {
-  const response = await tauriFetch(`${baseUrl}/generate`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json", ...authHeaders(token) },
-    body: JSON.stringify(normalizeRequest(request)),
-    signal: withTimeout(signal),
-  });
+  const deadline = withTimeout(signal);
+  let response: Response;
+  try {
+    response = await tauriFetch(`${baseUrl}/generate`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...authHeaders(token) },
+      body: JSON.stringify(normalizeRequest(request)),
+      signal: deadline.signal,
+    });
+  } catch (error) {
+    if (deadline.timedOut() && !signal?.aborted) throw timeoutError();
+    throw error;
+  }
   const body = await readJson(response);
   if (!response.ok) throw errorFromBody(response.status, body as Partial<RunError>);
   return body as RunResult;
@@ -212,15 +239,17 @@ export async function generateStream(
   token?: string
 ): Promise<RunResult> {
   const payload = normalizeRequest(request);
+  const deadline = withTimeout(signal);
   let response: Response;
   try {
     response = await tauriFetch(`${baseUrl}/generate/stream`, {
       method: "POST",
       headers: { "Content-Type": "application/json", ...authHeaders(token) },
       body: JSON.stringify(payload),
-      signal: withTimeout(signal),
+      signal: deadline.signal,
     });
   } catch (error) {
+    if (deadline.timedOut() && !signal?.aborted) throw timeoutError();
     throw new SilkscreenError(
       "offline",
       "Could not reach the silkscreen engine.",
@@ -264,16 +293,25 @@ export async function generateStream(
     }
   };
 
-  for (;;) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    buffered += decoder.decode(value, { stream: true });
-    let newline = buffered.indexOf("\n");
-    while (newline !== -1) {
-      handle(buffered.slice(0, newline));
-      buffered = buffered.slice(newline + 1);
-      newline = buffered.indexOf("\n");
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffered += decoder.decode(value, { stream: true });
+      let newline = buffered.indexOf("\n");
+      while (newline !== -1) {
+        handle(buffered.slice(0, newline));
+        buffered = buffered.slice(newline + 1);
+        newline = buffered.indexOf("\n");
+      }
     }
+  } catch (error) {
+    // A stream killed by this client's own ceiling rejects with a bare,
+    // nameless cancellation from the http plugin; asking the deadline is the
+    // only way to keep it from reading as "the run failed for an unknown
+    // reason". A caller abort is left for the caller's own signal check.
+    if (deadline.timedOut() && !signal?.aborted) throw timeoutError();
+    throw error;
   }
   handle(buffered);
 

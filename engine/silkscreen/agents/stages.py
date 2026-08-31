@@ -1,12 +1,13 @@
-"""The six pipeline stages, as standalone bodies.
+"""The seven pipeline stages, as standalone bodies.
 
-Each function is one stage of prompt-to-PCB: read, propose, place, schematic,
-route, review. They hold the whole of a stage -- its model calls, its guards,
-and the exact events it emits -- so that more than one driver can run the same
-stages. The straight line in :mod:`silkscreen.agents.pipeline` and the ADK
-workflow in :mod:`silkscreen.agents.adk` both call these, and therefore emit
-byte-identical events; the service and the SPA read those event names, so a
-driver that grew its own copy of a stage would silently fork the contract.
+Each function is one stage of prompt-to-PCB: read, propose, place, placement
+repair, schematic, route, and review. They hold the whole of a stage -- its
+model calls, its guards, and the exact events it emits -- so that more than one
+driver can run the same stages. The straight line in
+:mod:`silkscreen.agents.pipeline` and the ADK workflow in
+:mod:`silkscreen.agents.adk` both call these, and therefore emit byte-identical
+events; the service and the SPA read those event names, so a driver that grew
+its own copy of a stage would silently fork the contract.
 
 ``emit`` and ``enter`` come from the driver: ``emit`` publishes one flat event
 dict, ``enter`` tells the model wrapper which stage is making its calls. Nothing
@@ -21,6 +22,9 @@ from typing import Any, NamedTuple
 
 from ..board import BoardResult, build_board, route_board, write_board
 from ..netlist import CircuitSpec
+from ..placement.adapter import GeneratedPlacement, repair_generated_board
+from ..placement.agent import TextModel
+from ..placement.pcb_repair import evaluate
 from ..routing import RouteResult
 from ..schematic import build_schematic, write_project, write_schematic
 from ..units import NM_PER_MM
@@ -33,6 +37,7 @@ __all__ = [
     "read_stage",
     "propose_stage",
     "place_stage",
+    "placement_repair_stage",
     "schematic_stage",
     "route_stage",
     "review_stage",
@@ -162,6 +167,61 @@ def place_stage(
         }
     )
     return board
+
+
+def placement_repair_stage(
+    board: BoardResult,
+    *,
+    profile: str | None,
+    policy: str,
+    feedback: dict[str, Any] | None,
+    model: TextModel | None,
+    fallback_model: TextModel | None,
+    max_turns: int,
+    emit: Emit,
+    enter: Enter,
+) -> GeneratedPlacement | None:
+    """Verifier-gate a generated placement before schematic emission and routing."""
+    if not profile:
+        return None
+    enter("placement_repair")
+    emit(
+        {
+            "event": "stage.start",
+            "stage": "placement_repair",
+            "profile": profile,
+            "policy": policy,
+        }
+    )
+    result = repair_generated_board(
+        board,
+        profile=profile,
+        policy=policy,
+        feedback=feedback,
+        model=model,
+        fallback_model=fallback_model,
+        max_turns=max_turns,
+    )
+    before = result.run.start
+    after = result.run.board
+    before_score = evaluate(before, result.run.profile)
+    after_score = evaluate(after, result.run.profile)
+    emit(
+        {
+            "event": "stage.done",
+            "stage": "placement_repair",
+            "profile": profile,
+            "policy": result.run.policy,
+            "requested_policy": result.requested_policy,
+            "completed": result.run.completed,
+            "applied": result.applied,
+            "moves": sum(len(step.accepted) for step in result.run.steps),
+            "hard_before": before_score.hard,
+            "hard_after": after_score.hard,
+            "policy_fallback": result.policy_fallback,
+        }
+    )
+    return result
 
 
 class SchematicArtifacts(NamedTuple):

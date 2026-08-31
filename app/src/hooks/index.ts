@@ -1,6 +1,6 @@
 export * from "./useVersion";
 export * from "./useCompletion";
-export * from "./useWindow";
+export * from "./useOverlayHeight";
 export * from "./useCustomProvider";
 export * from "./useCustomSttProviders";
 export * from "./useGlobalShortcuts";
@@ -14,6 +14,8 @@ export * from "./useApp";
 export * from "./useMenuItems";
 export * from "./useEngineHealth";
 export * from "./useSilkscreenRun";
+export * from "./useRunVoice";
+export * from "./useVoiceInput";
 // The context consumer lives with the provider; re-exported here because
 // components reach for it alongside every other hook.
 export { useSilkscreenRun } from "@/contexts/run.context";

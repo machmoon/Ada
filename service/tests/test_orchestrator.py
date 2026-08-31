@@ -112,6 +112,95 @@ def test_the_orchestrator_calls_the_validated_generator_and_summarizes_it():
     }
 
 
+def test_constraint_receipt_facts_reach_the_orchestrator_tool_summary():
+    model = FakeLlm(
+        model="fake-orchestrator",
+        responses=[
+            tool_response(),
+            text_response("The artifact exists, but one constraint blocks promotion."),
+        ],
+    )
+    events = []
+    result = {
+        "status": "FEASIBLE",
+        "parts": [{"ref": "U1"}],
+        "nets": ["VIN"],
+        "findings": [],
+        "blockers": ["constraint Power/routing: VIN is unrouted"],
+        "warnings": [],
+        "promotion_status": "constraint_blocked",
+        "constraint_manifest": {"version": 2},
+        "constraint_receipt": {
+            "hard_gate": "blocked",
+            "promotable": False,
+            "net_classes": [
+                {
+                    "net_class": "Power",
+                    "checks": [
+                        {
+                            "name": "routing",
+                            "status": "violated",
+                            "detail": "VIN is unrouted",
+                        },
+                        {
+                            "name": "allowed_layers",
+                            "status": "verified",
+                            "detail": "Layers match",
+                        },
+                    ],
+                }
+            ],
+            "mechanical": [
+                {
+                    "name": "component_height",
+                    "status": "unresolved",
+                    "detail": "No height metadata",
+                }
+            ],
+            "blockers": [
+                {
+                    "scope": "Power",
+                    "name": "routing",
+                    "status": "violated",
+                    "detail": "VIN is unrouted",
+                    "evidence": {"unrouted": ["VIN"]},
+                }
+            ],
+        },
+    }
+
+    run_orchestrator(
+        message="make a regulator",
+        clarification="5 V input",
+        model=model,
+        session_id="constraint-summary",
+        generate=lambda: result,
+        emit=events.append,
+        debug=False,
+    )
+
+    tool_summary = next(
+        event["result"] for event in events if event["event"] == "tool.done"
+    )
+    assert tool_summary["promotion_status"] == "constraint_blocked"
+    assert tool_summary["constraint_manifest_version"] == 2
+    assert tool_summary["constraint_receipt"] == {
+        "hard_gate": "blocked",
+        "promotable": False,
+        "verified": 1,
+        "violated": 1,
+        "unresolved": 1,
+        "blockers": [
+            {
+                "scope": "Power",
+                "name": "routing",
+                "status": "violated",
+                "detail": "VIN is unrouted",
+            }
+        ],
+    }
+
+
 def test_reasoning_effort_reaches_adk_without_obsolete_sampling_controls():
     model = FakeLlm(
         model="fake-orchestrator",

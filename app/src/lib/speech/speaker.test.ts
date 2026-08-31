@@ -150,7 +150,33 @@ describe("createSpeaker", () => {
     expect(warn).not.toHaveBeenCalled();
   });
 
-  it("never throws to the caller: a failing backend degrades to a warning", async () => {
+  it("retries a failed paid backend on the built-in voice, never throwing", async () => {
+    const warn = vi.fn();
+    const fallback = fakeBackend("webspeech");
+    const speakerUnderTest = createSpeaker({
+      getSettings: () => settings({ elevenLabsKey: "secret-key" }),
+      makeBackend: () => ({
+        name: "elevenlabs",
+        speak: () => Promise.reject(new Error("ElevenLabs answered 500")),
+        stop: () => {},
+      }),
+      makeFallback: () => fallback,
+      warn,
+    });
+
+    const spoken = speakerUnderTest.speak("digest");
+    // Let the rejection propagate, then finish the fallback utterance.
+    await Promise.resolve().then(() => {});
+    await vi.waitFor(() => expect(fallback.spoke).toEqual(["digest"]));
+    fallback.stop();
+    await expect(spoken).resolves.toBeUndefined();
+    expect(speakerUnderTest.isSpeaking()).toBe(false);
+    // One warning for the paid backend; the fallback then speaks the digest.
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(String(warn.mock.calls[0][0])).not.toContain("secret-key");
+  });
+
+  it("degrades to silence with two warnings when the fallback also fails", async () => {
     const warn = vi.fn();
     const speakerUnderTest = createSpeaker({
       getSettings: () => settings({ elevenLabsKey: "secret-key" }),
@@ -159,13 +185,45 @@ describe("createSpeaker", () => {
         speak: () => Promise.reject(new Error("ElevenLabs answered 500")),
         stop: () => {},
       }),
+      makeFallback: () => ({
+        name: "webspeech",
+        speak: () =>
+          Promise.reject(
+            new Error("speechSynthesis is not available in this webview")
+          ),
+        stop: () => {},
+      }),
       warn,
     });
 
     await expect(speakerUnderTest.speak("digest")).resolves.toBeUndefined();
     expect(speakerUnderTest.isSpeaking()).toBe(false);
+    expect(warn).toHaveBeenCalledTimes(2);
+    for (const call of warn.mock.calls) {
+      expect(String(call[0])).not.toContain("secret-key");
+    }
+  });
+
+  it("does not retry when the built-in voice itself was the failure", async () => {
+    const warn = vi.fn();
+    const makeFallback = vi.fn();
+    const speakerUnderTest = createSpeaker({
+      getSettings: () => settings(),
+      makeBackend: () => ({
+        name: "webspeech",
+        speak: () =>
+          Promise.reject(
+            new Error("speechSynthesis is not available in this webview")
+          ),
+        stop: () => {},
+      }),
+      makeFallback,
+      warn,
+    });
+
+    await expect(speakerUnderTest.speak("digest")).resolves.toBeUndefined();
     expect(warn).toHaveBeenCalledTimes(1);
-    expect(String(warn.mock.calls[0][0])).not.toContain("secret-key");
+    expect(makeFallback).not.toHaveBeenCalled();
   });
 
   it("survives a backend factory that throws (no speechSynthesis at all)", async () => {

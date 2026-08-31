@@ -9,9 +9,12 @@
 // `elevenlabs` is the paid upgrade, selected purely by the presence of an API
 // key. The fetch goes through `@tauri-apps/plugin-http` exactly like the
 // silkscreen client's — the app origin is `tauri://localhost`, so a webview
-// fetch would be cross-origin, and the capability files already allow
-// `https://**`. The API key travels in the `xi-api-key` header and NOWHERE
-// else: not in a log, not in an error message, not in a thrown value.
+// fetch would be cross-origin. NOTE: the capability files grant the http
+// plugin loopback origins only, so this request is scope-blocked unless
+// `https://api.elevenlabs.io` is deliberately added to BOTH capability files;
+// until then the speaker's webspeech fallback is what actually talks. The API
+// key travels in the `xi-api-key` header and NOWHERE else: not in a log, not
+// in an error message, not in a thrown value.
 
 import { fetch as tauriFetch } from "@tauri-apps/plugin-http";
 

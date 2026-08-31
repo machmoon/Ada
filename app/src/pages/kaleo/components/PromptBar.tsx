@@ -160,22 +160,30 @@ export const PromptBar = ({
           Cancel
         </Button>
       ) : (
-        <Button
-          size="sm"
-          onClick={onSubmit}
-          disabled={!submittable}
-          // This is the control that spends money. It says so, and it goes away
-          // the moment a run starts, so one prompt cannot be fired twice.
+        <span
+          // The title lives on a wrapper because a disabled element suppresses
+          // pointer events in some webviews — the one place the reason lived
+          // was the one place it could never show.
           title={
-            engine.ok
-              ? "Generate a board — this calls the model and costs money"
-              : "The engine is not answering; a run would fail immediately"
+            !request.intent.trim()
+              ? "Type what you want on the board first"
+              : engine.ok
+                ? "Generate a board — this calls the model and costs money"
+                : "The engine is not answering; a run would fail immediately"
           }
-          data-testid="prompt-submit"
         >
-          <CircuitBoardIcon className="size-3.5" />
-          Generate
-        </Button>
+          <Button
+            size="sm"
+            onClick={onSubmit}
+            disabled={!submittable}
+            // This is the control that spends money. It goes away the moment a
+            // run starts, so one prompt cannot be fired twice.
+            data-testid="prompt-submit"
+          >
+            <CircuitBoardIcon className="size-3.5" />
+            Generate
+          </Button>
+        </span>
       )}
     </div>
   );

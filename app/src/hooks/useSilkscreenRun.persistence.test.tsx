@@ -133,6 +133,10 @@ function arm(): Driver {
 
 beforeEach(() => {
   mockGenerateStream.mockReset();
+  // The hook now also adopts runs published over the storage bridge
+  // (lib/silkscreen/bridge.ts), so a previous test's published run must not
+  // leak into this one's history.
+  localStorage.clear();
 });
 
 afterEach(() => {

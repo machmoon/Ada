@@ -19,7 +19,7 @@
 export const EFFORT_LEVELS = [
   { name: 'low', seconds: 5, blurb: 'a fast first pass' },
   { name: 'medium', seconds: 20, blurb: 'the default; feasible on real boards' },
-  { name: 'high', seconds: 60, blurb: 'the most solver time the service accepts' },
+  { name: 'high', seconds: 120, blurb: 'the most solver time the service accepts' },
 ]
 
 export const DEFAULT_EFFORT_INDEX = EFFORT_LEVELS.findIndex((l) => l.name === 'medium')
