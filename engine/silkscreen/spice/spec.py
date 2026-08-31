@@ -15,6 +15,7 @@ one asked.
 
 from __future__ import annotations
 
+import math
 from typing import Any
 
 from .assertions import Assertion
@@ -23,9 +24,7 @@ from .deck import (
     Analysis,
     DCSweep,
     OperatingPoint,
-    PrimitiveModel,
     Source,
-    SubcircuitModel,
     Testbench,
     Transient,
 )
@@ -43,21 +42,126 @@ __all__ = [
 ]
 
 
-def _number(data: dict, key: str, errors: list[str], *, where: str) -> float | None:
+_TESTBENCH_FIELDS = frozenset(
+    {"analysis", "sources", "ground", "probes", "temperature_c", "strict"}
+)
+_ANALYSIS_FIELDS = {
+    "op": frozenset({"kind"}),
+    "tran": frozenset({"kind", "step", "stop", "start", "max_step"}),
+    "ac": frozenset({"kind", "f_start", "f_stop", "points", "sweep"}),
+    "dc": frozenset({"kind", "source", "start", "stop", "step"}),
+}
+_SOURCE_FIELDS = {
+    "": frozenset(
+        {"name", "positive", "negative", "kind", "dc", "ac", "ac_magnitude"}
+    ),
+    "dc": frozenset({"name", "positive", "negative", "kind", "dc"}),
+    "ac": frozenset(
+        {"name", "positive", "negative", "kind", "dc", "ac", "ac_magnitude"}
+    ),
+    "pulse": frozenset(
+        {
+            "name",
+            "positive",
+            "negative",
+            "kind",
+            "initial",
+            "pulsed",
+            "delay",
+            "rise",
+            "fall",
+            "width",
+            "period",
+        }
+    ),
+    "sine": frozenset(
+        {
+            "name",
+            "positive",
+            "negative",
+            "kind",
+            "offset",
+            "amplitude",
+            "frequency",
+            "delay",
+        }
+    ),
+}
+_MAX_ANALYSIS_POINTS = 1_000_000
+_MAX_AC_POINTS = 1_000
+
+
+def _reject_unknown(
+    data: dict[str, Any], allowed: frozenset[str], errors: list[str], *, where: str
+) -> None:
+    for key in sorted(set(data) - allowed):
+        errors.append(f"{where}: unknown field {key!r}")
+
+
+def _number(
+    data: dict[str, Any],
+    key: str,
+    errors: list[str],
+    *,
+    where: str,
+    required: bool = True,
+    default: float | None = None,
+) -> float | None:
     if key not in data:
-        errors.append(f"{where}: missing required field {key!r}")
-        return None
-    try:
-        return float(data[key])
-    except (TypeError, ValueError):
+        if required:
+            errors.append(f"{where}: missing required field {key!r}")
+        return default
+    if isinstance(data[key], bool):
         errors.append(f"{where}: {key!r} must be a number, got {data[key]!r}")
         return None
+    try:
+        value = float(data[key])
+    except (OverflowError, TypeError, ValueError):
+        errors.append(f"{where}: {key!r} must be a number, got {data[key]!r}")
+        return None
+    if not math.isfinite(value):
+        errors.append(f"{where}: {key!r} must be finite, got {data[key]!r}")
+        return None
+    return value
+
+
+def _integer(
+    data: dict[str, Any],
+    key: str,
+    errors: list[str],
+    *,
+    where: str,
+    default: int,
+) -> int | None:
+    value = data.get(key, default)
+    if isinstance(value, bool) or not isinstance(value, int):
+        errors.append(f"{where}: {key!r} must be an integer, got {value!r}")
+        return None
+    return value
+
+
+def _string(
+    data: dict[str, Any], key: str, errors: list[str], *, where: str
+) -> str:
+    value = data.get(key)
+    if not isinstance(value, str) or not value:
+        errors.append(f"{where}: missing or invalid string field {key!r}")
+        return ""
+    return value
 
 
 def analysis_from_dict(data: dict[str, Any], errors: list[str]) -> Analysis | None:
     """``{"kind": "tran", "step": ..., "stop": ...}`` to an :class:`Analysis`."""
-    kind = str(data.get("kind", "")).lower()
+    raw_kind = data.get("kind", "")
+    kind = raw_kind.lower() if isinstance(raw_kind, str) else ""
     where = f"analysis {kind!r}" if kind else "analysis"
+
+    if kind not in _ANALYSIS_FIELDS:
+        errors.append(
+            f"unknown analysis kind {raw_kind!r}; known: 'op', 'tran', 'ac', 'dc'"
+        )
+        return None
+    _reject_unknown(data, _ANALYSIS_FIELDS[kind], errors, where=where)
 
     if kind == "op":
         return OperatingPoint()
@@ -65,69 +169,129 @@ def analysis_from_dict(data: dict[str, Any], errors: list[str]) -> Analysis | No
     if kind == "tran":
         step = _number(data, "step", errors, where=where)
         stop = _number(data, "stop", errors, where=where)
-        if step is None or stop is None:
+        start = _number(
+            data, "start", errors, where=where, required=False, default=0.0
+        )
+        max_step = _number(
+            data, "max_step", errors, where=where, required=False
+        )
+        if step is None or stop is None or start is None:
             return None
-        max_step = data.get("max_step")
+        if step <= 0:
+            errors.append(f"{where}: 'step' must be greater than zero")
+        if start < 0:
+            errors.append(f"{where}: 'start' must be zero or greater")
+        if stop <= start:
+            errors.append(f"{where}: 'stop' must be greater than 'start'")
+        if max_step is not None and max_step <= 0:
+            errors.append(f"{where}: 'max_step' must be greater than zero")
+        if step > 0 and stop > start:
+            points = math.ceil((stop - start) / step) + 1
+            if points > _MAX_ANALYSIS_POINTS:
+                errors.append(
+                    f"{where}: requests about {points} output points; maximum is "
+                    f"{_MAX_ANALYSIS_POINTS}"
+                )
+        if errors:
+            return None
         return Transient(
             step=step,
             stop=stop,
-            start=float(data.get("start", 0.0)),
-            max_step=float(max_step) if max_step is not None else None,
+            start=start,
+            max_step=max_step,
         )
 
     if kind == "ac":
         f_start = _number(data, "f_start", errors, where=where)
         f_stop = _number(data, "f_stop", errors, where=where)
-        if f_start is None or f_stop is None:
+        points = _integer(data, "points", errors, where=where, default=20)
+        sweep = data.get("sweep", "dec")
+        if not isinstance(sweep, str) or sweep not in ("dec", "oct", "lin"):
+            errors.append(f"{where}: 'sweep' must be 'dec', 'oct' or 'lin'")
+        if f_start is None or f_stop is None or points is None:
+            return None
+        if f_start <= 0:
+            errors.append(f"{where}: 'f_start' must be greater than zero")
+        if f_stop <= f_start:
+            errors.append(f"{where}: 'f_stop' must be greater than 'f_start'")
+        if not 1 <= points <= _MAX_AC_POINTS:
+            errors.append(
+                f"{where}: 'points' must be between 1 and {_MAX_AC_POINTS}"
+            )
+        if errors:
             return None
         return ACSweep(
             f_start=f_start,
             f_stop=f_stop,
-            points=int(data.get("points", 20)),
-            sweep=str(data.get("sweep", "dec")),
+            points=points,
+            sweep=sweep,
         )
 
     if kind == "dc":
-        source = data.get("source")
+        source = _string(data, "source", errors, where=where)
         start = _number(data, "start", errors, where=where)
         stop = _number(data, "stop", errors, where=where)
         step = _number(data, "step", errors, where=where)
-        if not source:
-            errors.append(f"{where}: missing required field 'source'")
-        if source is None or start is None or stop is None or step is None:
+        if not source or start is None or stop is None or step is None:
             return None
-        return DCSweep(source=str(source), start=start, stop=stop, step=step)
+        if step == 0:
+            errors.append(f"{where}: 'step' must not be zero")
+        elif (stop - start) * step <= 0:
+            errors.append(f"{where}: 'step' must move from 'start' toward 'stop'")
+        else:
+            points = math.ceil(abs((stop - start) / step)) + 1
+            if points > _MAX_ANALYSIS_POINTS:
+                errors.append(
+                    f"{where}: requests about {points} output points; maximum is "
+                    f"{_MAX_ANALYSIS_POINTS}"
+                )
+        if errors:
+            return None
+        return DCSweep(source=source, start=start, stop=stop, step=step)
 
-    errors.append(
-        f"unknown analysis kind {data.get('kind')!r}; "
-        f"known: 'op', 'tran', 'ac', 'dc'"
-    )
-    return None
+    return None  # all known kinds returned above
 
 
 def source_from_dict(data: dict[str, Any], errors: list[str]) -> Source | None:
     """One source. ``kind`` selects the stimulus shape; omit it for DC/AC."""
-    name = str(data.get("name", ""))
-    positive = str(data.get("positive", ""))
-    negative = str(data.get("negative", ""))
+    name = _string(data, "name", errors, where="source")
+    positive = _string(data, "positive", errors, where="source")
+    negative = _string(data, "negative", errors, where="source")
     where = f"source {name!r}" if name else "source"
-
-    for field_name, value in (
-        ("name", name),
-        ("positive", positive),
-        ("negative", negative),
-    ):
-        if not value:
-            errors.append(f"{where}: missing required field {field_name!r}")
     if not (name and positive and negative):
         return None
 
-    kind = str(data.get("kind", "")).lower()
+    raw_kind = data.get("kind", "")
+    kind = raw_kind.lower() if isinstance(raw_kind, str) else ""
+    if kind not in _SOURCE_FIELDS:
+        errors.append(
+            f"{where}: unknown source kind {raw_kind!r}; "
+            f"known: 'dc', 'ac', 'pulse', 'sine'"
+        )
+        return None
+    _reject_unknown(data, _SOURCE_FIELDS[kind], errors, where=where)
 
     if kind == "pulse":
         needed = ("initial", "pulsed", "width", "period")
         values = {k: _number(data, k, errors, where=where) for k in needed}
-        if any(v is None for v in values.values()):
+        delay = _number(
+            data, "delay", errors, where=where, required=False, default=0.0
+        )
+        rise = _number(
+            data, "rise", errors, where=where, required=False, default=1e-9
+        )
+        fall = _number(
+            data, "fall", errors, where=where, required=False, default=1e-9
+        )
+        if any(v is None for v in values.values()) or None in (delay, rise, fall):
+            return None
+        if values["width"] <= 0 or values["period"] <= 0:
+            errors.append(f"{where}: 'width' and 'period' must be greater than zero")
+        if delay < 0:
+            errors.append(f"{where}: 'delay' must be zero or greater")
+        if rise <= 0 or fall <= 0:
+            errors.append(f"{where}: 'rise' and 'fall' must be greater than zero")
+        if errors:
             return None
         return Source.pulse(
             name,
@@ -137,15 +301,24 @@ def source_from_dict(data: dict[str, Any], errors: list[str]) -> Source | None:
             pulsed=values["pulsed"],
             width=values["width"],
             period=values["period"],
-            delay=float(data.get("delay", 0.0)),
-            rise=float(data.get("rise", 1e-9)),
-            fall=float(data.get("fall", 1e-9)),
+            delay=delay,
+            rise=rise,
+            fall=fall,
         )
 
     if kind == "sine":
         needed = ("offset", "amplitude", "frequency")
         values = {k: _number(data, k, errors, where=where) for k in needed}
-        if any(v is None for v in values.values()):
+        delay = _number(
+            data, "delay", errors, where=where, required=False, default=0.0
+        )
+        if any(v is None for v in values.values()) or delay is None:
+            return None
+        if values["frequency"] <= 0:
+            errors.append(f"{where}: 'frequency' must be greater than zero")
+        if delay < 0:
+            errors.append(f"{where}: 'delay' must be zero or greater")
+        if errors:
             return None
         return Source.sine(
             name,
@@ -154,72 +327,56 @@ def source_from_dict(data: dict[str, Any], errors: list[str]) -> Source | None:
             offset=values["offset"],
             amplitude=values["amplitude"],
             frequency=values["frequency"],
-            delay=float(data.get("delay", 0.0)),
+            delay=delay,
         )
-
-    if kind and kind not in ("dc", "ac", ""):
-        errors.append(
-            f"{where}: unknown source kind {kind!r}; "
-            f"known: 'dc', 'ac', 'pulse', 'sine'"
-        )
-        return None
 
     dc = data.get("dc")
     ac = data.get("ac_magnitude", data.get("ac"))
-    if dc is None and ac is None and not data.get("transient"):
+    if dc is None and ac is None:
         errors.append(
-            f"{where}: needs at least one of 'dc', 'ac_magnitude' or a "
-            f"'kind' of 'pulse'/'sine'"
+            f"{where}: needs 'dc', 'ac_magnitude', or a 'kind' of 'pulse'/'sine'"
         )
+        return None
+    dc_value = (
+        _number(data, "dc", errors, where=where, required=False)
+        if dc is not None
+        else None
+    )
+    ac_key = "ac_magnitude" if "ac_magnitude" in data else "ac"
+    ac_value = (
+        _number(data, ac_key, errors, where=where, required=False)
+        if ac is not None
+        else None
+    )
+    if errors:
         return None
     return Source(
         name=name,
         positive=positive,
         negative=negative,
-        dc=float(dc) if dc is not None else None,
-        ac_magnitude=float(ac) if ac is not None else None,
-        transient=str(data["transient"]) if data.get("transient") else None,
+        dc=dc_value,
+        ac_magnitude=ac_value,
     )
-
-
-def _model_from_dict(
-    part: str, data: dict[str, Any], errors: list[str]
-) -> PrimitiveModel | SubcircuitModel | None:
-    kind = str(data.get("kind", "subckt")).lower()
-    name = str(data.get("name", ""))
-    text = str(data.get("text", ""))
-    if not name or not text:
-        errors.append(f"model for {part!r}: needs both 'name' and 'text'")
-        return None
-    if kind in ("subckt", "subcircuit"):
-        pins = data.get("pins")
-        if not isinstance(pins, list) or not pins:
-            errors.append(
-                f"model for {part!r}: a subcircuit needs 'pins', the device pin "
-                f"names in the subcircuit's terminal order"
-            )
-            return None
-        return SubcircuitModel(name=name, pins=tuple(str(p) for p in pins), text=text)
-    if kind in ("model", "primitive"):
-        return PrimitiveModel(name=name, text=text)
-    errors.append(
-        f"model for {part!r}: unknown kind {kind!r}; known: 'subckt', 'model'"
-    )
-    return None
 
 
 def testbench_from_dict(data: dict[str, Any]) -> Testbench:
-    """Build a :class:`Testbench`. Raises :class:`DeckError` listing every problem."""
+    """Build a safe, typed :class:`Testbench` from untrusted JSON.
+
+    Raw SPICE model programs and free-form directives deliberately are not part
+    of this bridge. Trusted Python code can construct :class:`Testbench`
+    directly when it needs a vendor model.
+    """
     if not isinstance(data, dict):
         raise DeckError([f"testbench must be an object, got {type(data).__name__}"])
 
     errors: list[str] = []
+    _reject_unknown(data, _TESTBENCH_FIELDS, errors, where="testbench")
     analysis_data = data.get("analysis")
     if not isinstance(analysis_data, dict):
-        raise DeckError(
-            ["testbench needs an 'analysis' object, e.g. {'kind': 'op'}"]
-        )
-    analysis = analysis_from_dict(analysis_data, errors)
+        errors.append("testbench needs an 'analysis' object, e.g. {'kind': 'op'}")
+        analysis = None
+    else:
+        analysis = analysis_from_dict(analysis_data, errors)
 
     sources: list[Source] = []
     raw_sources = data.get("sources") or []
@@ -234,33 +391,38 @@ def testbench_from_dict(data: dict[str, Any]) -> Testbench:
         if source is not None:
             sources.append(source)
 
-    models: dict[str, PrimitiveModel | SubcircuitModel] = {}
-    raw_models = data.get("models") or {}
-    if not isinstance(raw_models, dict):
-        errors.append("'models' must be an object keyed by part name")
-        raw_models = {}
-    for part, entry in raw_models.items():
-        if not isinstance(entry, dict):
-            errors.append(f"model for {part!r} must be an object")
-            continue
-        model = _model_from_dict(str(part), entry, errors)
-        if model is not None:
-            models[str(part)] = model
+    temperature = data.get("temperature_c")
+    temperature_value = (
+        _number(data, "temperature_c", errors, where="testbench", required=False)
+        if temperature is not None
+        else None
+    )
+    ground = data.get("ground")
+    if ground is not None and (not isinstance(ground, str) or not ground):
+        errors.append("testbench: 'ground' must be a non-empty string")
+        ground = None
+    raw_probes = data.get("probes") or []
+    probes: tuple[str, ...] = ()
+    if not isinstance(raw_probes, list) or not all(
+        isinstance(probe, str) and probe for probe in raw_probes
+    ):
+        errors.append("testbench: 'probes' must be a list of non-empty strings")
+    else:
+        probes = tuple(raw_probes)
+    strict = data.get("strict", False)
+    if not isinstance(strict, bool):
+        errors.append("testbench: 'strict' must be a boolean")
 
     if errors or analysis is None:
         raise DeckError(errors or ["could not build the analysis"])
 
-    temperature = data.get("temperature_c")
     return Testbench(
         analysis=analysis,
         sources=sources,
-        models=models,
-        ground=str(data["ground"]) if data.get("ground") else None,
-        probes=tuple(str(p) for p in (data.get("probes") or ())),
-        temperature_c=float(temperature) if temperature is not None else None,
-        options=tuple(str(o) for o in (data.get("options") or ())),
-        strict=bool(data.get("strict", False)),
-        title=str(data.get("title", "silkscreen simulation")),
+        ground=ground,
+        probes=probes,
+        temperature_c=temperature_value,
+        strict=strict,
     )
 
 
@@ -350,10 +512,136 @@ def assertions_from_dict(items: Any) -> list[Assertion]:
     return built
 
 
+_ANALYSIS_SCHEMA: dict[str, Any] = {
+    "oneOf": [
+        {
+            "type": "object",
+            "additionalProperties": False,
+            "properties": {"kind": {"const": "op"}},
+            "required": ["kind"],
+        },
+        {
+            "type": "object",
+            "additionalProperties": False,
+            "properties": {
+                "kind": {"const": "tran"},
+                "step": {"type": "number", "exclusiveMinimum": 0},
+                "stop": {"type": "number", "exclusiveMinimum": 0},
+                "start": {"type": "number", "minimum": 0},
+                "max_step": {"type": "number", "exclusiveMinimum": 0},
+            },
+            "required": ["kind", "step", "stop"],
+        },
+        {
+            "type": "object",
+            "additionalProperties": False,
+            "properties": {
+                "kind": {"const": "ac"},
+                "f_start": {"type": "number", "exclusiveMinimum": 0},
+                "f_stop": {"type": "number", "exclusiveMinimum": 0},
+                "points": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": _MAX_AC_POINTS,
+                },
+                "sweep": {"type": "string", "enum": ["dec", "oct", "lin"]},
+            },
+            "required": ["kind", "f_start", "f_stop"],
+        },
+        {
+            "type": "object",
+            "additionalProperties": False,
+            "properties": {
+                "kind": {"const": "dc"},
+                "source": {"type": "string", "minLength": 1},
+                "start": {"type": "number"},
+                "stop": {"type": "number"},
+                "step": {"type": "number"},
+            },
+            "required": ["kind", "source", "start", "stop", "step"],
+        },
+    ]
+}
+
+_SOURCE_SCHEMA: dict[str, Any] = {
+    "oneOf": [
+        {
+            "type": "object",
+            "additionalProperties": False,
+            "properties": {
+                "name": {"type": "string", "minLength": 1},
+                "positive": {"type": "string", "minLength": 1},
+                "negative": {"type": "string", "minLength": 1},
+                "kind": {"type": "string", "enum": ["dc", "ac"]},
+                "dc": {"type": "number"},
+                "ac": {"type": "number"},
+                "ac_magnitude": {"type": "number"},
+            },
+            "required": ["name", "positive", "negative"],
+            "anyOf": [
+                {"required": ["dc"]},
+                {"required": ["ac"]},
+                {"required": ["ac_magnitude"]},
+            ],
+        },
+        {
+            "type": "object",
+            "additionalProperties": False,
+            "properties": {
+                "name": {"type": "string", "minLength": 1},
+                "positive": {"type": "string", "minLength": 1},
+                "negative": {"type": "string", "minLength": 1},
+                "kind": {"const": "pulse"},
+                "initial": {"type": "number"},
+                "pulsed": {"type": "number"},
+                "delay": {"type": "number", "minimum": 0},
+                "rise": {"type": "number", "exclusiveMinimum": 0},
+                "fall": {"type": "number", "exclusiveMinimum": 0},
+                "width": {"type": "number", "exclusiveMinimum": 0},
+                "period": {"type": "number", "exclusiveMinimum": 0},
+            },
+            "required": [
+                "name",
+                "positive",
+                "negative",
+                "kind",
+                "initial",
+                "pulsed",
+                "width",
+                "period",
+            ],
+        },
+        {
+            "type": "object",
+            "additionalProperties": False,
+            "properties": {
+                "name": {"type": "string", "minLength": 1},
+                "positive": {"type": "string", "minLength": 1},
+                "negative": {"type": "string", "minLength": 1},
+                "kind": {"const": "sine"},
+                "offset": {"type": "number"},
+                "amplitude": {"type": "number"},
+                "frequency": {"type": "number", "exclusiveMinimum": 0},
+                "delay": {"type": "number", "minimum": 0},
+            },
+            "required": [
+                "name",
+                "positive",
+                "negative",
+                "kind",
+                "offset",
+                "amplitude",
+                "frequency",
+            ],
+        },
+    ]
+}
+
 #: JSON Schema for a simulation request, shared by the MCP tool and anything
 #: else that wants to describe this interface to a model.
 REQUEST_SCHEMA: dict[str, Any] = {
     "type": "object",
+    "additionalProperties": False,
     "properties": {
         "circuit": {
             "type": "object",
@@ -361,13 +649,15 @@ REQUEST_SCHEMA: dict[str, Any] = {
         },
         "testbench": {
             "type": "object",
+            "additionalProperties": False,
             "description": (
                 "What to drive the circuit with and what to analyse. "
-                "The circuit alone does not say."
+                "The circuit alone does not say. Only typed stimuli are "
+                "accepted here; raw SPICE programs are never accepted over MCP."
             ),
             "properties": {
                 "analysis": {
-                    "type": "object",
+                    **_ANALYSIS_SCHEMA,
                     "description": (
                         "{'kind':'op'} | {'kind':'tran','step':s,'stop':s} | "
                         "{'kind':'ac','f_start':Hz,'f_stop':Hz,'points':n} | "
@@ -382,17 +672,11 @@ REQUEST_SCHEMA: dict[str, Any] = {
                         "kind='pulse' (initial, pulsed, width, period) or "
                         "kind='sine' (offset, amplitude, frequency)."
                     ),
-                    "items": {"type": "object"},
-                },
-                "models": {
-                    "type": "object",
-                    "description": (
-                        "Keyed by part name. A device (IC) has no behaviour in "
-                        "the IR and cannot be simulated without one: "
-                        "{'kind':'subckt','name':...,'pins':[...],'text':...}"
-                    ),
+                    "items": _SOURCE_SCHEMA,
                 },
                 "ground": {"type": "string"},
+                "probes": {"type": "array", "items": {"type": "string"}},
+                "temperature_c": {"type": "number"},
                 "strict": {
                     "type": "boolean",
                     "description": "Treat warnings (e.g. a substituted generic "
@@ -412,11 +696,19 @@ REQUEST_SCHEMA: dict[str, Any] = {
         },
         "simulator": {
             "type": "string",
+            "enum": ["ngspice", "ltspice"],
             "description": "'ngspice' or 'ltspice'; omit to auto-select.",
         },
-        "timeout_s": {"type": "number"},
+        "timeout_s": {
+            "type": "number",
+            "exclusiveMinimum": 0,
+            "maximum": 120,
+            "default": 60,
+        },
         "max_points": {
             "type": "integer",
+            "minimum": 0,
+            "maximum": 2000,
             "description": "Downsampled waveform points to return per signal; "
             "0 (the default) returns summary statistics only.",
         },

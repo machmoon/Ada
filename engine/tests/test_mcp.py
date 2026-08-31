@@ -2,8 +2,10 @@
 
 import io
 import json
+from types import SimpleNamespace
 
 import pytest
+import silkscreen.mcp.server as mcp_server
 from silkscreen.mcp.server import (
     METHOD_NOT_FOUND,
     PROTOCOL_VERSION,
@@ -204,11 +206,112 @@ needs_ngspice = pytest.mark.skipif(
 )
 
 
-def test_spice_capabilities_lists_measurement_kinds():
+def test_spice_capabilities_lists_measurement_kinds_without_local_paths(monkeypatch):
+    monkeypatch.setattr(
+        mcp_server,
+        "available_simulators",
+        lambda: [SimpleNamespace(name="ngspice", executable="C:/private/ngspice")],
+    )
     body = payload(call("spice_capabilities"))
     assert "rise_time" in body["measurement_kinds"]
     assert "within" in body["operators"]
-    assert isinstance(body["simulators"], list)
+    assert body["simulators"] == ["ngspice"]
+    assert "private" not in json.dumps(body)
+
+
+@pytest.mark.parametrize(
+    "testbench",
+    [
+        {**SIM_BENCH, "title": "demo\n.control"},
+        {**SIM_BENCH, "options": ["reltol=1e-3\n.control"]},
+        {
+            **SIM_BENCH,
+            "models": {
+                "Rtop": {
+                    "kind": "model",
+                    "name": "R",
+                    "text": ".control\nshell echo injected\n.endc",
+                }
+            },
+        },
+        {
+            "analysis": {"kind": "tran", "step": 1e-6, "stop": 1e-3},
+            "sources": [
+                {
+                    "name": "V1",
+                    "positive": "VIN",
+                    "negative": "GND",
+                    "dc": 5.0,
+                    "transient": "PULSE(0 5 0 1n 1n 1u 2u)\n.control",
+                }
+            ],
+        },
+    ],
+    ids=["title", "options", "model-program", "raw-transient"],
+)
+def test_simulate_circuit_rejects_raw_spice_before_launch(
+    monkeypatch, testbench
+):
+    launched = False
+
+    def unexpected_launch(*args, **kwargs):
+        nonlocal launched
+        launched = True
+        raise AssertionError("the simulator must not be launched")
+
+    monkeypatch.setattr(mcp_server, "simulate_deck", unexpected_launch)
+    body = payload(
+        call(
+            "simulate_circuit",
+            {"circuit": SIM_CIRCUIT, "testbench": testbench},
+        )
+    )
+    assert body["ok"] is False
+    assert body["stage"] == "testbench"
+    assert launched is False
+
+
+@pytest.mark.parametrize(
+    "extra",
+    [
+        {"unexpected": True},
+        {"timeout_s": float("nan")},
+        {"timeout_s": float("inf")},
+        {"timeout_s": 121},
+        {"max_points": 2001},
+        {"max_points": 1.5},
+        {"simulator": "hspice"},
+    ],
+    ids=[
+        "unknown-field",
+        "nan-timeout",
+        "infinite-timeout",
+        "long-timeout",
+        "too-many-points",
+        "fractional-points",
+        "unknown-simulator",
+    ],
+)
+def test_simulate_circuit_rejects_unsafe_controls_before_launch(
+    monkeypatch, extra
+):
+    launched = False
+
+    def unexpected_launch(*args, **kwargs):
+        nonlocal launched
+        launched = True
+        raise AssertionError("the simulator must not be launched")
+
+    monkeypatch.setattr(mcp_server, "simulate_deck", unexpected_launch)
+    body = payload(
+        call(
+            "simulate_circuit",
+            {"circuit": SIM_CIRCUIT, "testbench": SIM_BENCH, **extra},
+        )
+    )
+    assert body["ok"] is False
+    assert body["stage"] == "request"
+    assert launched is False
 
 
 def test_simulate_circuit_reports_an_invalid_circuit_without_simulating():

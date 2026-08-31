@@ -20,6 +20,7 @@ Run it with::
 from __future__ import annotations
 
 import json
+import math
 import sys
 from collections.abc import Callable
 from typing import Any
@@ -160,7 +161,11 @@ TOOLS: list[dict[str, Any]] = [
             "measurement kind an assertion may use. Call this before building "
             "a simulation request."
         ),
-        "inputSchema": {"type": "object", "properties": {}},
+        "inputSchema": {
+            "type": "object",
+            "properties": {},
+            "additionalProperties": False,
+        },
     },
 ]
 
@@ -296,6 +301,63 @@ def _tool_generate_footprint(args: dict[str, Any]) -> dict[str, Any]:
     )
 
 
+_SIMULATION_FIELDS = frozenset(
+    {"circuit", "testbench", "assertions", "simulator", "timeout_s", "max_points"}
+)
+_MAX_SIMULATION_TIMEOUT_S = 120.0
+_MAX_WAVEFORM_POINTS = 2000
+
+
+def _is_finite_number(value: Any) -> bool:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return False
+    try:
+        return math.isfinite(value)
+    except OverflowError:
+        return False
+
+
+def _simulation_controls(
+    args: Any,
+) -> tuple[list[str], str | None, float, int]:
+    """Validate resource controls before any external simulator is started."""
+    if not isinstance(args, dict):
+        return ["simulation request must be an object"], None, 60.0, 0
+
+    errors = [
+        f"simulation request: unknown field {key!r}"
+        for key in sorted(set(args) - _SIMULATION_FIELDS)
+    ]
+
+    simulator = args.get("simulator")
+    if simulator is not None and simulator not in ("ngspice", "ltspice"):
+        errors.append("'simulator' must be 'ngspice' or 'ltspice'")
+
+    timeout = args.get("timeout_s", 60.0)
+    if (
+        not _is_finite_number(timeout)
+        or not 0 < timeout <= _MAX_SIMULATION_TIMEOUT_S
+    ):
+        errors.append(
+            f"'timeout_s' must be a finite number greater than 0 and no more "
+            f"than {_MAX_SIMULATION_TIMEOUT_S:g}"
+        )
+        timeout = 60.0
+
+    max_points = args.get("max_points", 0)
+    if (
+        isinstance(max_points, bool)
+        or not isinstance(max_points, int)
+        or not 0 <= max_points <= _MAX_WAVEFORM_POINTS
+    ):
+        errors.append(
+            f"'max_points' must be an integer between 0 and {_MAX_WAVEFORM_POINTS}"
+        )
+        max_points = 0
+
+    return errors, simulator, float(timeout), max_points
+
+
 def _tool_simulate_circuit(args: dict[str, Any]) -> dict[str, Any]:
     """Run one simulation and check it against a specification.
 
@@ -304,6 +366,12 @@ def _tool_simulate_circuit(args: dict[str, Any]) -> dict[str, Any]:
     as "the circuit does nothing", which is the one outcome this must never
     produce.
     """
+    request_errors, simulator, timeout_s, max_points = _simulation_controls(args)
+    if request_errors:
+        return _text_result(
+            {"ok": False, "stage": "request", "errors": request_errors}
+        )
+
     try:
         spec = parse_circuit_spec(args.get("circuit") or {})
     except ValidationError as exc:
@@ -327,8 +395,8 @@ def _tool_simulate_circuit(args: dict[str, Any]) -> dict[str, Any]:
     try:
         result = simulate_deck(
             deck,
-            simulator=args.get("simulator"),
-            timeout_s=float(args.get("timeout_s", 60.0)),
+            simulator=simulator,
+            timeout_s=timeout_s,
         )
     except SpiceError as exc:
         return _text_result(
@@ -341,7 +409,6 @@ def _tool_simulate_circuit(args: dict[str, Any]) -> dict[str, Any]:
             }
         )
 
-    max_points = int(args.get("max_points", 0))
     if not assertions:
         return _text_result(
             {"ok": True, "result": result.to_dict(max_points=max_points)}
@@ -357,10 +424,7 @@ def _tool_simulate_circuit(args: dict[str, Any]) -> dict[str, Any]:
 def _tool_spice_capabilities(args: dict[str, Any]) -> dict[str, Any]:
     return _text_result(
         {
-            "simulators": [
-                {"name": sim.name, "executable": getattr(sim, "executable", None)}
-                for sim in available_simulators()
-            ],
+            "simulators": [sim.name for sim in available_simulators()],
             "measurement_kinds": sorted(MEASUREMENT_KINDS),
             "analysis_kinds": ["op", "tran", "ac", "dc"],
             "operators": ["<", "<=", ">", ">=", "==", "!=", "within"],

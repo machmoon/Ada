@@ -329,6 +329,42 @@ def test_negative_component_value_is_rejected():
     assert "positive" in str(exc.value)
 
 
+@pytest.mark.parametrize(
+    "bench",
+    [
+        Testbench(analysis=OperatingPoint(), title="demo\n.control"),
+        Testbench(
+            analysis=OperatingPoint(),
+            options=("reltol=1e-3\n.control",),
+        ),
+        Testbench(
+            analysis=OperatingPoint(),
+            sources=[
+                Source(
+                    name="V1",
+                    positive="VIN",
+                    negative="GND",
+                    transient="PULSE(0 5 0 1n 1n 1u 2u)\n.control",
+                )
+            ],
+        ),
+        Testbench(
+            analysis=OperatingPoint(),
+            models={
+                "unused": PrimitiveModel(
+                    name="BAD",
+                    text=".model BAD D\n.control\nshell echo injected\n.endc",
+                )
+            },
+        ),
+    ],
+    ids=["title", "option", "transient", "model-control-block"],
+)
+def test_deck_rejects_directive_injection_at_the_final_boundary(bench):
+    with pytest.raises(DeckError):
+        build_deck(rc_spec(), bench)
+
+
 # --- the honest edge: parts with no behaviour ------------------------------
 
 
@@ -341,11 +377,14 @@ def test_device_without_a_model_raises_rather_than_being_left_out():
     spec = parse_circuit_spec(
         {
             "devices": {"U_reg": {"pins": {"IN": "1", "GND": "2", "OUT": "3"}}},
-            "passives": {"Cout": {"type": "capacitor", "value": "10uF"}},
+            "passives": {
+                "Cin": {"type": "capacitor", "value": "10uF"},
+                "Cout": {"type": "capacitor", "value": "10uF"},
+            },
             "nets": {
-                "VIN": ["U_reg.IN", "U_reg.GND"],
+                "VIN": ["U_reg.IN", "Cin.1"],
                 "VOUT": ["U_reg.OUT", "Cout.1"],
-                "GND": ["Cout.2", "U_reg.GND"],
+                "GND": ["U_reg.GND", "Cin.2", "Cout.2"],
             },
         }
     )
@@ -359,11 +398,14 @@ def test_device_with_a_subcircuit_is_wired_in_pin_order():
     spec = parse_circuit_spec(
         {
             "devices": {"U_reg": {"pins": {"IN": "1", "GND": "2", "OUT": "3"}}},
-            "passives": {"Cout": {"type": "capacitor", "value": "10uF"}},
+            "passives": {
+                "Cin": {"type": "capacitor", "value": "10uF"},
+                "Cout": {"type": "capacitor", "value": "10uF"},
+            },
             "nets": {
-                "VIN": ["U_reg.IN", "Cout.2"],
+                "VIN": ["U_reg.IN", "Cin.1"],
                 "VOUT": ["U_reg.OUT", "Cout.1"],
-                "GND": ["U_reg.GND", "Cout.2"],
+                "GND": ["U_reg.GND", "Cin.2", "Cout.2"],
             },
         }
     )
@@ -595,12 +637,54 @@ def _ltspice_binary(points, *, utf16=True, narrow=True):
     return header.encode(encoding) + body
 
 
+def _ltspice_complex_binary(points):
+    """LTspice AC binary: float64 real/imag pair for every variable."""
+    header = (
+        "Title: * ltspice AC\n"
+        "Date: Sun Aug 30 00:00:00 2026\n"
+        "Plotname: AC Analysis\n"
+        "Flags: complex\n"
+        "No. Variables: 2\n"
+        f"No. Points: {len(points)}\n"
+        "Variables:\n"
+        "\t0\tfrequency\tfrequency\n"
+        "\t1\tV(out)\tvoltage\n"
+        "Binary:\n"
+    )
+    body = b"".join(
+        struct.pack("<dddd", frequency.real, frequency.imag, value.real, value.imag)
+        for frequency, value in points
+    )
+    return header.encode("utf-16-le") + body
+
+
 def test_ltspice_binary_rawfile_with_utf16_header():
     points = [(0.0, 0.0), (1e-6, 1.5), (2e-6, 3.0)]
     plot = parse_rawfile(_ltspice_binary(points))
     assert plot.variables == ("time", "V(out)")
     assert plot.data["time"] == pytest.approx([t for t, _ in points])
     assert plot.data["V(out)"] == pytest.approx([v for _, v in points], rel=1e-6)
+
+
+def test_ltspice_binary_complex_values_are_float64_pairs():
+    points = [
+        (complex(10.0, 0.0), complex(0.5, -0.25)),
+        (complex(100.0, 0.0), complex(-1.25, 2.5)),
+        (complex(1000.0, 0.0), complex(3.0, -4.0)),
+    ]
+    plot = parse_rawfile(_ltspice_complex_binary(points))
+    assert plot.complex_data
+    assert plot.data["frequency"] == pytest.approx([p[0] for p in points])
+    assert plot.data["V(out)"] == pytest.approx([p[1] for p in points])
+
+
+def test_truncated_ltspice_binary_complex_rawfile_raises():
+    blob = _ltspice_complex_binary(
+        [(complex(10.0), complex(1.0)), (complex(100.0), complex(0.5))]
+    )
+    with pytest.raises(RawParseError) as exc:
+        parse_rawfile(blob[:-8])
+    assert "complex points" in str(exc.value)
 
 
 def test_ngspice_binary_rawfile_uses_float64_throughout():
@@ -836,6 +920,55 @@ def test_bandwidth_3db_of_a_synthetic_first_order_response():
     )
     corner = measure(result, Measurement(kind="bandwidth_3db", signal="out"))
     assert corner == pytest.approx(fc, rel=0.02)
+
+
+def test_bandwidth_3db_aligns_a_reference_to_the_same_window():
+    freqs = (1.0, 2.0, 5.0, 10.0, 20.0, 40.0, 80.0, 160.0)
+    # Deliberately non-geometric: pairing the windowed numerator with the
+    # unwindowed reference prefix produces a false corner near 13 Hz.
+    reference = (1.0, 10.0, 2.0, 8.0, 3.0, 20.0, 4.0, 5.0)
+    ratios = (1.0, 1.0, 1.0, 1.0, 0.9, 1 / math.sqrt(2.0), 0.4, 0.2)
+    output = tuple(
+        complex(ref * ratio)
+        for ref, ratio in zip(reference, ratios, strict=True)
+    )
+    result = synthetic(
+        ("frequency", "v(out)", "v(in)"),
+        {
+            "frequency": freqs,
+            "v(out)": output,
+            "v(in)": tuple(complex(value) for value in reference),
+        },
+        analysis="ac",
+    )
+    corner = measure(
+        result,
+        Measurement(
+            kind="bandwidth_3db",
+            signal="out",
+            reference="in",
+            window=(10.0, 160.0),
+        ),
+    )
+    assert corner == pytest.approx(40.0)
+
+
+def test_bandwidth_3db_rejects_a_zero_reference():
+    result = synthetic(
+        ("frequency", "v(out)", "v(in)"),
+        {
+            "frequency": (10.0, 20.0, 40.0),
+            "v(out)": (complex(1.0), complex(0.8), complex(0.5)),
+            "v(in)": (complex(1.0), complex(0.0), complex(1.0)),
+        },
+        analysis="ac",
+    )
+    with pytest.raises(MeasurementError) as exc:
+        measure(
+            result,
+            Measurement(kind="bandwidth_3db", signal="out", reference="in"),
+        )
+    assert "zero at 20" in str(exc.value)
 
 
 def test_bandwidth_3db_requires_an_ac_result():

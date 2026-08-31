@@ -30,6 +30,7 @@ net names throughout and never sees the sanitised form.
 
 from __future__ import annotations
 
+import math
 import re
 from dataclasses import dataclass, field
 
@@ -72,6 +73,171 @@ GROUND_NAMES: tuple[str, ...] = (
 GENERIC_DIODE = ".model SS_GENERIC_D D(IS=2.52n RS=0.568 N=1.752 CJO=4p BV=100)"
 
 _SPICE_NODE_RE = re.compile(r"[^A-Za-z0-9_]")
+_SPICE_TOKEN_RE = re.compile(r"[A-Za-z][A-Za-z0-9_.:$-]*\Z")
+
+
+def _single_line(value: object, label: str, errors: list[str]) -> bool:
+    """Require an emitted field to remain one printable simulator line."""
+    if not isinstance(value, str) or not value:
+        errors.append(f"{label} must be a non-empty string")
+        return False
+    if any(ord(char) < 32 or ord(char) == 127 for char in value):
+        errors.append(f"{label} must not contain control characters or newlines")
+        return False
+    return True
+
+
+def _token(value: object, label: str, errors: list[str]) -> bool:
+    if not _single_line(value, label, errors):
+        return False
+    if _SPICE_TOKEN_RE.fullmatch(value) is None:
+        errors.append(
+            f"{label} {value!r} is not a valid SPICE identifier; use letters, "
+            "digits, '_', '.', ':', '$' or '-'"
+        )
+        return False
+    return True
+
+
+def _finite(value: object, label: str, errors: list[str]) -> bool:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        errors.append(f"{label} must be a finite number, got {value!r}")
+        return False
+    try:
+        finite = math.isfinite(value)
+    except OverflowError:
+        errors.append(f"{label} must be a finite number, got {value!r}")
+        return False
+    if not finite:
+        errors.append(f"{label} must be a finite number, got {value!r}")
+        return False
+    return True
+
+
+def _validate_model_program(
+    model: PrimitiveModel | SubcircuitModel, part: str, errors: list[str]
+) -> None:
+    """Reject simulator-control blocks embedded in otherwise valid model text.
+
+    Model programs are accepted only by the trusted Python API, not by the MCP
+    JSON bridge. This final check still prevents a copied vendor file from
+    escaping its model role and taking over the simulator driver.
+    """
+    _token(model.name, f"model name for {part!r}", errors)
+    if not isinstance(model.text, str) or not model.text.strip():
+        errors.append(f"model text for {part!r} must be a non-empty string")
+        return
+    if "\x00" in model.text:
+        errors.append(f"model text for {part!r} must not contain NUL bytes")
+    for line_number, line in enumerate(model.text.splitlines(), start=1):
+        directive = line.lstrip().split(maxsplit=1)[0].lower() if line.strip() else ""
+        if directive in {".control", ".end"}:
+            errors.append(
+                f"model text for {part!r} line {line_number} contains forbidden "
+                f"simulator directive {directive!r}"
+            )
+
+
+def _validate_analysis(analysis: Analysis, errors: list[str]) -> None:
+    if isinstance(analysis, OperatingPoint):
+        return
+    if isinstance(analysis, Transient):
+        valid = all(
+            (
+                _finite(analysis.step, "transient step", errors),
+                _finite(analysis.stop, "transient stop", errors),
+                _finite(analysis.start, "transient start", errors),
+            )
+        )
+        if analysis.max_step is not None:
+            valid = _finite(analysis.max_step, "transient max_step", errors) and valid
+        if valid:
+            if analysis.step <= 0:
+                errors.append("transient step must be greater than zero")
+            if analysis.start < 0 or analysis.stop <= analysis.start:
+                errors.append("transient requires stop > start >= 0")
+            if analysis.max_step is not None and analysis.max_step <= 0:
+                errors.append("transient max_step must be greater than zero")
+        return
+    if isinstance(analysis, ACSweep):
+        valid = all(
+            (
+                _finite(analysis.f_start, "AC f_start", errors),
+                _finite(analysis.f_stop, "AC f_stop", errors),
+            )
+        )
+        if (
+            isinstance(analysis.points, bool)
+            or not isinstance(analysis.points, int)
+            or analysis.points <= 0
+        ):
+            errors.append("AC points must be a positive integer")
+        if analysis.sweep not in ("dec", "oct", "lin"):
+            errors.append("AC sweep must be 'dec', 'oct' or 'lin'")
+        if valid and (analysis.f_start <= 0 or analysis.f_stop <= analysis.f_start):
+            errors.append("AC sweep requires f_stop > f_start > 0")
+        return
+    if isinstance(analysis, DCSweep):
+        _token(analysis.source, "DC sweep source", errors)
+        valid = all(
+            (
+                _finite(analysis.start, "DC start", errors),
+                _finite(analysis.stop, "DC stop", errors),
+                _finite(analysis.step, "DC step", errors),
+            )
+        )
+        if valid and (
+            analysis.step == 0 or (analysis.stop - analysis.start) * analysis.step <= 0
+        ):
+            errors.append("DC step must be nonzero and move from start toward stop")
+        return
+    errors.append(f"unsupported analysis type {type(analysis).__name__}")
+
+
+def _validate_testbench(bench: Testbench) -> list[str]:
+    errors: list[str] = []
+    _single_line(bench.title, "testbench title", errors)
+    _validate_analysis(bench.analysis, errors)
+
+    if bench.ground is not None:
+        _single_line(bench.ground, "testbench ground", errors)
+    for probe in bench.probes:
+        _single_line(probe, "probe name", errors)
+    if bench.temperature_c is not None:
+        _finite(bench.temperature_c, "testbench temperature", errors)
+    for option in bench.options:
+        _single_line(option, "SPICE option", errors)
+
+    for source in bench.sources:
+        _token(source.name, "source name", errors)
+        _single_line(source.positive, f"source {source.name!r} positive net", errors)
+        _single_line(source.negative, f"source {source.name!r} negative net", errors)
+        if source.dc is not None:
+            _finite(source.dc, f"source {source.name!r} DC value", errors)
+        if source.ac_magnitude is not None:
+            _finite(
+                source.ac_magnitude,
+                f"source {source.name!r} AC magnitude",
+                errors,
+            )
+        if source.transient is not None:
+            _single_line(
+                source.transient, f"source {source.name!r} transient", errors
+            )
+
+    for part, model in bench.models.items():
+        if not isinstance(model, (PrimitiveModel, SubcircuitModel)):
+            errors.append(
+                f"model for {part!r} must be PrimitiveModel or SubcircuitModel"
+            )
+            continue
+        _validate_model_program(model, part, errors)
+        if isinstance(model, SubcircuitModel):
+            if not model.pins:
+                errors.append(f"subcircuit model for {part!r} must list its pins")
+            for pin in model.pins:
+                _single_line(pin, f"subcircuit pin for {part!r}", errors)
+    return errors
 
 
 def _element_name(letter: str, ref: str) -> str:
@@ -460,8 +626,15 @@ def build_deck(spec: CircuitSpec, bench: Testbench) -> SpiceDeck:
     spec.validate()
 
     nets = [conn.net for conn in spec.connections]
-    errors: list[str] = []
+    errors = _validate_testbench(bench)
     warnings: list[str] = []
+
+    # Validate every value that can reach the simulator before resolving nets
+    # or rendering cards. This is both a clearer error boundary and prevents a
+    # malformed direct Python Testbench from failing with an incidental
+    # TypeError halfway through deck construction.
+    if errors:
+        raise DeckError(errors)
 
     ground = _resolve_ground(spec, bench, nets)
     node_of, net_of = _sanitize_nodes(nets, ground)

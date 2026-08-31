@@ -193,12 +193,12 @@ feature is tracked under feature 12.
  ----- Declarative measurements + assertions          [DONE]        measured value and signed margin per clause
  ----- ngspice runner, verified end to end            [DONE]        CI checks RC results against closed-form theory
  ----- LTspice runner                                 [UNVERIFIED]  process launch has not run against LTspice;
-                                                                     binary RAW parsing has offline fixtures
+                                                                     real and complex binary RAW have offline fixtures
  ----- MCP simulate_circuit + spice_capabilities      [DONE]        mcp/server.py; spice/spec.py is the JSON bridge
- ----- Secure executable-deck boundary                [IN PROGRESS] PR #15 review: reject directive injection and
-                                                                     bound MCP-controlled runtime/output settings
- ----- Windowed reference bandwidth alignment         [IN PROGRESS] PR #15 review: numerator and reference must use
-                                                                     the same frequency samples
+ ----- Secure executable-deck boundary                [DONE]        typed MCP input only; directives rejected before
+                                                                     launch; runtime/output controls are bounded
+ ----- Windowed reference bandwidth alignment         [DONE]        numerator and reference use identical windowed
+                                                                     frequency samples; zero reference fails loudly
  ----- Device models for ICs                          [OPEN]        use a trusted server-side model registry; never
                                                                      execute raw model programs supplied over MCP
  ----- Wire simulation into the agent loop            [OPEN]        future propose -> simulate -> repair feedback
@@ -211,7 +211,8 @@ timeout under 5, feature 6 in full (confirmation gates), the deploy and smoke
 check under 7, the ops polish under 8, voice under 9, the error taxonomy under
 10 (from PR #5 review), and the stream-fallback tightening under 11 (from PR #9
 review). The board well shipped, so voice is all that is left of 9 and stays
-last. The [IDEA] rows under 4 and 5 are ideas, not commitments.
+last. Feature 16 still needs a trusted IC model registry and its place in the
+agent repair loop. The [IDEA] rows under 4 and 5 are ideas, not commitments.
 
 The ADK lane runs alongside that. Feature 12 is live and the flip is done: the
 default engine has been "adk" since the 2026-08-30 gate run, with

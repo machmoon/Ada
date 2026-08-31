@@ -293,10 +293,25 @@ def _bandwidth_3db(result: SimulationResult, m: Measurement) -> float:
         )
     sweep, values = _windowed(result, m)
     if m.reference is not None:
-        ref_values = result.magnitude(m.reference)
+        reference = Measurement(
+            kind=m.kind,
+            signal=m.reference,
+            window=m.window,
+        )
+        ref_sweep, ref_values = _windowed(result, reference)
+        if ref_sweep != sweep:
+            raise MeasurementError(
+                f"reference {m.reference!r} does not share the same frequency axis"
+            )
+        for frequency, ref_value in zip(sweep, ref_values, strict=True):
+            if ref_value == 0:
+                raise MeasurementError(
+                    f"reference {m.reference!r} is zero at {frequency:g} Hz; "
+                    "bandwidth is undefined there"
+                )
         values = tuple(
-            v / r if r else float("inf")
-            for v, r in zip(values, ref_values[: len(values)], strict=False)
+            value / ref_value
+            for value, ref_value in zip(values, ref_values, strict=True)
         )
     peak = max(values)
     if peak <= 0:
