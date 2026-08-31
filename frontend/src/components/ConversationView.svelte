@@ -24,6 +24,7 @@
     schematicEnabled = false,
     placementEnabled = false,
     boardEnabled = false,
+    reviewed = true,
   } = $props()
 
   let answer = $state('')
@@ -130,6 +131,7 @@
                   {schematicEnabled}
                   {placementEnabled}
                   {boardEnabled}
+                  {reviewed}
                   {onopen}
                 />
               {/if}
@@ -150,33 +152,65 @@
         </div>
       </form>
     {:else if $run.phase === 'error'}
-      <section class="recovery" data-testid="chat-recovery" data-material="panel">
-        <div class="lbl">Run failed</div>
-        <p>{$run.error?.message || 'The run did not complete.'}</p>
-        <div class="actions">
-          <button type="button" class="primary" onclick={() => onretry?.(selectedModel, selectedThinkingLevel, selectedQuotaRpm)}>Retry run</button>
-          <button type="button" onclick={onedit}>Edit request</button>
-          <button type="button" onclick={copyError}>{copied ? 'Copied' : 'Copy error'}</button>
-          <select bind:value={selectedModel} aria-label="Retry model">
-            <option value="auto">Auto model</option>
-            {#each models as model (model.id)}
-              <option value={model.id}>{model.name || model.id}</option>
-            {/each}
-          </select>
-          <select bind:value={selectedThinkingLevel} aria-label="Retry reasoning effort">
-            <option value="auto">Auto effort</option>
-            <option value="low">Fast · low</option>
-            <option value="medium">Standard · medium</option>
-            <option value="high">Deep · high</option>
-          </select>
-          <select bind:value={selectedQuotaRpm} aria-label="Retry request pace">
-            <option value="auto">Auto pace</option>
-            <option value="15">15 RPM</option>
-            <option value="6">6 RPM · demo-safe</option>
-            <option value="3">3 RPM · conservative</option>
-          </select>
-          <button type="button" onclick={() => onretry?.(selectedModel, selectedThinkingLevel, selectedQuotaRpm)}>Switch settings and retry</button>
-        </div>
+      {@const kind = $run.error?.kind || 'internal'}
+      <section class="recovery" data-testid="chat-recovery" data-material="panel" data-kind={kind}>
+        {#if kind === 'no-api-key'}
+          <!-- Not an outage: an unkeyed clone is the ordinary first run. Setup
+               instructions come first, and there is no retry button — retrying
+               without the key cannot succeed. -->
+          <div class="lbl">Silkscreen has no Gemini key yet</div>
+          <p>
+            The engine and the placer run without any key, but reading datasheets and proposing a
+            circuit go through Gemini. Set the key where the service can see it, then restart it.
+          </p>
+          <ol class="steps" data-testid="chat-recovery-steps">
+            <li><code class="mono" data-material="tint">cp .env.example .env</code></li>
+            <li>Put your key in the new file as <code class="mono" data-material="tint">GOOGLE_API_KEY=…</code></li>
+            <li>Restart the service so it picks the key up.</li>
+          </ol>
+          <p class="note">
+            The <strong>Install</strong> section of the repo README covers where the key comes from
+            and which parts of the pipeline need it.
+          </p>
+          <div class="actions">
+            <button type="button" onclick={onedit}>Back to the form</button>
+          </div>
+        {:else}
+          {#if kind === 'network'}
+            <div class="lbl">The service is not running</div>
+            <p>
+              The browser could not reach it at all. Start it with
+              <code class="mono" data-material="tint">PORT=8081 python -m service.app</code> and try again.
+            </p>
+          {:else}
+            <div class="lbl">Run failed</div>
+            <p>{$run.error?.message || 'The run did not complete.'}</p>
+          {/if}
+          <div class="actions">
+            <button type="button" class="primary" onclick={() => onretry?.(selectedModel, selectedThinkingLevel, selectedQuotaRpm)}>Retry run</button>
+            <button type="button" onclick={onedit}>Edit request</button>
+            <button type="button" onclick={copyError}>{copied ? 'Copied' : 'Copy error'}</button>
+            <select bind:value={selectedModel} aria-label="Retry model">
+              <option value="auto">Auto model</option>
+              {#each models as model (model.id)}
+                <option value={model.id}>{model.name || model.id}</option>
+              {/each}
+            </select>
+            <select bind:value={selectedThinkingLevel} aria-label="Retry reasoning effort">
+              <option value="auto">Auto effort</option>
+              <option value="low">Fast · low</option>
+              <option value="medium">Standard · medium</option>
+              <option value="high">Deep · high</option>
+            </select>
+            <select bind:value={selectedQuotaRpm} aria-label="Retry request pace">
+              <option value="auto">Auto pace</option>
+              <option value="15">15 RPM</option>
+              <option value="6">6 RPM · demo-safe</option>
+              <option value="3">3 RPM · conservative</option>
+            </select>
+            <button type="button" onclick={() => onretry?.(selectedModel, selectedThinkingLevel, selectedQuotaRpm)}>Switch settings and retry</button>
+          </div>
+        {/if}
       </section>
     {:else if $run.phase === 'done'}
       <div class="done-actions">
@@ -211,6 +245,9 @@
   .reply button:disabled { background: var(--accent-off); color: var(--accent-off-ink); }
   .recovery { margin: 0 0 24px 44px; padding: 13px; max-width: var(--measure-detail); border: 1px solid var(--sev-blocker-rule); background: var(--sev-blocker-bg); }
   .recovery p { margin-top: 7px; color: var(--ink-mid); line-height: 1.5; overflow-wrap: anywhere; }
+  .recovery .steps { margin: 12px 0 0; padding-left: 20px; display: flex; flex-direction: column; gap: 8px; font-size: var(--fs-ui); color: var(--ink-mid); line-height: 1.6; }
+  .recovery code { background: var(--well); padding: 2px 6px; font-size: var(--fs-mono); }
+  .recovery .note { margin-top: 12px; font-size: var(--fs-ui); color: var(--ink-soft); line-height: 1.6; }
   .actions { display: flex; gap: 7px; flex-wrap: wrap; align-items: center; margin-top: 12px; }
   .actions .primary { border-color: var(--accent); background: var(--accent); color: var(--accent-ink); }
   .done-actions { display: flex; gap: 8px; margin: 0 0 22px 44px; }
