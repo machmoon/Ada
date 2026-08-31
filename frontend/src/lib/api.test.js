@@ -10,6 +10,7 @@ import {
   generate,
   generateStream,
   listModels,
+  normalizePlacementRequest,
   normalizeRequest,
   requestBytes,
 } from './api.js'
@@ -214,13 +215,16 @@ describe('normalizeRequest', () => {
     expect(normalizeRequest({ no_solver_budget: 'yes' }).no_solver_budget).toBe(false)
   })
 
-  it('emits exactly the five fields the service accepts, dropping anything else', () => {
+  it('emits the stable board and placement fields, dropping anything else', () => {
     const request = normalizeRequest({ intent: 'x', nonsense: 'drop me' })
 
     expect(Object.keys(request).sort()).toEqual([
       'datasheets',
+      'experimental_placement',
       'intent',
       'no_solver_budget',
+      'placement_policy',
+      'placement_profile',
       'review',
       'time_limit_s',
     ])
@@ -245,12 +249,73 @@ describe('normalizeRequest', () => {
   it('adds the grounding field to the emitted set only when it is on', () => {
     expect(Object.keys(normalizeRequest({ intent: 'x', ground: true })).sort()).toEqual([
       'datasheets',
+      'experimental_placement',
       'ground',
       'intent',
       'no_solver_budget',
+      'placement_policy',
+      'placement_profile',
       'review',
       'time_limit_s',
     ])
+  })
+
+  it('runs deterministic placement verification by default and can turn it off', () => {
+    expect(normalizeRequest({})).toMatchObject({
+      placement_profile: 'compact-control',
+      placement_policy: 'deterministic',
+      experimental_placement: false,
+    })
+    expect(normalizeRequest({ placement_enabled: false }).placement_profile).toBeUndefined()
+  })
+
+  it('only forwards trace consent with the experimental switch on', () => {
+    expect(normalizeRequest({ record_trace: true }).record_trace).toBeUndefined()
+    expect(
+      normalizeRequest({ experimental_placement: true, record_trace: true }).record_trace,
+    ).toBe(true)
+  })
+})
+
+describe('normalizePlacementRequest', () => {
+  it('defaults to the reproducible placement demo', () => {
+    expect(normalizePlacementRequest()).toEqual({
+      profile: 'compact-control',
+      policy: 'deterministic',
+      experimental_placement: false,
+    })
+  })
+
+  it('keeps structured feedback and normalizes the policy', () => {
+    expect(
+      normalizePlacementRequest({
+        profile: 'thermal-first',
+        policy: 'gemini',
+        feedback: { fixed_refs_add: ['C1'] },
+      }),
+    ).toEqual({
+      profile: 'thermal-first',
+      policy: 'gemini',
+      experimental_placement: false,
+      feedback: { fixed_refs_add: ['C1'] },
+    })
+  })
+
+  it('does not forward caller-selected profile memory ids', () => {
+    expect(
+      normalizePlacementRequest({ profile_id: 'shared-team' }).profile_id,
+    ).toBeUndefined()
+  })
+
+  it.each(['fast', 'deterministic', 'gemini', 'ollama', 'tinker', 'hybrid'])(
+    'preserves the supported %s policy',
+    (policy) => {
+      expect(normalizePlacementRequest({ policy }).policy).toBe(policy)
+    },
+  )
+
+  it('falls back when the placement policy is unknown', () => {
+    expect(normalizePlacementRequest({ policy: 'invented' }).policy).toBe('deterministic')
   })
 })
 
@@ -1212,6 +1277,11 @@ describe('listModels', () => {
           thinking: true,
         },
       ],
+      placement: {
+        experimental_enabled: false,
+        profiles: [],
+        policies: {},
+      },
     })
   })
 })

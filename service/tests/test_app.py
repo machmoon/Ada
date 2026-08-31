@@ -16,9 +16,17 @@ import pytest
 from silkscreen.agents.adk.orchestrator import OrchestratorResult
 from silkscreen.agents.model import ScriptedModel
 from silkscreen.kicad import footprint_ref, load_board
+from silkscreen.placement.api import repair_request
+from silkscreen.placement.traces import MemoryFailureTraceStore
 from silkscreen.units import to_mm
 
-from service.app import Handler, make_server
+from service.app import (
+    Handler,
+    _record_failure_trace_ids,
+    make_server,
+    placement_policy_status,
+    resolve_placement_policy,
+)
 from service.cache import MemoryFactStore
 
 try:
@@ -108,16 +116,20 @@ def scripted():
 @pytest.fixture
 def server():
     store = MemoryFactStore()
+    failure_trace_store = MemoryFailureTraceStore()
     Handler.model_factory = staticmethod(scripted)
     Handler.store = store
+    Handler.failure_trace_store = failure_trace_store
     srv = make_server(port=0)
     thread = threading.Thread(target=srv.serve_forever, daemon=True)
     thread.start()
     srv.store = store
+    srv.failure_trace_store = failure_trace_store
     yield srv
     srv.shutdown()
     srv.server_close()
     Handler.store = None
+    Handler.failure_trace_store = None
 
 
 @pytest.fixture
@@ -201,6 +213,24 @@ def test_health_check(server):
         assert json.loads(resp.read())["ok"] is True
 
 
+def test_server_startup_does_not_create_a_trace_store_without_consent(monkeypatch):
+    import service.app as app
+
+    previous = Handler.failure_trace_store
+    Handler.failure_trace_store = None
+    monkeypatch.setattr(
+        app,
+        "build_failure_trace_store",
+        lambda: pytest.fail("trace storage must be lazy and consent-driven"),
+    )
+    srv = make_server(port=0)
+    try:
+        assert Handler.failure_trace_store is None
+    finally:
+        srv.server_close()
+        Handler.failure_trace_store = previous
+
+
 def test_unknown_route_is_404(server):
     try:
         urllib.request.urlopen(url(server, "/nope"))
@@ -216,6 +246,431 @@ def test_generate_returns_a_board(server):
     assert body["kicad_pcb"].startswith("(kicad_pcb")
     assert [p["ref"] for p in body["parts"]] == ["U1", "C1", "C2"]
     assert body["board_mm"][0] > 0
+
+
+def test_generate_can_verify_and_apply_placement_before_routing(server):
+    status, body = post(
+        server,
+        {
+            "intent": "a 3.3V regulator",
+            "time_limit_s": 5,
+            "placement_profile": "compact-control",
+            "placement_policy": "deterministic",
+        },
+    )
+
+    assert status == 200
+    placement = body["placement_repair"]
+    assert placement["requested_policy"] == "deterministic"
+    assert placement["policy"] == "deterministic"
+    assert placement["completed"] is True
+    assert placement["applied"] is True
+    response_xy = {
+        part["ref"]: (part["x_mm"], part["y_mm"])
+        for part in body["placements"]["parts"]
+    }
+    verifier_xy = {
+        part["ref"]: (round(part["x"], 3), round(part["y"], 3))
+        for part in placement["board"]["components"]
+    }
+    assert response_xy == verifier_xy
+
+
+def test_placement_repair_is_model_free_and_geometry_grounded(server):
+    status, body = post(
+        server,
+        {"profile": "compact-control", "policy": "deterministic"},
+        path="/placement/repair",
+    )
+
+    assert status == 200
+    assert body["completed"] is True
+    assert body["policy"] == "deterministic"
+    assert body["score"]["before"]["hard"] > 0
+    assert body["score"]["after"]["hard"] == 0
+    assert "total" not in body["score"]["before"]
+    assert body["reward"]["outcome"] == 1
+    assert 0 < body["reward"]["preference"] <= 0.1
+    assert "quality" not in body["reward"]
+    assert body["steps"][0]["accepted"]
+
+
+@pytest.mark.parametrize(
+    ("available", "expected"),
+    [
+        ({"hybrid": True, "tinker": True, "ollama": True}, "hybrid"),
+        ({"tinker": True, "ollama": True}, "tinker"),
+        ({"ollama": True}, "ollama"),
+        ({}, "deterministic"),
+    ],
+)
+def test_fast_policy_resolves_to_best_configured_backend(available, expected):
+    assert resolve_placement_policy("fast", available) == expected
+
+
+def test_tinker_is_advertised_only_with_a_promoted_checkpoint(monkeypatch):
+    monkeypatch.setenv("SILKSCREEN_EXPERIMENTAL_PLACEMENT", "1")
+    monkeypatch.setenv("TINKER_API_KEY", "test-key")
+    monkeypatch.setenv("TINKER_PLACEMENT_MODEL", "unfinished-local-name")
+
+    assert placement_policy_status(experimental=True)["tinker"] is False
+
+    monkeypatch.setenv("TINKER_PLACEMENT_MODEL", "tinker://run/checkpoint")
+    assert placement_policy_status(experimental=True)["tinker"] is True
+
+
+def test_fast_policy_falls_back_safely(server, monkeypatch):
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    monkeypatch.delenv("GOOGLE_API_KEY", raising=False)
+    monkeypatch.delenv("TINKER_API_KEY", raising=False)
+    monkeypatch.delenv("TINKER_PLACEMENT_MODEL", raising=False)
+    monkeypatch.delenv("OLLAMA_PLACEMENT_URL", raising=False)
+
+    status, body = post(
+        server,
+        {"profile": "compact-control", "policy": "fast"},
+        path="/placement/repair",
+    )
+
+    assert status == 200
+    assert body["requested_policy"] == "fast"
+    assert body["policy"] == "deterministic"
+    assert body["completed"] is True
+
+
+def test_fast_policy_runtime_failure_falls_back_safely(server, monkeypatch):
+    class OfflinePolicy:
+        proposer_name = "ollama"
+
+        def generate(self, prompt, **kwargs):
+            del prompt, kwargs
+            raise OSError("local policy endpoint refused the connection")
+
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    monkeypatch.delenv("GOOGLE_API_KEY", raising=False)
+    monkeypatch.delenv("TINKER_API_KEY", raising=False)
+    monkeypatch.delenv("TINKER_PLACEMENT_MODEL", raising=False)
+    monkeypatch.setenv("SILKSCREEN_EXPERIMENTAL_PLACEMENT", "1")
+    monkeypatch.setenv("OLLAMA_PLACEMENT_URL", "http://offline.invalid")
+    monkeypatch.setattr("service.app.build_ollama_model", OfflinePolicy)
+
+    status, body = post(
+        server,
+        {
+            "profile": "compact-control",
+            "policy": "fast",
+            "experimental_placement": True,
+        },
+        path="/placement/repair",
+    )
+
+    assert status == 200
+    assert body["requested_policy"] == "fast"
+    assert body["policy"] == "deterministic"
+    assert body["completed"] is True
+    assert body["policy_fallback"] == {
+        "from": "ollama",
+        "to": "deterministic",
+        "reason": "fast proposer unavailable",
+    }
+
+
+def test_fast_policy_provider_specific_failure_falls_back(server, monkeypatch):
+    class BrokenPolicy:
+        proposer_name = "gemma-local"
+
+        def generate(self, prompt, **kwargs):
+            del prompt, kwargs
+            raise RuntimeError("provider response schema changed")
+
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    monkeypatch.delenv("GOOGLE_API_KEY", raising=False)
+    monkeypatch.delenv("TINKER_API_KEY", raising=False)
+    monkeypatch.delenv("TINKER_PLACEMENT_MODEL", raising=False)
+    monkeypatch.setenv("SILKSCREEN_EXPERIMENTAL_PLACEMENT", "1")
+    monkeypatch.setenv("OLLAMA_PLACEMENT_URL", "http://offline.invalid")
+    monkeypatch.setattr("service.app.build_ollama_model", BrokenPolicy)
+
+    status, body = post(
+        server,
+        {
+            "profile": "compact-control",
+            "policy": "fast",
+            "experimental_placement": True,
+        },
+        path="/placement/repair",
+    )
+
+    assert status == 200
+    assert body["policy"] == "deterministic"
+    assert body["completed"] is True
+    assert body["policy_fallback"]["reason"] == "fast proposer unavailable"
+
+
+def test_fast_policy_unusable_output_falls_back(server, monkeypatch):
+    class EmptyPolicy:
+        proposer_name = "gemma-local"
+
+        def generate(self, prompt, **kwargs):
+            del prompt, kwargs
+            return '{"message": {}}'
+
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    monkeypatch.delenv("GOOGLE_API_KEY", raising=False)
+    monkeypatch.delenv("TINKER_API_KEY", raising=False)
+    monkeypatch.delenv("TINKER_PLACEMENT_MODEL", raising=False)
+    monkeypatch.setenv("SILKSCREEN_EXPERIMENTAL_PLACEMENT", "1")
+    monkeypatch.setenv("OLLAMA_PLACEMENT_URL", "http://offline.invalid")
+    monkeypatch.setattr("service.app.build_ollama_model", EmptyPolicy)
+
+    status, body = post(
+        server,
+        {
+            "profile": "compact-control",
+            "policy": "fast",
+            "max_turns": 1,
+            "experimental_placement": True,
+            "record_trace": True,
+        },
+        path="/placement/repair",
+    )
+
+    assert status == 200
+    assert body["policy"] == "deterministic"
+    assert body["completed"] is True
+    assert body["policy_fallback"] == {
+        "from": "ollama",
+        "to": "deterministic",
+        "reason": "fast proposer did not complete repair",
+    }
+    assert body["policy_attempt"]["policy"] == "ollama"
+    assert body["failure_trace_count"] > 0
+
+
+def test_placement_feedback_is_request_local_without_authentication(server):
+    first_status, first = post(
+        server,
+        {
+            "profile": "compact-control",
+            "feedback": {"fixed_refs_add": ["C1"]},
+        },
+        path="/placement/repair",
+    )
+    second_status, second = post(
+        server,
+        {"profile": "compact-control"},
+        path="/placement/repair",
+    )
+
+    assert first_status == second_status == 200
+    assert first["profile_memory"] == "request-only"
+    assert second["profile_memory"] == "none"
+    assert "C1" in first["profile"]["fixed_refs"]
+    assert "C1" not in second["profile"]["fixed_refs"]
+
+
+def test_placement_rejects_unauthenticated_server_profile_memory(server):
+    status, body = post(
+        server,
+        {"profile": "compact-control", "profile_id": "shared-team"},
+        path="/placement/repair",
+    )
+
+    assert status == 400
+    assert "unauthenticated placement endpoint" in body["error"]
+
+
+@pytest.mark.parametrize("value", [b"NaN", b"Infinity", b"-Infinity", b"1e309"])
+def test_non_finite_json_is_rejected_before_placement(server, value):
+    raw = b'{"profile":{"clearance":' + value + b"}}"
+    status, _, body_bytes = post_raw(
+        server,
+        "/placement/repair",
+        body=raw,
+        content_length=len(raw),
+    )
+    body = json.loads(body_bytes)
+
+    assert status == 400
+    assert "non-finite number" in body["error"]
+
+
+def test_placement_rejects_unknown_profile(server):
+    status, body = post(
+        server,
+        {"profile": "anything-goes"},
+        path="/placement/repair",
+    )
+    assert status == 400
+    assert "unknown placement profile" in body["error"]
+
+
+def test_placement_tinker_policy_is_unavailable_without_a_promoted_checkpoint(
+    server, monkeypatch
+):
+    monkeypatch.setenv("SILKSCREEN_EXPERIMENTAL_PLACEMENT", "1")
+    monkeypatch.delenv("TINKER_API_KEY", raising=False)
+    monkeypatch.delenv("TINKER_PLACEMENT_MODEL", raising=False)
+
+    status, body = post(
+        server,
+        {
+            "profile": "compact-control",
+            "policy": "tinker",
+            "experimental_placement": True,
+        },
+        path="/placement/repair",
+    )
+
+    assert status == 400
+    assert "not available" in body["error"]
+
+
+def test_experimental_placement_requires_the_server_switch(server, monkeypatch):
+    monkeypatch.delenv("SILKSCREEN_EXPERIMENTAL_PLACEMENT", raising=False)
+
+    status, body = post(
+        server,
+        {
+            "profile": "compact-control",
+            "policy": "fast",
+            "experimental_placement": True,
+        },
+        path="/placement/repair",
+    )
+
+    assert status == 400
+    assert body["error"] == (
+        "experimental placement features are disabled on this server"
+    )
+
+
+def test_direct_placement_provider_failure_is_reported_as_upstream(
+    server, monkeypatch
+):
+    import service.app as app
+
+    monkeypatch.setenv("SILKSCREEN_EXPERIMENTAL_PLACEMENT", "1")
+    monkeypatch.setenv("OLLAMA_PLACEMENT_URL", "http://offline.invalid")
+
+    def unavailable(*args, **kwargs):
+        del args, kwargs
+        raise app.PlacementPolicyError("placement provider unavailable")
+
+    monkeypatch.setattr(app, "_run_placement_policy", unavailable)
+    status, body = post(
+        server,
+        {
+            "profile": "compact-control",
+            "policy": "ollama",
+            "experimental_placement": True,
+        },
+        path="/placement/repair",
+    )
+
+    assert status == 502
+    assert body == {"error": "placement provider unavailable"}
+
+
+def test_policy_failures_are_consent_aware_training_traces(server, monkeypatch):
+    class RejectingPolicy:
+        proposer_name = "qwen-tinker"
+
+        def generate(self, prompt, **kwargs):
+            del prompt, kwargs
+            return "MOVE MADE_UP 1 1"
+
+    monkeypatch.setattr(
+        "service.app.build_tinker_model", lambda: RejectingPolicy()
+    )
+    monkeypatch.setenv("SILKSCREEN_EXPERIMENTAL_PLACEMENT", "1")
+    monkeypatch.setenv("TINKER_API_KEY", "test-key")
+    monkeypatch.setenv("TINKER_PLACEMENT_MODEL", "tinker://test-checkpoint")
+    trace_store = Handler.failure_trace_store
+    assert isinstance(trace_store, MemoryFailureTraceStore)
+
+    status, demo = post(
+        server,
+        {
+            "profile": "compact-control",
+            "policy": "tinker",
+            "experimental_placement": True,
+        },
+        path="/placement/repair",
+    )
+    assert status == 200
+    assert demo["failure_trace_count"] == 0
+    assert trace_store.traces == []
+
+    status, private = post(
+        server,
+        {
+            "board": demo["start"],
+            "profile": "compact-control",
+            "policy": "tinker",
+            "experimental_placement": True,
+        },
+        path="/placement/repair",
+    )
+    assert status == 200
+    assert private["failure_trace_count"] == 0
+    assert trace_store.traces == []
+
+    status, opted_in = post(
+        server,
+        {
+            "board": demo["start"],
+            "profile": "compact-control",
+            "policy": "tinker",
+            "experimental_placement": True,
+            "record_trace": True,
+        },
+        path="/placement/repair",
+    )
+    assert status == 200
+    assert opted_in["failure_trace_count"] > 0
+    assert trace_store.traces[-1]["input_origin"] == "uploaded-board"
+
+
+def test_main_workflow_trace_uses_the_retained_failed_policy_attempt() -> None:
+    class RejectingPolicy:
+        proposer_name = "qwen-tinker"
+
+        def generate(self, prompt, **kwargs):
+            del prompt, kwargs
+            return "MOVE MADE_UP 1 1"
+
+    attempted = repair_request(
+        {"profile": "compact-control", "policy": "tinker", "max_turns": 1},
+        model=RejectingPolicy(),
+    )
+    final = {
+        "policy": "deterministic",
+        "completed": True,
+        "policy_attempt": attempted,
+    }
+    store = MemoryFailureTraceStore()
+
+    trace_ids = _record_failure_trace_ids(
+        {"experimental_placement": True, "record_trace": True},
+        final,
+        store,
+    )
+
+    assert trace_ids
+    assert store.traces[0]["run_policy"] == "tinker"
+    assert store.traces[0]["proposer"] == "qwen-tinker"
+
+
+def test_placement_rejects_non_boolean_trace_consent(server):
+    status, body = post(
+        server,
+        {"record_trace": "yes"},
+        path="/placement/repair",
+    )
+
+    assert status == 400
+    assert body["error"] == "record_trace must be a boolean"
 
 
 @pytest.mark.skipif(not _HAS_ADK, reason="the 'adk' extra is not installed")
@@ -1683,7 +2138,13 @@ def post_stream(srv, payload, path="/generate/stream", content_length="auto"):
     return status, headers, frames
 
 
-def test_models_lists_the_server_catalog(server):
+def test_models_lists_the_server_catalog(server, monkeypatch):
+    monkeypatch.delenv("SILKSCREEN_EXPERIMENTAL_PLACEMENT", raising=False)
+    monkeypatch.delenv("GOOGLE_API_KEY", raising=False)
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    monkeypatch.delenv("TINKER_API_KEY", raising=False)
+    monkeypatch.delenv("TINKER_PLACEMENT_MODEL", raising=False)
+    monkeypatch.delenv("OLLAMA_PLACEMENT_URL", raising=False)
     previous = Handler.__dict__["model_catalog_factory"]
     Handler.model_catalog_factory = staticmethod(
         lambda: {
@@ -1702,6 +2163,56 @@ def test_models_lists_the_server_catalog(server):
     catalog = json.loads(body)
     assert catalog["default"] == "auto"
     assert catalog["models"][0]["id"] == "gemini-test"
+    assert catalog["placement"] == {
+        "experimental_enabled": False,
+        "profiles": ["compact-control", "thermal-first"],
+        "policies": {
+            "deterministic": True,
+            "gemini": False,
+            "tinker": False,
+            "ollama": False,
+            "hybrid": False,
+        },
+    }
+
+
+def test_main_generate_preserves_the_requested_fast_policy(server, monkeypatch):
+    import service.app as app
+
+    class LocalPolicy:
+        proposer_name = "ollama"
+
+    monkeypatch.setenv("SILKSCREEN_EXPERIMENTAL_PLACEMENT", "1")
+    monkeypatch.setenv("OLLAMA_PLACEMENT_URL", "http://localhost:11434")
+    monkeypatch.setattr(app, "build_ollama_model", LocalPolicy)
+
+    def fake_generate(payload, **kwargs):
+        assert kwargs["placement_policy"] == "ollama"
+        assert isinstance(kwargs["placement_model"], LocalPolicy)
+        return {
+            "status": "FEASIBLE",
+            "placement_repair": {
+                "policy": "ollama",
+                "requested_policy": "ollama",
+                "completed": True,
+            },
+        }
+
+    monkeypatch.setattr(app, "generate", fake_generate)
+    status, body = post(
+        server,
+        {
+            "intent": "a regulator",
+            "placement_profile": "compact-control",
+            "placement_policy": "fast",
+            "experimental_placement": True,
+        },
+    )
+
+    assert status == 200
+    assert body["placement_repair"]["requested_policy"] == "fast"
+    assert body["placement_repair"]["available_policies"]["ollama"] is True
+    assert body["placement_repair"]["experimental_placement"] is True
 
 
 def test_chat_stream_wraps_the_pipeline_in_an_orchestrator_turn(
@@ -1877,6 +2388,36 @@ def test_chat_stream_paces_orchestrator_and_worker_model_calls(server):
     assert waits[0]["delay_s"] == 10.0
 
 
+def test_generate_endpoint_applies_the_same_worker_quota_pacing(server):
+    previous_pacer = Handler.request_pacer
+
+    class RecordingPacer:
+        def __init__(self):
+            self.calls = []
+
+        def wait(self, rpm, *, on_wait=None):
+            del on_wait
+            self.calls.append(rpm)
+            return 0.0
+
+    pacer = RecordingPacer()
+    Handler.request_pacer = pacer
+    try:
+        status, body = post(
+            server,
+            {
+                "intent": "a regulator",
+                "review": False,
+                "quota_rpm": 15,
+            },
+        )
+    finally:
+        Handler.request_pacer = previous_pacer
+
+    assert status == 200, body
+    assert pacer.calls == [15]
+
+
 def test_chat_stream_can_end_in_a_clarification_without_running_the_board(server):
     previous_catalog = Handler.__dict__["model_catalog_factory"]
     previous_runner = Handler.__dict__["orchestrator_runner"]
@@ -2032,6 +2573,23 @@ def test_a_streamed_internal_error_keeps_its_error_id_and_hides_the_detail(
     assert frames[-1]["error"] == "internal error"
     assert re.fullmatch(r"[0-9a-f]{12}", frames[-1]["error_id"])
     assert "deep inside" not in json.dumps(frames)
+
+
+def test_a_nonfinite_stream_result_becomes_a_strict_json_error(monkeypatch, server):
+    import service.app as app
+
+    monkeypatch.setattr(
+        app,
+        "generate",
+        lambda payload, **kwargs: {"status": "FEASIBLE", "score": float("nan")},
+    )
+    _, _, frames = post_stream(server, REQUEST)
+
+    assert frames[0]["event"] == "run.accepted"
+    assert frames[-1]["event"] == "run.error"
+    assert frames[-1]["status"] == 500
+    assert frames[-1]["error"] == "internal error"
+    assert all(frame["event"] != "run.done" for frame in frames)
 
 
 def test_a_malformed_content_length_on_the_stream_route_is_a_plain_400(server):

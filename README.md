@@ -27,8 +27,9 @@ is a viewer for what it produced, and is the less-supported path — see
 
 ## Quickstart
 
-Python 3.11 or newer. **No KiCad install, no API key, and no network access are needed
-to install it or to run the whole test suite.**
+Python 3.11 or newer. **No KiCad install or API key is needed to install it or
+run the whole test suite. After dependencies are installed, the suite itself
+makes no network calls.**
 
 **One command.** It finds a Python 3.11+, creates `.venv`, installs the engine editable
 with its extras, and builds the web UI if Node 22+ is on your PATH (skipped, not fatal,
@@ -100,7 +101,7 @@ Every stage is a real KiCad file you can open and inspect on its own, so you can
 where a design went wrong instead of only seeing the last artifact.
 
 ```
-727 tests collected — no network, no API key, no KiCad install
+807 tests collected — no network, no API key, no KiCad install
 ```
 
 **Next:** [full install guide and troubleshooting](docs/install.md) ·
@@ -166,22 +167,52 @@ Platform-by-platform commands are in [docs/install.md](docs/install.md#kicad-opt
 | `schematic.py` — `.kicad_sch` + `.kicad_pro` emission | **Working** · 22 tests · KiCad ERC clean |
 | `routing.py` — two-layer grid autorouter | **Working, partial by design** · 20 tests — see below |
 | `footprints.py` + `board.py` — land patterns, board emission | **Working** · 23 tests |
-| `agents/` — datasheet, propose, review, pipeline | **Working** · 34 tests |
-| `agents/adk/` — ADK dynamic-workflow driver for the pipeline | **Working** · 18 tests |
+| `agents/` — datasheet, propose, review, pipeline | **Working** · 35 tests |
+| `agents/adk/` — ADK dynamic-workflow driver for the pipeline | **Working** · 20 tests |
 | `agents/retrieval.py` — page-cited datasheet retrieval | **Working** · 15 tests |
 | `agents/resilience.py` — provider failover | **Working** · 15 tests |
 | `fab.py` — Gerber, Excellon, BOM, pick-and-place | **Working** · fab package export |
 | `order.py` — order options, manufacturability preflight | **Working** · blocks an unrouted board |
 | `mcp/` — MCP server over stdio | **Working** · 43 tests |
 | `audit/` — optional visual design review | **Working** · 52 tests |
-| `service/` — Cloud Run + Firestore cache | **Working** · 108 tests · not deployed anywhere yet; no live URL |
-| `frontend/` — Svelte review UI, served by the service | **Working** · persistent orchestrator chat, expandable model/tool traces, session JSON, review, schematic and board tabs |
+| `service/` — Cloud Run + Firestore cache | **Working** · 136 tests · not deployed anywhere yet; no live URL |
+| `frontend/` — Svelte review UI, served by the service | **Working** · persistent orchestrator chat, expandable traces, session JSON, review, schematic, placement and board tabs |
+| `engine/silkscreen/placement/` — verifier-grounded repair and company profiles | **Working** · deterministic and Gemini policies; experimental providers are opt-in |
 | Voice / talk input | Not built |
 | Overlay UI, guided cursor | Not built (mockups only) |
 
 Every module above is covered by tests that run with no network, no API key, and no
 KiCad install. The count is deliberately not quoted here — it drifts, and
 `scripts/check_docs.py` fails CI when a quoted one goes stale.
+
+---
+
+## PCB placement agent
+
+After the normal placer produces a board, Silkscreen projects its canonical
+integer-nanometre geometry into a bounded millimetre verifier, accepts only
+score-improving moves, writes accepted positions back to the canonical board,
+and only then routes copper. If the company profile needs more edge or clearance
+space than CP-SAT's tight outline provides, the adapter minimally expands that
+outline before repair. The placement view shows the before and after geometry
+together with a receipt for every proposed move.
+
+The legality boundary is deterministic: board bounds, courtyard clearance,
+keepouts, and fixed parts. Company preferences are lower-priority terms for
+functional grouping, connector access, compactness, and thermal separation.
+Gemini may propose `PLACE` and `MOVE` actions, but it cannot override the
+verifier. The model-free policy remains available for reproducible runs.
+
+Ollama, Tinker, hybrid policy selection, and training traces are behind an
+**Experimental placement features** control that is off by default and enforced
+again by the service. Trace recording requires separate explicit consent.
+The focused lab keeps corrections in that browser tab's session storage. The
+public endpoint applies feedback to one request only; durable shared company
+memory remains intentionally unavailable until tenant authentication exists.
+
+The focused `/?mode=placement` lab remains available for comparing the two
+included company profiles. See [the placement-agent architecture](docs/placement-agent.md)
+for the agent, supervised fine-tuning, reinforcement learning, and verifier boundary.
 
 ---
 
@@ -195,9 +226,11 @@ python -m silkscreen "a 3.3V motor driver board around an STM32F030" \
 ```
 
 ```
-intent ─► datasheets ─► propose ─► validate/repair ─► .kicad_sch ─► place ─► route ─► .kicad_pcb
-                                        │                                               │
-                                        └──────────────► review ────────────────────────┘
+intent ─► datasheets ─► propose/validate ─► CP-SAT place ─► verifier repair
+                                                                │
+               .kicad_pcb ◄─ route ◄─ .kicad_sch + placed board ◄┘
+                     │
+                     └─► adversarial review
 ```
 
 | Stage | Module | Artifact |
@@ -209,6 +242,7 @@ intent ─► datasheets ─► propose ─► validate/repair ─► .kicad_sch
 | Schematic drawing | `schematic.py` | `.kicad_sch`, `.kicad_pro` |
 | Footprint generation, board emission | `footprints.py`, `board.py` | |
 | Placement | `packing.py` | `.placed.kicad_pcb` |
+| Verifier-gated placement repair | `placement/` | placement receipt |
 | Copper routing | `routing.py` | `.kicad_pcb` |
 | Adversarial review | `agents/review.py` | |
 
@@ -374,7 +408,7 @@ treats the board file as the interface.
 | Requires KiCad running | Yes | **No** |
 | Headless / CI | Hard | **Native** |
 | Platform lock | KiCad's plugin loader | **None — pure Python** |
-| Testable without KiCad | No | **Yes, all 727 tests** |
+| Testable without KiCad | No | **Yes, all 807 tests** |
 
 ### What it reads
 
@@ -711,17 +745,18 @@ engine/
     ids.py        stable UUIDs, so two runs diff cleanly
     cli.py        python -m silkscreen "..."
     spice/        typed testbenches, deck building, simulators, measurements
+    placement/    verifier-gated repair + opt-in Ollama/Tinker policy adapters
     mcp/          JSON-RPC tools, including the bounded simulation verifier
-    agents/       the only place a model call happens
+    agents/       Gemini-backed worker and orchestrator calls
       model.py      provider seam + scripted stand-in for tests
       datasheet.py  PDF -> structured facts, with page citations
       propose.py    intent -> circuit, with a bounded repair loop
       review.py     adversarial design review
-      stages.py     the six stage bodies, shared by both drivers
+      stages.py     shared stage bodies for both drivers
       pipeline.py   prompt -> PCB
       adk/          ADK dynamic workflow over the same stage bodies
     audit/        optional visual review of a finished board
-  tests/          727 tests — no network, no API keys, no KiCad
+  tests/          807 tests — no network, no API keys, no KiCad
     fixtures/     ref.kicad_pcb -- 11-footprint board fixture
 scripts/
   demo.py         end-to-end: read -> place -> write -> verify
@@ -809,42 +844,14 @@ docker build .                                      # the `docker` job
 
 ### Expected output
 
-**1. Test suite** — 727 tests (live-model and local-simulator cases skip when
-their optional dependency is unavailable):
-
-```
-669 successful, 14 skipped
-```
+**1. Test suite** — live-model and local-simulator cases skip when their
+optional dependency is unavailable. Pytest prints the current collected,
+passed, and skipped counts; the documentation check below verifies every
+quoted test-count claim against that same collection.
 
 The suite is dominated by the 20-second solver budget in a handful of placement
 tests; the rest run in milliseconds. Google ADK currently emits one warning for
 its experimental JSON-schema function-declaration feature.
-
-| File | Tests | Covers |
-|---|---:|---|
-| `test_spice.py` | 99 | Deck construction, rawfile parsing, measurements, assertions, and closed-form ngspice checks |
-| `test_app.py` | 99 | Cloud Run HTTP surface, the NDJSON stream, and the served UI bundle, over a real socket |
-| `test_grounding.py` | 73 | Datasheet grounding — SSRF-guarded PDF fetch, page extraction, page-cache sharding, citation corroboration |
-| `test_audit.py` | 52 | Deterministic and model-assisted design review |
-| `test_packing.py` | 43 | CP-SAT model: no-overlap, clearance, edge pinning, rotation, symmetry breaking, keepouts, pinned parts, fallback, determinism |
-| `test_mcp.py` | 43 | MCP protocol and tools, including the bounded SPICE boundary |
-| `test_agents.py` | 34 | Datasheet extraction, proposal repair loop, review — against a scripted model |
-| `test_order.py` | 30 | Order options and manufacturability preflight |
-| `test_fab.py` | 29 | Gerber, drill, BOM, and pick-and-place export |
-| `test_kicad.py` | 28 | Board read/write, coordinate conversion, round-trip |
-| `test_schematic.py` | 22 | Schematic generation and KiCad validation |
-| `test_netlist.py` | 21 | Circuit IR validation — every rejection rule |
-| `test_routing.py` | 20 | Grid routing, vias, keepouts, and honest unrouted results |
-| `test_board.py` | 20 | Footprint generation and emitting a `.kicad_pcb` from a circuit spec |
-| `test_adk.py` | 18 | Parity between the SDK and ADK drivers — same events, same result, same exceptions |
-| `test_retrieval.py` | 15 | Datasheet chunking, embedding, cosine ranking, page citations |
-| `test_resilience.py` | 15 | Provider failover — every fallback path, forced |
-| `test_cache.py` | 7 | Firestore fact cache, via a fake client |
-| `test_live_model.py` | 4 | The live Gemini path, behind an API-key gate that skips it by default |
-| `test_models.py` | 22 | Gemini discovery, model/thinking selection, and request-pace policy |
-| `test_orchestrator.py` | 4 | Root clarification, tool dispatch, ADK thinking, and pre-call pacing hook |
-| `test_quota.py` | 5 | Shared request spacing, Auto behavior, and invalid pace rejection |
-| **Total** | **703** | |
 
 **2. Lint:**
 
@@ -855,7 +862,7 @@ All checks passed!
 **3. Doc drift** — re-counts the suite and checks every figure quoted in the docs:
 
 ```
-docs ok: 20 claim(s) across 2 files match a suite of 706
+docs ok: every test-count claim matches the collected suite
 ```
 
 **4. End-to-end demo** — reads the 11-footprint fixture board, places it, writes a

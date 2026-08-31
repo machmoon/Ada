@@ -42,6 +42,8 @@ const STAGE_START = {
   read: () => 'reading datasheets…',
   propose: () => 'proposing a circuit…',
   place: (e) => `placing with CP-SAT${budgetOf(e.time_limit_s)}…`,
+  placement_repair: (e) =>
+    `verifying placement${text(e.profile) ? ` for ${text(e.profile)}` : ''}…`,
   route: () => 'routing the copper…',
   review: () => 'adversarial review…',
 }
@@ -67,6 +69,18 @@ const STAGE_DONE = {
       warnings > 0 ? formatCount(warnings, 'warning') : '',
     ].filter(Boolean)
     return clauses.length ? `placed: ${clauses.join(', ')}` : 'placed'
+  },
+
+  placement_repair: (e) => {
+    const moves = countOf(e.moves)
+    const hardBefore = num(e.hard_before)
+    const hardAfter = num(e.hard_after)
+    const verified = e.applied === true ? 'verified and applied' : 'checked, not applied'
+    const hard =
+      hardBefore === null || hardAfter === null
+        ? ''
+        : `, hard faults ${hardBefore.toFixed(3)} → ${hardAfter.toFixed(3)} mm`
+    return `placement ${verified}: ${formatCount(moves, 'accepted move')}${hard}`
   },
 
   route: (e) => {

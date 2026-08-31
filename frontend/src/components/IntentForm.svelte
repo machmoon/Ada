@@ -10,6 +10,7 @@
     initialModel = 'gemini-3.7-flash',
     initialThinkingLevel = 'auto',
     initialQuotaRpm = 'auto',
+    placementCapabilities = {},
   } = $props()
 
   const ORCHESTRATOR_MODELS = [
@@ -43,6 +44,11 @@
   let thinkingLevel = $state(initialThinkingLevel || 'auto')
   // svelte-ignore state_referenced_locally
   let quotaRpm = $state(String(initialQuotaRpm || 'auto'))
+  let placementEnabled = $state(seed.placement_enabled !== false)
+  let placementProfile = $state(seed.placement_profile || 'compact-control')
+  let placementPolicy = $state(seed.placement_policy || 'deterministic')
+  let experimentalPlacement = $state(seed.experimental_placement === true)
+  let recordTrace = $state(seed.record_trace === true)
   let showDatasheets = $state(seedSheets.length > 0)
   let rows = $state(
     seedSheets.length ? seedSheets.map(([part, url]) => ({ part, url })) : [{ part: '', url: '' }],
@@ -63,6 +69,11 @@
     no_solver_budget: noSolverBudget,
     review,
     ground: ground && hasDatasheets,
+    placement_enabled: placementEnabled,
+    placement_profile: placementProfile,
+    placement_policy: placementPolicy,
+    experimental_placement: experimentalPlacement,
+    record_trace: experimentalPlacement && recordTrace,
   })
 
   // The service rejects oversize bodies with 413; blocking here keeps the user
@@ -74,6 +85,17 @@
     advertisedModels.size > 0 && !advertisedModels.has(orchestratorModel),
   )
   const canSubmit = $derived(intent.trim().length > 0 && !tooLarge && !selectedUnavailable)
+  const experimentalAvailable = $derived(placementCapabilities?.experimental_enabled === true)
+  const placementPolicies = $derived(placementCapabilities?.policies || {})
+
+  $effect(() => {
+    if (experimentalAvailable) return
+    experimentalPlacement = false
+    recordTrace = false
+    if (['fast', 'ollama', 'tinker', 'hybrid'].includes(placementPolicy)) {
+      placementPolicy = 'deterministic'
+    }
+  })
 
   function grow() {
     if (!textarea) return
@@ -109,6 +131,17 @@
     event.preventDefault()
     if (!canSubmit) return
     onsubmit(request, { model: orchestratorModel, thinkingLevel, quotaRpm })
+  }
+
+  function toggleExperimental() {
+    if (!experimentalAvailable) return
+    experimentalPlacement = !experimentalPlacement
+    if (!experimentalPlacement) {
+      recordTrace = false
+      if (['fast', 'ollama', 'tinker', 'hybrid'].includes(placementPolicy)) {
+        placementPolicy = 'deterministic'
+      }
+    }
   }
 </script>
 
@@ -218,6 +251,63 @@
     {#if selectedUnavailable}
       <p class="model-warning" role="status">This model is not advertised by the configured API key.</p>
     {/if}
+  </section>
+
+  <section class="placement-settings" data-testid="intent-form-placement" data-material="panel">
+    <div class="placement-heading">
+      <div>
+        <span class="lbl">verified placement</span>
+        <p>Run the generated board through deterministic geometry before routing.</p>
+      </div>
+      <label class="placement-on">
+        <input type="checkbox" bind:checked={placementEnabled} data-testid="intent-form-placement-enabled" />
+        <span>Run placement repair</span>
+      </label>
+    </div>
+    <div class="placement-controls">
+      <label>
+        <span>Company profile</span>
+        <select bind:value={placementProfile} disabled={!placementEnabled} data-material="tint" data-testid="intent-form-placement-profile">
+          <option value="compact-control">Compact Control</option>
+          <option value="thermal-first">Thermal First</option>
+        </select>
+      </label>
+      <label>
+        <span>Proposal policy</span>
+        <select bind:value={placementPolicy} disabled={!placementEnabled} data-material="tint" data-testid="intent-form-placement-policy">
+          <option value="deterministic">Deterministic · offline</option>
+          <option value="gemini" disabled={placementPolicies.gemini === false}>Gemini · verifier gated</option>
+          {#if experimentalPlacement}
+            <option value="fast">Auto experimental</option>
+            <option value="ollama" disabled={!placementPolicies.ollama}>Ollama · local</option>
+            <option value="tinker" disabled={!placementPolicies.tinker}>Tinker · checkpoint</option>
+            <option value="hybrid" disabled={!placementPolicies.hybrid}>Hybrid · local then Gemini</option>
+          {/if}
+        </select>
+      </label>
+    </div>
+    <div class="experimental-row">
+      <button
+        type="button"
+        class="experimental-toggle"
+        class:active={experimentalPlacement}
+        aria-pressed={experimentalPlacement}
+        disabled={!experimentalAvailable || !placementEnabled}
+        title={experimentalAvailable
+          ? 'Reveal Ollama, Tinker, hybrid policy, and trace controls'
+          : 'Set SILKSCREEN_EXPERIMENTAL_PLACEMENT=1 on the service to enable this'}
+        onclick={toggleExperimental}
+        data-testid="intent-form-experimental-placement"
+      >Experimental features · {experimentalPlacement ? 'ON' : 'OFF'}</button>
+      {#if experimentalPlacement}
+        <label class="trace-consent">
+          <input type="checkbox" bind:checked={recordTrace} />
+          <span>Record verifier failure traces for later training</span>
+        </label>
+      {:else if !experimentalAvailable}
+        <small>Experimental providers are disabled on this service.</small>
+      {/if}
+    </div>
   </section>
 
   <div class="controls">
@@ -364,6 +454,18 @@
   .orchestrator-control small { color: var(--ink-faint); line-height: 1.4; }
   .model-warning { margin-top: 10px; color: var(--sev-marginal-fg); font-size: var(--fs-ui); }
 
+  .placement-settings { margin-top: 14px; padding: 13px 14px; border: 1px solid var(--rule-soft); background: var(--surface); }
+  .placement-heading, .experimental-row { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+  .placement-heading p { margin-top: 4px; color: var(--ink-soft); font-size: var(--fs-ui); }
+  .placement-on, .trace-consent { display: flex; align-items: center; gap: 7px; font-size: var(--fs-ui); color: var(--ink-mid); }
+  .placement-controls { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; margin-top: 12px; }
+  .placement-controls label { display: flex; flex-direction: column; gap: 5px; color: var(--ink-mid); font-size: var(--fs-ui); }
+  .placement-controls select { min-height: 38px; padding: 0 9px; border: 1px solid var(--rule); background: var(--well); color: var(--ink); }
+  .experimental-row { margin-top: 11px; justify-content: flex-start; }
+  .experimental-toggle { min-height: 34px; padding: 0 10px; border: 1px solid var(--rule); background: transparent; color: var(--ink-soft); font-size: 11px; }
+  .experimental-toggle.active { border-color: var(--navy); color: var(--navy); }
+  .experimental-row small { color: var(--ink-faint); }
+
   .controls {
     display: flex;
     align-items: center;
@@ -410,5 +512,8 @@
     border-radius: var(--radius);
   }
   .run:disabled { background: var(--accent-off); color: var(--accent-off-ink); }
-  @media (max-width: 680px) { .orchestrator-controls { grid-template-columns: 1fr; } }
+  @media (max-width: 680px) {
+    .orchestrator-controls, .placement-controls { grid-template-columns: 1fr; }
+    .placement-heading, .experimental-row { align-items: flex-start; flex-direction: column; }
+  }
 </style>
