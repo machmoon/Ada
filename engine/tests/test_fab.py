@@ -592,7 +592,7 @@ def test_silkscreen_traces_the_body_outline_with_a_pen(board):
     assert len(_coords(silk)) == 8 * len(bodied), "four segments per body"
     assert not _rect_apertures(silk)
     circles = _CIRCLE_RE.findall(silk)
-    assert {_nm(c[1]) for c in circles} == {mm(0.12)}
+    assert {_nm(c[1]) for c in circles} == {mm(0.15)}
 
     part = bodied[0]
     fp = part.footprint

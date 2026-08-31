@@ -46,6 +46,7 @@ from .units import NM_PER_MM, mm
 
 __all__ = [
     "GENERATOR",
+    "SILK_WIDTH_NM",
     "FabLayer",
     "gerber_copper",
     "gerber_mask",
@@ -71,7 +72,15 @@ _MARGIN_NM = mm(2.0)
 #: Stroke widths: thin enough not to distort the geometry they trace, wide
 #: enough to clear every fab's minimum-feature check.
 _OUTLINE_WIDTH_NM = mm(0.1)
-_SILK_WIDTH_NM = mm(0.12)
+
+#: Silkscreen pen. 0.15 mm rather than the 0.12 mm this used to be, because
+#: 0.12 is under the minimum legend width every house in
+#: :mod:`silkscreen.fabhouse` publishes -- OSH Park prints 5 mil (0.127 mm),
+#: JLCPCB and PCBWay 0.15 mm. Ink under the house minimum is not refused at
+#: checkout; it is printed badly or dropped, and the board arrives with
+#: reference designators missing. Public because the capability check reads it
+#: rather than restating it.
+SILK_WIDTH_NM = mm(0.15)
 
 #: Soldermask expansion per side. 0.051 mm (2 mil) is the industry-default
 #: opening enlargement: enough that a small registration error still leaves the
@@ -402,7 +411,7 @@ def gerber_paste(board: BoardResult, *, bottom: bool = False) -> str:
 
 
 def gerber_silkscreen(board: BoardResult, *, bottom: bool = False) -> str:
-    """Component body outlines for one side, stroked with a 0.12 mm pen.
+    """Component body outlines for one side, stroked with the legend pen.
 
     Parts with no body extents contribute nothing: a zero-size rectangle would
     be four zero-length strokes, which is four dots of ink on the board.
@@ -417,7 +426,7 @@ def gerber_silkscreen(board: BoardResult, *, bottom: bool = False) -> str:
             continue
         half_w, half_h = _rotate_size(fp.body_w_nm, fp.body_h_nm, part.rotated)
         anchor_x, anchor_y = _anchor_nm(part)
-        gerber.select(gerber.circle(_SILK_WIDTH_NM))
+        gerber.select(gerber.circle(SILK_WIDTH_NM))
         _rectangle(
             gerber,
             anchor_x - half_w,
@@ -681,7 +690,7 @@ def fab_readme(board: BoardResult) -> str:
         "                   copper pad.",
         "  Paste apertures  1:1 with the copper pad. No area reduction has been",
         "                   applied; if your stencil foil calls for one, apply it.",
-        f"  Silk pen         {_mm_text(_SILK_WIDTH_NM)} mm.",
+        f"  Silk pen         {_mm_text(SILK_WIDTH_NM)} mm.",
         f"  Profile pen      {_mm_text(_OUTLINE_WIDTH_NM)} mm, cut on the centreline.",
         "",
         "KNOWN APPROXIMATIONS -- stated rather than left to be discovered",

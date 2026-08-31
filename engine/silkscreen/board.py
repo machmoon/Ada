@@ -458,7 +458,7 @@ def emit_kicad_pcb(
                 ex, ey = bpts[(i + 1) % 4]
                 out.append(
                     f"    (fp_line (start {f(sx)} {f(sy)}) (end {f(ex)} {f(ey)})"
-                    f' (stroke (width 0.12) (type solid)) (layer "{side}.SilkS")'
+                    f' (stroke (width 0.15) (type solid)) (layer "{side}.SilkS")'
                     f' (uuid "{_uuid(part.ref + f"silk{i}")}"))'
                 )
 
