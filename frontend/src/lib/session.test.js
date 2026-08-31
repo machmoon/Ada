@@ -19,6 +19,10 @@ const STATE = {
   entries: [{ type: 'message', role: 'user', text: 'a regulator' }],
   needsClarification: false,
   actualModel: 'gemini-test',
+  orchestratorModel: 'gemini-3.1-pro-preview',
+  thinkingLevel: 'high',
+  actualThinkingLevel: 'high',
+  quotaRpm: '6',
 }
 
 describe('session JSON', () => {

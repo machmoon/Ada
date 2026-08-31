@@ -109,10 +109,12 @@ async def _run(
     message: str,
     clarification: str,
     model: str | object,
+    thinking_level: str | None,
     session_id: str,
     generate: Callable[[], dict[str, Any]],
     emit: Callable[[dict[str, Any]], None],
     debug: bool,
+    before_model_call: Callable[[], None] | None,
 ) -> OrchestratorResult:
     model_name = str(model if isinstance(model, str) else getattr(model, "model", ""))
     call_seq = 0
@@ -124,6 +126,8 @@ async def _run(
     def before_model(callback_context, llm_request):
         del callback_context
         nonlocal call_seq
+        if before_model_call is not None:
+            before_model_call()
         call_seq += 1
         call_id = f"orchestrator-{call_seq}"
         pending.append((call_id, time.monotonic()))
@@ -135,6 +139,13 @@ async def _run(
                     "layer": "orchestrator",
                     "call_id": call_id,
                     "model": model_name,
+                    "thinking_level": _dump(
+                        getattr(
+                            getattr(config, "thinking_config", None),
+                            "thinking_level",
+                            None,
+                        )
+                    ),
                     "system": _dump(getattr(config, "system_instruction", None)),
                     "contents": _dump(getattr(llm_request, "contents", None)),
                     "tools": _dump(getattr(config, "tools", None)),
@@ -246,6 +257,13 @@ async def _run(
         )
         return None
 
+    thinking_config = (
+        types.ThinkingConfig(
+            thinking_level=types.ThinkingLevel(thinking_level.upper())
+        )
+        if thinking_level
+        else None
+    )
     agent = LlmAgent(
         name="orchestrator",
         description=(
@@ -255,8 +273,8 @@ async def _run(
         instruction=_INSTRUCTION,
         tools=[generate_board],
         generate_content_config=types.GenerateContentConfig(
-            temperature=0.0,
             max_output_tokens=2048,
+            thinking_config=thinking_config,
         ),
         before_model_callback=before_model,
         after_model_callback=after_model,
@@ -335,10 +353,12 @@ def run_orchestrator(
     message: str,
     clarification: str = "",
     model: str | object,
+    thinking_level: str | None = None,
     session_id: str,
     generate: Callable[[], dict[str, Any]],
     emit: Callable[[dict[str, Any]], None],
     debug: bool = False,
+    before_model_call: Callable[[], None] | None = None,
 ) -> OrchestratorResult:
     """Run one presentation turn from synchronous service code."""
     return asyncio.run(
@@ -346,9 +366,11 @@ def run_orchestrator(
             message=message,
             clarification=clarification,
             model=model,
+            thinking_level=thinking_level,
             session_id=session_id,
             generate=generate,
             emit=emit,
             debug=debug,
+            before_model_call=before_model_call,
         )
     )

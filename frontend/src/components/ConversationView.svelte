@@ -30,6 +30,8 @@
   let importError = $state('')
   let models = $state([])
   let selectedModel = $state('auto')
+  let selectedThinkingLevel = $state('auto')
+  let selectedQuotaRpm = $state('auto')
   let copied = $state(false)
 
   const entries = $derived($run.entries || [])
@@ -42,12 +44,18 @@
     }
   })
 
+  $effect(() => {
+    selectedModel = $run.orchestratorModel || 'auto'
+    selectedThinkingLevel = $run.thinkingLevel || 'auto'
+    selectedQuotaRpm = String($run.quotaRpm || 'auto')
+  })
+
   function clarify(event) {
     event.preventDefault()
     const text = answer.trim()
     if (!text) return
     answer = ''
-    onclarify?.(text, selectedModel)
+    onclarify?.(text)
   }
 
   function save() {
@@ -81,7 +89,10 @@
 <section class="conversation" data-testid="conversation-view">
   <div class="sessionbar">
     <span class="lbl">Session</span>
-    <span class="model mono">model · {$run.actualModel || 'Auto'}</span>
+    <span class="model mono">
+      model · {$run.actualModel || 'Auto'} · {$run.actualThinkingLevel || $run.thinkingLevel || 'auto'} thinking
+      {#if $run.quotaRpm !== 'auto'} · {$run.quotaRpm} RPM pace{/if}
+    </span>
     <span class="spacer"></span>
     {#if entries.length}<button type="button" onclick={save}>Save session</button>{/if}
     <button type="button" onclick={() => file?.click()}>Open session</button>
@@ -90,7 +101,14 @@
   {#if importError}<p class="import-error" role="alert">{importError}</p>{/if}
 
   {#if !entries.length}
-    <IntentForm {onsubmit} initial={$run.request} />
+    <IntentForm
+      {onsubmit}
+      initial={$run.request}
+      {models}
+      initialModel={$run.orchestratorModel || 'gemini-3.7-flash'}
+      initialThinkingLevel={$run.thinkingLevel || 'auto'}
+      initialQuotaRpm={$run.quotaRpm || 'auto'}
+    />
   {:else}
     <div class="thread" aria-live="polite">
       {#each entries as entry (entry.id)}
@@ -129,7 +147,7 @@
         <div class="lbl">Run failed</div>
         <p>{$run.error?.message || 'The run did not complete.'}</p>
         <div class="actions">
-          <button type="button" class="primary" onclick={() => onretry?.(selectedModel)}>Retry run</button>
+          <button type="button" class="primary" onclick={() => onretry?.(selectedModel, selectedThinkingLevel, selectedQuotaRpm)}>Retry run</button>
           <button type="button" onclick={onedit}>Edit request</button>
           <button type="button" onclick={copyError}>{copied ? 'Copied' : 'Copy error'}</button>
           <select bind:value={selectedModel} aria-label="Retry model">
@@ -138,7 +156,19 @@
               <option value={model.id}>{model.name || model.id}</option>
             {/each}
           </select>
-          <button type="button" onclick={() => onretry?.(selectedModel)}>Switch model and retry</button>
+          <select bind:value={selectedThinkingLevel} aria-label="Retry reasoning effort">
+            <option value="auto">Auto effort</option>
+            <option value="low">Fast · low</option>
+            <option value="medium">Standard · medium</option>
+            <option value="high">Deep · high</option>
+          </select>
+          <select bind:value={selectedQuotaRpm} aria-label="Retry request pace">
+            <option value="auto">Auto pace</option>
+            <option value="15">15 RPM</option>
+            <option value="6">6 RPM · demo-safe</option>
+            <option value="3">3 RPM · conservative</option>
+          </select>
+          <button type="button" onclick={() => onretry?.(selectedModel, selectedThinkingLevel, selectedQuotaRpm)}>Switch settings and retry</button>
         </div>
       </section>
     {:else if $run.phase === 'done'}

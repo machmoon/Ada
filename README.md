@@ -29,7 +29,7 @@ Every stage is a real KiCad file you can open and inspect on its own, so you can
 where a design went wrong instead of only seeing the last artifact.
 
 ```
-673 tests collected — no network, no API key, no KiCad install
+703 tests collected — no network, no API key, no KiCad install
 ```
 
 ---
@@ -90,12 +90,12 @@ that consumes the file. Install it if you are a person who wants to see a board.
 | `agents/` — datasheet, propose, review, pipeline | **Working** · 34 tests |
 | `agents/adk/` — ADK dynamic-workflow driver for the pipeline | **Working** · 18 tests |
 | `agents/retrieval.py` — page-cited datasheet retrieval | **Working** · 15 tests |
-| `agents/resilience.py` — provider failover | **Working** · 14 tests |
+| `agents/resilience.py` — provider failover | **Working** · 15 tests |
 | `fab.py` — Gerber, Excellon, BOM, pick-and-place | **Working** · fab package export |
 | `order.py` — order options, manufacturability preflight | **Working** · blocks an unrouted board |
 | `mcp/` — MCP server over stdio | **Working** · 43 tests |
 | `audit/` — optional visual design review | **Working** · 52 tests |
-| `service/` — Cloud Run + Firestore cache | **Working** · 103 tests |
+| `service/` — Cloud Run + Firestore cache | **Working** · 106 tests |
 | `frontend/` — Svelte review UI, served by the service | **Working** · persistent orchestrator chat, expandable model/tool traces, session JSON, review, schematic and board tabs |
 | Overlay UI, guided cursor | Not built (mockups only) |
 
@@ -317,7 +317,7 @@ treats the board file as the interface.
 | Requires KiCad running | Yes | **No** |
 | Headless / CI | Hard | **Native** |
 | Platform lock | KiCad's plugin loader | **None — pure Python** |
-| Testable without KiCad | No | **Yes, all 673 tests** |
+| Testable without KiCad | No | **Yes, all 703 tests** |
 
 ### What it reads
 
@@ -459,7 +459,13 @@ cd frontend && npm test  # Vitest over frontend/src/lib
 
 A run stays in the **Chat** tab as a persistent transcript. Friendly activity summaries
 are shown by default; raw orchestrator and worker prompts/responses are expandable for a
-demo or debugging. Clarification, retry, edit, copy-error, and discovered-model retry
+demo or debugging. Before submitting, the orchestrator panel selects Gemini 3.7 Flash or
+Gemini 3.1 Pro Preview and an Auto/Fast/Standard/Deep thinking effort. Gemini 3 cannot
+disable thinking completely, so Fast maps to the supported `low` level. A separate
+request-pace control can space every explicit orchestrator and worker attempt at 15, 6,
+or 3 RPM across one service instance; Auto preserves the provider default. This mitigates
+RPM bursts but cannot raise Google's per-project token or daily quotas. Clarification,
+retry, edit, copy-error, and discovered-model retry
 controls remain beside the failed or incomplete turn. **Save session** exports a versioned
 JSON snapshot containing the transcript, trace, result, and board artifact; **Open session**
 restores it locally. Treat that debug export as sensitive if a prompt contains private
@@ -644,7 +650,7 @@ engine/
       pipeline.py   prompt -> PCB
       adk/          ADK dynamic workflow over the same stage bodies
     audit/        optional visual review of a finished board
-  tests/          673 tests — no network, no API keys, no KiCad
+  tests/          703 tests — no network, no API keys, no KiCad
     fixtures/     ref.kicad_pcb -- 11-footprint board fixture
 scripts/
   demo.py         end-to-end: read -> place -> write -> verify
@@ -725,11 +731,11 @@ docker build .                                      # the `docker` job
 
 ### Expected output
 
-**1. Test suite** — 673 tests (live-model and local-simulator cases skip when
+**1. Test suite** — 703 tests (live-model and local-simulator cases skip when
 their optional dependency is unavailable):
 
 ```
-659 successful, 14 skipped
+669 successful, 14 skipped
 ```
 
 The suite is dominated by the 20-second solver budget in a handful of placement
@@ -739,7 +745,7 @@ its experimental JSON-schema function-declaration feature.
 | File | Tests | Covers |
 |---|---:|---|
 | `test_spice.py` | 99 | Deck construction, rawfile parsing, measurements, assertions, and closed-form ngspice checks |
-| `test_app.py` | 96 | Cloud Run HTTP surface, the NDJSON stream, and the served UI bundle, over a real socket |
+| `test_app.py` | 99 | Cloud Run HTTP surface, the NDJSON stream, and the served UI bundle, over a real socket |
 | `test_grounding.py` | 73 | Datasheet grounding — SSRF-guarded PDF fetch, page extraction, page-cache sharding, citation corroboration |
 | `test_audit.py` | 52 | Deterministic and model-assisted design review |
 | `test_packing.py` | 43 | CP-SAT model: no-overlap, clearance, edge pinning, rotation, symmetry breaking, keepouts, pinned parts, fallback, determinism |
@@ -754,12 +760,13 @@ its experimental JSON-schema function-declaration feature.
 | `test_board.py` | 20 | Footprint generation and emitting a `.kicad_pcb` from a circuit spec |
 | `test_adk.py` | 18 | Parity between the SDK and ADK drivers — same events, same result, same exceptions |
 | `test_retrieval.py` | 15 | Datasheet chunking, embedding, cosine ranking, page citations |
-| `test_resilience.py` | 14 | Provider failover — every fallback path, forced |
+| `test_resilience.py` | 15 | Provider failover — every fallback path, forced |
 | `test_cache.py` | 7 | Firestore fact cache, via a fake client |
 | `test_live_model.py` | 4 | The live Gemini path, behind an API-key gate that skips it by default |
-| `test_models.py` | 3 | Gemini model discovery and selection policy |
-| `test_orchestrator.py` | 2 | Root-orchestrator clarification and tool dispatch |
-| **Total** | **673** | |
+| `test_models.py` | 22 | Gemini discovery, model/thinking selection, and request-pace policy |
+| `test_orchestrator.py` | 4 | Root clarification, tool dispatch, ADK thinking, and pre-call pacing hook |
+| `test_quota.py` | 5 | Shared request spacing, Auto behavior, and invalid pace rejection |
+| **Total** | **703** | |
 
 **2. Lint:**
 
@@ -770,7 +777,7 @@ All checks passed!
 **3. Doc drift** — re-counts the suite and checks every figure quoted in the docs:
 
 ```
-docs ok: 21 claim(s) across 2 files match a suite of 673
+docs ok: 20 claim(s) across 2 files match a suite of 703
 ```
 
 **4. End-to-end demo** — reads the 11-footprint fixture board, places it, writes a

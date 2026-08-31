@@ -19,12 +19,32 @@ NOTE: DEVPOST's agent section is being rewritten in ADK 2.0 vocabulary as part
 of the adoption — dynamic workflows and nodes, not the template agents of the
 1.x topology it described as the plan.
 
-[EXAMPLES of PROMPTS]
-- a 3.3 V LDO regulator board using an AMS1117-3.3 with input and output bulk capacitors
-- a 555 timer LED blinker at about 1 Hz on a 9 V supply
-- an STM32F030 breakout with a 3.3 V regulator, decoupling, and a reset button
-- a USB-powered dual LED driver with current-limit resistors
-- an attiny85 board with ISP header and power indicator LED (good for showing the reviewer flag missing decoupling)
+[EXAMPLES OF PROMPTS]
+These examples stay inside the emitter's current footprint set: SOT-223,
+SOIC, LQFP, and two-terminal chip passives. Until connector footprints are
+implemented, keep connectors, headers, switches, buttons, and test points out
+of demo requests.
+
+- A minimal 3.3 V LDO regulator using an AMS1117-3.3 in SOT-223, with a
+  10 uF input capacitor from VIN to GND and a 22 uF output capacitor from
+  +3V3 to GND. Use only the regulator and passive components; do not add
+  connectors, headers, switches, buttons, or test points.
+- A roughly 1 Hz LED blinker using an NE555D in SOIC-8 on a +9 V rail, with
+  astable timing resistors and capacitor, 100 nF supply decoupling, and one
+  LED with a series current-limiting resistor. Use only the SOIC IC and
+  two-terminal passives; do not add connectors, headers, or switches.
+- A minimal ATtiny85-20SU board in SOIC-8 on a +5 V rail, with a 100 nF VCC
+  decoupling capacitor, a 10 kOhm reset pull-up, and a status LED with a
+  series resistor on PB1. Do not add an ISP header, connectors, buttons, or
+  test points.
+- A buffered 2.5 V reference on a +5 V rail using an LM358D in SOIC-8: two
+  10 kOhm resistors form the divider, one amplifier is a voltage follower,
+  the unused amplifier is tied to a defined state, and the supply has a
+  100 nF decoupling capacitor. Do not add connectors or test points.
+- Reviewer demo: an AMS1117-3.3 regulator in SOT-223 with a 10 uF input
+  capacitor and a 22 uF ceramic output capacitor. Use only the regulator and
+  passive components, and preserve the ceramic output-capacitor choice so the
+  adversarial review can check it against the selected AMS1117 datasheet.
 
 FEATURES
 --------

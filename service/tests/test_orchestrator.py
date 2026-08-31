@@ -110,3 +110,45 @@ def test_the_orchestrator_calls_the_validated_generator_and_summarizes_it():
         "duration_s": 1.2,
         "served_by": None,
     }
+
+
+def test_reasoning_effort_reaches_adk_without_obsolete_sampling_controls():
+    model = FakeLlm(
+        model="fake-orchestrator",
+        responses=[text_response("Which input voltage?")],
+    )
+    before = len(model.requests)
+
+    run_orchestrator(
+        message="make a regulator",
+        model=model,
+        thinking_level="high",
+        session_id="thinking-session",
+        generate=lambda: None,
+        emit=lambda event: None,
+        debug=False,
+    )
+
+    request = model.requests[before]
+    assert request.config.thinking_config.thinking_level == types.ThinkingLevel.HIGH
+    assert request.config.temperature is None
+
+
+def test_each_adk_model_round_trip_passes_through_the_pre_call_hook():
+    model = FakeLlm(
+        model="fake-orchestrator",
+        responses=[tool_response(), text_response("Done.")],
+    )
+    calls = []
+
+    run_orchestrator(
+        message="make a regulator",
+        clarification="5 V input",
+        model=model,
+        session_id="paced-session",
+        generate=lambda: {"status": "FEASIBLE"},
+        emit=lambda event: None,
+        before_model_call=lambda: calls.append("called"),
+    )
+
+    assert calls == ["called", "called"]

@@ -737,6 +737,31 @@ def test_a_null_time_limit_is_400(server):
     assert "error_id" not in body, "a caller's bad value is not an incident"
 
 
+def test_no_solver_budget_allows_a_null_finite_value(server):
+    status, body = post(
+        server,
+        {
+            "intent": "a regulator",
+            "time_limit_s": None,
+            "no_solver_budget": True,
+            "review": False,
+        },
+    )
+
+    assert status == 200
+    assert body["status"] == "optimal"
+
+
+def test_no_solver_budget_must_be_a_boolean(server):
+    status, body = post(
+        server,
+        {"intent": "a regulator", "no_solver_budget": "yes"},
+    )
+
+    assert status == 400
+    assert "no_solver_budget" in body["error"]
+
+
 def test_an_internal_typeerror_is_still_a_500(monkeypatch, server):
     """The 400 net stays narrow: only field-level failures are the caller's.
 
@@ -1690,15 +1715,24 @@ def test_chat_stream_wraps_the_pipeline_in_an_orchestrator_turn(
         lambda: {
             "default": "auto",
             "auto_model": "gemini-test",
-            "models": [{"id": "gemini-test"}],
+            "models": [
+                {"id": "gemini-test"},
+                {"id": "gemini-3.1-pro-preview"},
+            ],
         }
     )
 
     def fake_generate(payload, **kwargs):
+        assert "model" not in payload
+        assert "thinking_level" not in payload
+        assert "quota_rpm" not in payload
         kwargs["on_event"]({"event": "stage.start", "stage": "propose"})
         return {"status": "FEASIBLE", "intent": payload["intent"], "parts": []}
 
+    orchestrator_calls = []
+
     def fake_orchestrator(**kwargs):
+        orchestrator_calls.append(kwargs)
         kwargs["emit"](
             {
                 "event": "model.request",
@@ -1733,6 +1767,8 @@ def test_chat_stream_wraps_the_pipeline_in_an_orchestrator_turn(
                 "debug": True,
                 "session_id": "session-1",
                 "turn_id": "turn-1",
+                "model": "gemini-3.1-pro-preview",
+                "thinking_level": "high",
             },
             path="/chat/stream",
         )
@@ -1754,6 +1790,91 @@ def test_chat_stream_wraps_the_pipeline_in_an_orchestrator_turn(
     assert all(frame["turn_id"] == "turn-1" for frame in frames)
     assert frames[-1]["result"]["status"] == "FEASIBLE"
     assert frames[-1]["assistant"] == "The board is ready."
+    assert frames[0]["model"] == "gemini-3.1-pro-preview"
+    assert frames[0]["thinking_level"] == "high"
+    assert frames[-1]["thinking_level"] == "high"
+    assert orchestrator_calls[0]["model"] == "gemini-3.1-pro-preview"
+    assert orchestrator_calls[0]["thinking_level"] == "high"
+    assert orchestrator_calls[0]["before_model_call"] is not None
+
+
+def test_chat_stream_rejects_an_invalid_reasoning_effort_before_streaming(server):
+    previous_catalog = Handler.__dict__["model_catalog_factory"]
+    Handler.model_catalog_factory = staticmethod(
+        lambda: {
+            "auto_model": "gemini-test",
+            "models": [{"id": "gemini-test"}],
+        }
+    )
+    try:
+        status, body = post(
+            server,
+            {"intent": "a regulator", "thinking_level": "off"},
+            path="/chat/stream",
+        )
+    finally:
+        Handler.model_catalog_factory = previous_catalog
+
+    assert status == 400
+    assert "thinking_level" in body["error"]
+
+
+def test_chat_stream_rejects_an_invalid_quota_pace_before_streaming(server):
+    status, body = post(
+        server,
+        {"intent": "a regulator", "quota_rpm": 20},
+        path="/chat/stream",
+    )
+
+    assert status == 400
+    assert "quota_rpm" in body["error"]
+
+
+def test_chat_stream_paces_orchestrator_and_worker_model_calls(server):
+    previous_catalog = Handler.__dict__["model_catalog_factory"]
+    previous_runner = Handler.__dict__["orchestrator_runner"]
+    previous_pacer = Handler.request_pacer
+
+    class RecordingPacer:
+        def __init__(self):
+            self.calls = []
+
+        def wait(self, rpm, *, on_wait=None):
+            self.calls.append(rpm)
+            if len(self.calls) > 1 and on_wait is not None:
+                on_wait(10.0)
+            return 0 if len(self.calls) == 1 else 10.0
+
+    pacer = RecordingPacer()
+    Handler.request_pacer = pacer
+    Handler.model_catalog_factory = staticmethod(
+        lambda: {"auto_model": "gemini-test", "models": [{"id": "gemini-test"}]}
+    )
+
+    def orchestrate(**kwargs):
+        kwargs["before_model_call"]()
+        result = kwargs["generate"]()
+        return OrchestratorResult("Done.", result, False, str(kwargs["model"]))
+
+    Handler.orchestrator_runner = staticmethod(orchestrate)
+    try:
+        status, _, frames = post_stream(
+            server,
+            {"intent": "a regulator", "review": False, "quota_rpm": 6},
+            path="/chat/stream",
+        )
+    finally:
+        Handler.request_pacer = previous_pacer
+        Handler.model_catalog_factory = previous_catalog
+        Handler.orchestrator_runner = previous_runner
+
+    assert status == 200
+    assert frames[0]["quota_rpm"] == 6
+    assert frames[-1]["quota_rpm"] == 6
+    assert pacer.calls == [6, 6]
+    waits = [frame for frame in frames if frame["event"] == "quota.wait"]
+    assert [frame["layer"] for frame in waits] == ["worker"]
+    assert waits[0]["delay_s"] == 10.0
 
 
 def test_chat_stream_can_end_in_a_clarification_without_running_the_board(server):

@@ -15,7 +15,7 @@ const TIMEOUT_MESSAGE = 'The run passed the 300 second budget and was cancelled.
 export const REQUEST_TIMEOUT_MS = 300000
 export const MAX_REQUEST_BYTES = 1024 * 1024
 export const MIN_TIME_LIMIT_S = 5
-export const MAX_TIME_LIMIT_S = 60
+export const MAX_TIME_LIMIT_S = 120
 
 /** kind is what the UI switches on; status is kept for the error panel's footer. */
 export class ApiError extends Error {
@@ -47,6 +47,10 @@ export function normalizeRequest(request) {
     datasheets,
     time_limit_s: clampTimeLimit(request.time_limit_s),
     review: request.review !== false,
+    // Unlimited is the UI default. Keep an explicit false in the normalized
+    // request so edit/retry/session restore cannot silently turn it back on.
+    no_solver_budget:
+      request.no_solver_budget === undefined ? true : request.no_solver_budget === true,
     // Grounding is opt-in and only sent when it was asked for: an absent flag
     // is the service's default, so a stray `ground: false` would say nothing.
     ...(request.ground === true ? { ground: true } : {}),
@@ -130,12 +134,21 @@ function guardSize(body) {
   )
 }
 
+function requestTimer(controller, request) {
+  if (request?.no_solver_budget === true) return null
+  return setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS)
+}
+
+function clearRequestTimer(timer) {
+  if (timer !== null) clearTimeout(timer)
+}
+
 export async function generate(request) {
   const body = JSON.stringify(request)
   guardSize(body)
 
   const controller = new AbortController()
-  const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS)
+  const timer = requestTimer(controller, request)
 
   const startedAt = Date.now()
   let response
@@ -156,7 +169,7 @@ export async function generate(request) {
     }
     throw new ApiError('network', String(err && err.message ? err.message : err))
   } finally {
-    clearTimeout(timer)
+    clearRequestTimer(timer)
   }
 
   let data = {}
@@ -279,7 +292,7 @@ export async function generateStream(request, onEvent) {
   guardSize(body)
 
   const controller = new AbortController()
-  const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS)
+  const timer = requestTimer(controller, request)
   const startedAt = Date.now()
 
   try {
@@ -392,7 +405,7 @@ export async function generateStream(request, onEvent) {
     }
     throw streamFailure(controller, ms, events, 'The stream closed before the run finished.')
   } finally {
-    clearTimeout(timer)
+    clearRequestTimer(timer)
   }
 }
 
@@ -406,6 +419,8 @@ function chatTerminalOf(evt) {
         assistant: String(evt.assistant ?? ''),
         needsClarification: evt.needs_clarification === true,
         model: String(evt.model ?? ''),
+        thinkingLevel: String(evt.thinking_level ?? 'auto'),
+        quotaRpm: String(evt.quota_rpm ?? 'auto'),
         result: evt.result ? normalizeResponse(objectOf(evt.result)) : null,
       },
     }
@@ -434,7 +449,7 @@ export async function chatStream(request, onEvent) {
   guardSize(body)
 
   const controller = new AbortController()
-  const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS)
+  const timer = requestTimer(controller, request)
   const startedAt = Date.now()
   try {
     let response
@@ -529,7 +544,7 @@ export async function chatStream(request, onEvent) {
     }
     throw chatFailure(controller, ms, events, 'The stream closed before the turn finished.')
   } finally {
-    clearTimeout(timer)
+    clearRequestTimer(timer)
   }
 }
 

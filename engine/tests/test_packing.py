@@ -62,6 +62,13 @@ def test_single_part_board_is_at_least_the_part():
     assert result.board_height_nm >= part.height_nm
 
 
+def test_none_leaves_the_solver_without_a_time_limit():
+    result = pack([Part(*R0603, ref="R1")], time_limit_s=None)
+
+    assert result.status is PackStatus.OPTIMAL
+    assert not any("Time limit" in warning for warning in result.warnings)
+
+
 def test_rejects_non_positive_extents():
     with pytest.raises(ValueError, match="non-positive"):
         Part(0, mm(1), ref="BAD")

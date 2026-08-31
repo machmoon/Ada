@@ -21,6 +21,10 @@ const IDLE = {
   entries: [],
   needsClarification: false,
   actualModel: '',
+  orchestratorModel: 'gemini-3.7-flash',
+  thinkingLevel: 'auto',
+  actualThinkingLevel: '',
+  quotaRpm: 'auto',
 }
 
 /** phase: idle | running | done | error */
@@ -34,6 +38,13 @@ export function startRun(request, options = {}) {
   const sessionId = preserve && previous.sessionId ? previous.sessionId : newSessionId()
   const entries = preserve ? [...(previous.entries || [])] : []
   const message = String(options.message ?? intent)
+  const orchestratorModel = String(
+    options.model || (preserve ? previous.orchestratorModel : '') || 'gemini-3.7-flash',
+  )
+  const thinkingLevel = String(
+    options.thinkingLevel || (preserve ? previous.thinkingLevel : '') || 'auto',
+  )
+  const quotaRpm = String(options.quotaRpm || (preserve ? previous.quotaRpm : '') || 'auto')
   if (message) {
     entries.push({ id: `${id}-user`, type: 'message', role: 'user', text: message })
   }
@@ -53,9 +64,13 @@ export function startRun(request, options = {}) {
     intent_chars: intent.length,
     datasheets: Object.keys(request?.datasheets || {}).length,
     time_limit_s: request?.time_limit_s ?? null,
+    no_solver_budget: request?.no_solver_budget === true,
     review: request?.review !== false,
     // normalizeRequest omits `ground` unless it was asked for, so absent is false.
     ground: request?.ground === true,
+    orchestrator_model: orchestratorModel,
+    thinking_level: thinkingLevel,
+    quota_rpm: quotaRpm,
   })
   run.set({
     phase: 'running',
@@ -70,6 +85,10 @@ export function startRun(request, options = {}) {
     entries,
     needsClarification: false,
     actualModel: '',
+    orchestratorModel,
+    thinkingLevel,
+    actualThinkingLevel: '',
+    quotaRpm,
   })
 }
 
@@ -136,6 +155,9 @@ export function resetRun() {
     feed: [],
     entries: [],
     request: state.request,
+    orchestratorModel: state.orchestratorModel,
+    thinkingLevel: state.thinkingLevel,
+    quotaRpm: state.quotaRpm,
   }))
 }
 
@@ -224,6 +246,14 @@ export function stageEvent(evt) {
       eventModel && (event.layer === 'orchestrator' || name.startsWith('chat.'))
         ? eventModel
         : state.actualModel
+    const eventThinkingLevel = String(event.thinking_level ?? '')
+    const actualThinkingLevel =
+      eventThinkingLevel && (event.layer === 'orchestrator' || name.startsWith('chat.'))
+        ? eventThinkingLevel
+        : state.actualThinkingLevel
+    const eventQuotaRpm = String(event.quota_rpm ?? '')
+    const quotaRpm =
+      eventQuotaRpm && name.startsWith('chat.') ? eventQuotaRpm : state.quotaRpm
     const hidden = name === 'assistant.message' || name === 'chat.done'
     const row = hidden
       ? null
@@ -257,6 +287,8 @@ export function stageEvent(evt) {
       feed,
       entries,
       actualModel,
+      actualThinkingLevel,
+      quotaRpm,
     }
   })
 }

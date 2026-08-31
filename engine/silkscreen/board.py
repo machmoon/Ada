@@ -156,7 +156,7 @@ def build_board(
     spec: CircuitSpec,
     *,
     clearance_nm: int = DEFAULT_CLEARANCE_NM,
-    time_limit_s: float = 20.0,
+    time_limit_s: float | None = 20.0,
     edge_refs: set[str] | None = None,
     two_sided: bool = False,
 ) -> BoardResult:

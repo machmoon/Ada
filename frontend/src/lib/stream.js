@@ -92,7 +92,14 @@ const STAGE_DONE = {
 
 const DESCRIBERS = {
   'chat.accepted': (e) =>
-    `orchestrator started${text(e.model) ? ` with ${text(e.model)}` : ''}`,
+    `orchestrator started${text(e.model) ? ` with ${text(e.model)}` : ''}${text(e.thinking_level) ? ` · ${text(e.thinking_level)} thinking` : ''}${text(e.quota_rpm) && text(e.quota_rpm) !== 'auto' ? ` · ${text(e.quota_rpm)} RPM pace` : ''}`,
+
+  'quota.wait': (e) => {
+    const delay = seconds(e.delay_s)
+    const layer = text(e.layer) || 'Gemini'
+    const rpm = text(e.quota_rpm)
+    return `${layer} waiting for quota pace${delay ? `: ${delay} s` : ''}${rpm ? ` at ${rpm} RPM` : ''}`
+  },
 
   'run.accepted': () => 'request accepted, pipeline starting',
 
@@ -242,6 +249,7 @@ function counterOf(index, total) {
 }
 
 function budgetOf(value) {
+  if (value === null) return ' (no solver budget)'
   const n = num(value)
   return n === null ? '' : ` (${n} s solver budget)`
 }

@@ -26,7 +26,7 @@ import traceback
 import urllib.parse
 import uuid
 from collections.abc import Callable
-from dataclasses import fields
+from dataclasses import fields, replace
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
@@ -64,7 +64,13 @@ from silkscreen.order import (  # noqa: E402
 from silkscreen.units import to_mm  # noqa: E402
 
 from .cache import FactStore, MemoryFactStore  # noqa: E402
-from .models import model_catalog, select_model  # noqa: E402
+from .models import (  # noqa: E402
+    model_catalog,
+    select_model,
+    select_quota_rpm,
+    select_thinking_level,
+)
+from .quota import GEMINI_REQUEST_PACER, RequestPacer  # noqa: E402
 
 __all__ = [
     "Handler",
@@ -475,6 +481,33 @@ def run_chat_orchestrator(**kwargs):
     return run_orchestrator(**kwargs)
 
 
+class _PacedModel:
+    """Apply a pre-call hook to a non-fallback model injected into the service."""
+
+    def __init__(self, model, before_attempt: Callable[[str], None]) -> None:
+        self._model = model
+        self._before_attempt = before_attempt
+
+    @property
+    def last_provider(self):
+        return getattr(self._model, "last_provider", None)
+
+    @property
+    def last_model(self):
+        return getattr(self._model, "last_model", None)
+
+    def generate(self, prompt: str, **kwargs):
+        self._before_attempt("worker")
+        return self._model.generate(prompt, **kwargs)
+
+
+def _with_request_pacing(model, before_attempt: Callable[[str], None]):
+    """Pace every explicit fallback attempt, or one ordinary model call."""
+    if isinstance(model, FallbackModel):
+        return replace(model, before_attempt=before_attempt)
+    return _PacedModel(model, before_attempt)
+
+
 def generate(
     payload: dict[str, Any],
     *,
@@ -550,14 +583,20 @@ def generate(
             unusable.append(part)
             to_read[part] = datasheets[part]
 
-    # Coerce here, not in the route handler: float() raises TypeError on a
-    # JSON null and ValueError on a string, and both are this caller's error.
-    # Naming the field keeps the route's except clause narrow, so a genuine
-    # internal TypeError still surfaces as a 500 with an error id.
-    try:
-        time_limit_s = float(payload.get("time_limit_s", DEFAULT_TIME_LIMIT))
-    except (TypeError, ValueError):
-        raise ValueError("'time_limit_s' must be a number") from None
+    no_solver_budget = payload.get("no_solver_budget", False)
+    if not isinstance(no_solver_budget, bool):
+        raise ValueError("'no_solver_budget' must be a boolean")
+    if no_solver_budget:
+        time_limit_s = None
+    else:
+        # Coerce here, not in the route handler: float() raises TypeError on a
+        # JSON null and ValueError on a string, and both are this caller's error.
+        # Naming the field keeps the route's except clause narrow, so a genuine
+        # internal TypeError still surfaces as a 500 with an error id.
+        try:
+            time_limit_s = float(payload.get("time_limit_s", DEFAULT_TIME_LIMIT))
+        except (TypeError, ValueError):
+            raise ValueError("'time_limit_s' must be a number") from None
 
     result = generate_pcb(
         model,
@@ -708,6 +747,7 @@ class Handler(BaseHTTPRequestHandler):
     model_factory = staticmethod(build_model)
     model_catalog_factory = staticmethod(model_catalog)
     orchestrator_runner = staticmethod(run_chat_orchestrator)
+    request_pacer: RequestPacer = GEMINI_REQUEST_PACER
     store: FactStore | None = None
     pages_store: FactStore | None = None
     embedder_factory = staticmethod(build_embedder)
@@ -867,12 +907,32 @@ class Handler(BaseHTTPRequestHandler):
         self,
         payload: dict[str, Any],
         on_event: Callable[[dict[str, Any]], None] | None = None,
+        quota_rpm: int | None = None,
     ) -> dict[str, Any]:
         """One pipeline run, wired to whatever this handler was injected with."""
         store = self.store if self.store is not None else build_store()
+        model = self.model_factory()
+        if quota_rpm is not None:
+
+            def before_attempt(provider: str) -> None:
+                self.request_pacer.wait(
+                    quota_rpm,
+                    on_wait=lambda delay: on_event
+                    and on_event(
+                        {
+                            "event": "quota.wait",
+                            "layer": "worker",
+                            "provider": provider,
+                            "quota_rpm": quota_rpm,
+                            "delay_s": round(delay, 3),
+                        }
+                    ),
+                )
+
+            model = _with_request_pacing(model, before_attempt)
         return generate(
             payload,
-            model=self.model_factory(),
+            model=model,
             store=store,
             pages_store=self.pages_store,
             embedder_factory=self.embedder_factory,
@@ -979,6 +1039,8 @@ class Handler(BaseHTTPRequestHandler):
         try:
             catalog = self.model_catalog_factory()
             orchestrator_model = select_model(payload.get("model"), catalog)
+            thinking_level = select_thinking_level(payload.get("thinking_level"))
+            quota_rpm = select_quota_rpm(payload.get("quota_rpm"))
         except ValueError as exc:
             self._send(400, {"error": str(exc)})
             return
@@ -1014,13 +1076,35 @@ class Handler(BaseHTTPRequestHandler):
             board_payload = {
                 key: value
                 for key, value in payload.items()
-                if key not in {"clarification", "session_id", "turn_id", "model"}
+                if key
+                not in {
+                    "clarification",
+                    "session_id",
+                    "turn_id",
+                    "model",
+                    "thinking_level",
+                    "quota_rpm",
+                }
             }
             if clarification.strip():
                 board_payload["intent"] = (
                     f"{intent.strip()}\n\nClarification: {clarification.strip()}"
                 )
-            return self._run(board_payload, on_event=emit)
+            return self._run(board_payload, on_event=emit, quota_rpm=quota_rpm)
+
+        def pace_orchestrator() -> None:
+            self.request_pacer.wait(
+                quota_rpm,
+                on_wait=lambda delay: emit(
+                    {
+                        "event": "quota.wait",
+                        "layer": "orchestrator",
+                        "model": orchestrator_model,
+                        "quota_rpm": quota_rpm,
+                        "delay_s": round(delay, 3),
+                    }
+                ),
+            )
 
         try:
             emit(
@@ -1028,16 +1112,20 @@ class Handler(BaseHTTPRequestHandler):
                     "event": "chat.accepted",
                     "layer": "orchestrator",
                     "model": orchestrator_model,
+                    "thinking_level": thinking_level or "auto",
+                    "quota_rpm": quota_rpm or "auto",
                 }
             )
             outcome = self.orchestrator_runner(
                 message=intent,
                 clarification=clarification,
                 model=orchestrator_model,
+                thinking_level=thinking_level,
                 session_id=session_id,
                 generate=generate_board,
                 emit=emit,
                 debug=bool(payload.get("debug", False)),
+                before_model_call=pace_orchestrator,
             )
         except Exception as exc:
             if gone:
@@ -1055,6 +1143,8 @@ class Handler(BaseHTTPRequestHandler):
                     "assistant": outcome.assistant,
                     "needs_clarification": outcome.needs_clarification,
                     "model": outcome.model,
+                    "thinking_level": thinking_level or "auto",
+                    "quota_rpm": quota_rpm or "auto",
                     "result": outcome.result,
                 }
             )

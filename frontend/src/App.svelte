@@ -44,6 +44,9 @@
     startRun(request, {
       preserve: options.preserve === true,
       message: options.message ?? request.intent,
+      model: options.model,
+      thinkingLevel: options.thinkingLevel,
+      quotaRpm: options.quotaRpm,
     })
     goTab('chat')
     try {
@@ -54,7 +57,9 @@
           clarification: String(options.clarification ?? ''),
           session_id: state.sessionId,
           turn_id: state.id,
-          model: String(options.model ?? 'auto'),
+          model: state.orchestratorModel,
+          thinking_level: state.thinkingLevel,
+          quota_rpm: state.quotaRpm,
         },
         stageEvent,
       )
@@ -152,7 +157,11 @@
     resetRun()
   }
 
-  function retry(model = 'auto') {
+  function retry(
+    model = $run.orchestratorModel || 'auto',
+    thinkingLevel = $run.thinkingLevel || 'auto',
+    quotaRpm = $run.quotaRpm || 'auto',
+  ) {
     if (!$run.request) return
     // Logged before the submit, which mints the next run id: the id worth
     // recording here is the run being retried.
@@ -161,16 +170,20 @@
       preserve: true,
       message: `Retrying: ${$run.request.intent}`,
       model,
+      thinkingLevel,
+      quotaRpm,
     })
   }
 
-  function clarify(answer, model = 'auto') {
+  function clarify(answer) {
     if (!$run.request) return
     submit($run.request, {
       preserve: true,
       message: answer,
       clarification: answer,
-      model,
+      model: $run.orchestratorModel || 'auto',
+      thinkingLevel: $run.thinkingLevel || 'auto',
+      quotaRpm: $run.quotaRpm || 'auto',
     })
   }
 

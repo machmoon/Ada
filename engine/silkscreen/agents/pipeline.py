@@ -318,7 +318,7 @@ def _generate_pcb_sdk(
     preloaded_facts: list[PartFacts] | None = None,
     output: str | Path | None = None,
     max_repairs: int = 3,
-    time_limit_s: float = 20.0,
+    time_limit_s: float | None = 20.0,
     review: bool = True,
     route: bool = True,
     emit_stages: bool = True,
@@ -379,7 +379,7 @@ def generate_pcb(
     preloaded_facts: list[PartFacts] | None = None,
     output: str | Path | None = None,
     max_repairs: int = 3,
-    time_limit_s: float = 20.0,
+    time_limit_s: float | None = 20.0,
     review: bool = True,
     route: bool = True,
     emit_stages: bool = True,
@@ -401,7 +401,7 @@ def generate_pcb(
             designs and reviews the board as though the part were undocumented.
         output: Where to write the ``.kicad_pcb``. Skipped if omitted.
         max_repairs: How many times the proposal may be sent back for repair.
-        time_limit_s: Placement solver budget.
+        time_limit_s: Placement solver budget, or ``None`` for no solver limit.
         review: Run the adversarial review pass.
         route: Lay copper after placing. Off leaves a placed board whose pads
             carry nets and whose copper is empty -- which KiCad draws as a

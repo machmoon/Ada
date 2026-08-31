@@ -3,7 +3,27 @@
   import { MAX_REQUEST_BYTES, MAX_TIME_LIMIT_S, MIN_TIME_LIMIT_S, normalizeRequest, requestBytes } from '../lib/api.js'
   import { DATASHEET_PRESETS } from '../lib/datasheets.js'
 
-  let { onsubmit, initial = null } = $props()
+  let {
+    onsubmit,
+    initial = null,
+    models = [],
+    initialModel = 'gemini-3.7-flash',
+    initialThinkingLevel = 'auto',
+    initialQuotaRpm = 'auto',
+  } = $props()
+
+  const ORCHESTRATOR_MODELS = [
+    {
+      id: 'gemini-3.7-flash',
+      name: 'Gemini 3.7 Flash',
+      note: 'Stable · strongest current agent model',
+    },
+    {
+      id: 'gemini-3.1-pro-preview',
+      name: 'Gemini 3.1 Pro',
+      note: 'Preview · deeper reasoning by default',
+    },
+  ]
 
   // Seeded once, on purpose: App remounts this form whenever the phase returns
   // to idle, so the fields stay editable rather than tracking the prop.
@@ -13,8 +33,16 @@
 
   let intent = $state(seed.intent ?? '')
   let timeLimit = $state(seed.time_limit_s ?? 20)
+  let noSolverBudget = $state(seed.no_solver_budget !== false)
   let review = $state(seed.review !== false)
   let ground = $state(seed.ground === true)
+  // Seeded once with the rest of the editable form state.
+  // svelte-ignore state_referenced_locally
+  let orchestratorModel = $state(initialModel || 'gemini-3.7-flash')
+  // svelte-ignore state_referenced_locally
+  let thinkingLevel = $state(initialThinkingLevel || 'auto')
+  // svelte-ignore state_referenced_locally
+  let quotaRpm = $state(String(initialQuotaRpm || 'auto'))
   let showDatasheets = $state(seedSheets.length > 0)
   let rows = $state(
     seedSheets.length ? seedSheets.map(([part, url]) => ({ part, url })) : [{ part: '', url: '' }],
@@ -32,6 +60,7 @@
     intent,
     datasheets: Object.fromEntries(rows.map((r) => [r.part, r.url])),
     time_limit_s: timeLimit,
+    no_solver_budget: noSolverBudget,
     review,
     ground: ground && hasDatasheets,
   })
@@ -40,7 +69,11 @@
   // from waiting on a round trip that can only fail.
   const bytes = $derived(requestBytes(normalizeRequest(request)))
   const tooLarge = $derived(bytes > MAX_REQUEST_BYTES)
-  const canSubmit = $derived(intent.trim().length > 0 && !tooLarge)
+  const advertisedModels = $derived(new Set(models.map((model) => String(model?.id ?? ''))))
+  const selectedUnavailable = $derived(
+    advertisedModels.size > 0 && !advertisedModels.has(orchestratorModel),
+  )
+  const canSubmit = $derived(intent.trim().length > 0 && !tooLarge && !selectedUnavailable)
 
   function grow() {
     if (!textarea) return
@@ -75,7 +108,7 @@
   function submit(event) {
     event.preventDefault()
     if (!canSubmit) return
-    onsubmit(request)
+    onsubmit(request, { model: orchestratorModel, thinkingLevel, quotaRpm })
   }
 </script>
 
@@ -138,6 +171,54 @@
     </div>
   </details>
 
+  <section class="orchestrator" data-testid="intent-form-orchestrator">
+    <div class="orchestrator-heading">
+      <span class="lbl">orchestrator</span>
+      <span class="orchestrator-note">Chooses clarification and calls the board generator</span>
+    </div>
+    <div class="orchestrator-controls">
+      <label class="orchestrator-control">
+        <span>Model</span>
+        <select bind:value={orchestratorModel} data-testid="intent-form-orchestrator-model">
+          {#each ORCHESTRATOR_MODELS as option (option.id)}
+            <option
+              value={option.id}
+              disabled={advertisedModels.size > 0 && !advertisedModels.has(option.id)}
+            >
+              {option.name}{advertisedModels.size > 0 && !advertisedModels.has(option.id) ? ' · unavailable' : ''}
+            </option>
+          {/each}
+        </select>
+        <small>{ORCHESTRATOR_MODELS.find((option) => option.id === orchestratorModel)?.note}</small>
+      </label>
+
+      <label class="orchestrator-control">
+        <span>Reasoning effort</span>
+        <select bind:value={thinkingLevel} data-testid="intent-form-thinking-level">
+          <option value="auto">Auto · model default</option>
+          <option value="low">Fast · low</option>
+          <option value="medium">Standard · medium</option>
+          <option value="high">Deep · high</option>
+        </select>
+        <small>Gemini 3 always thinks internally; Fast uses its lowest supported effort.</small>
+      </label>
+
+      <label class="orchestrator-control">
+        <span>Request pace</span>
+        <select bind:value={quotaRpm} data-testid="intent-form-quota-rpm">
+          <option value="auto">Auto · no app limit</option>
+          <option value="15">Fast · 15 RPM</option>
+          <option value="6">Demo-safe · 6 RPM</option>
+          <option value="3">Conservative · 3 RPM</option>
+        </select>
+        <small>Spaces Gemini calls across this service instance. It cannot increase daily or token quota.</small>
+      </label>
+    </div>
+    {#if selectedUnavailable}
+      <p class="model-warning" role="status">This model is not advertised by the configured API key.</p>
+    {/if}
+  </section>
+
   <div class="controls">
     <label class="control">
       <span class="lbl">solver budget</span>
@@ -145,12 +226,22 @@
         class="mono budget"
         type="number"
         bind:value={timeLimit}
+        disabled={noSolverBudget}
         min={MIN_TIME_LIMIT_S}
         max={MAX_TIME_LIMIT_S}
         step="1"
         data-testid="intent-form-budget"
       />
-      <span class="unit">seconds</span>
+      <span class="unit">{noSolverBudget ? 'unlimited' : 'seconds'}</span>
+      <button
+        type="button"
+        class="no-budget"
+        class:active={noSolverBudget}
+        aria-pressed={noSolverBudget}
+        data-testid="intent-form-no-budget"
+        title="Let CP-SAT run without a solver time limit; deployment request limits may still apply"
+        onclick={() => (noSolverBudget = !noSolverBudget)}
+      >NO budget</button>
     </label>
 
     <label class="control checkbox">
@@ -250,6 +341,28 @@
     border-radius: var(--radius);
   }
 
+  .orchestrator {
+    margin-top: 18px;
+    padding: 14px;
+    border: 1px solid var(--rule);
+    background: var(--well);
+  }
+  .orchestrator-heading { display: flex; align-items: baseline; gap: 10px; }
+  .orchestrator-note { color: var(--ink-soft); font-size: var(--fs-ui); }
+  .orchestrator-controls { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; margin-top: 12px; }
+  .orchestrator-control { display: flex; flex-direction: column; gap: 6px; color: var(--ink-mid); font-size: var(--fs-ui); }
+  .orchestrator-control select {
+    width: 100%;
+    padding: 8px 10px;
+    border: 1px solid var(--rule-soft);
+    background: var(--surface);
+    color: var(--ink);
+    font-family: var(--font-mono);
+    font-size: var(--fs-mono);
+  }
+  .orchestrator-control small { color: var(--ink-faint); line-height: 1.4; }
+  .model-warning { margin-top: 10px; color: var(--sev-marginal-fg); font-size: var(--fs-ui); }
+
   .controls {
     display: flex;
     align-items: center;
@@ -271,6 +384,17 @@
     padding: 6px 8px;
     font-size: var(--fs-mono);
   }
+  .budget:disabled { color: var(--ink-faint); }
+
+  .no-budget {
+    padding: 6px 9px;
+    background: transparent;
+    border: 1px solid var(--rule);
+    color: var(--ink-mid);
+    font-family: var(--font-mono);
+    font-size: var(--fs-mono-sm);
+  }
+  .no-budget.active { background: var(--ink); color: var(--paper); }
 
   .spacer { flex-grow: 1; }
 
@@ -285,4 +409,5 @@
     border-radius: var(--radius);
   }
   .run:disabled { background: var(--accent-off); color: var(--accent-off-ink); }
+  @media (max-width: 680px) { .orchestrator-controls { grid-template-columns: 1fr; } }
 </style>

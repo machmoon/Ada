@@ -59,7 +59,7 @@ class _RunContext:
     datasheets: dict[str, str] | None
     preloaded_facts: list[PartFacts] | None
     max_repairs: int
-    time_limit_s: float
+    time_limit_s: float | None
     review: bool
     route: bool
     output: str | Path | None
@@ -208,7 +208,7 @@ def generate_pcb_adk(
     preloaded_facts: list[PartFacts] | None = None,
     output: str | Path | None = None,
     max_repairs: int = 3,
-    time_limit_s: float = 20.0,
+    time_limit_s: float | None = 20.0,
     review: bool = True,
     route: bool = True,
     emit_stages: bool = True,

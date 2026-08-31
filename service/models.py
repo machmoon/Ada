@@ -15,18 +15,27 @@ from typing import Any
 
 from silkscreen.agents.model import CHEAP_MODEL, DEFAULT_MODEL
 
-__all__ = ["model_catalog", "select_model"]
+__all__ = [
+    "model_catalog",
+    "select_model",
+    "select_quota_rpm",
+    "select_thinking_level",
+]
+
+QUOTA_RPM_OPTIONS = frozenset({3, 6, 15})
 
 _CACHE_TTL_S = 15 * 60
 _cache_lock = threading.Lock()
 _cache_at = 0.0
 _cache: dict[str, Any] | None = None
+_PRO_ORCHESTRATOR_MODEL = "gemini-3.1-pro-preview"
 
 
 def _fallback(reason: str = "") -> dict[str, Any]:
     models = []
     for model_id, label in (
         (DEFAULT_MODEL, "Default Gemini model"),
+        (_PRO_ORCHESTRATOR_MODEL, "Reasoning Gemini orchestrator"),
         (CHEAP_MODEL, "Economy Gemini model"),
     ):
         if any(item["id"] == model_id for item in models):
@@ -123,3 +132,35 @@ def select_model(requested: object, catalog: dict[str, Any]) -> str:
     if choice not in allowed:
         raise ValueError("'model' must be 'auto' or an available Gemini model")
     return choice
+
+
+def select_thinking_level(requested: object) -> str | None:
+    """Resolve the web control to a Gemini 3 thinking level.
+
+    Gemini 3.1 Pro and 3.7 Flash cannot turn thinking fully off.  ``auto``
+    therefore means the selected model's native default, while explicit
+    choices use the three levels both models support.
+    """
+    choice = str(requested or "auto").strip().lower()
+    if not choice or choice == "auto":
+        return None
+    if choice not in {"low", "medium", "high"}:
+        raise ValueError("'thinking_level' must be 'auto', 'low', 'medium', or 'high'")
+    return choice
+
+
+def select_quota_rpm(requested: object) -> int | None:
+    """Return the selected app-side request pace; ``None`` means no pacing."""
+    if requested is None or requested == "":
+        return None
+    if isinstance(requested, str) and requested.strip().lower() == "auto":
+        return None
+    if isinstance(requested, bool):
+        raise ValueError("'quota_rpm' must be 'auto', 3, 6, or 15")
+    try:
+        rpm = int(requested)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("'quota_rpm' must be 'auto', 3, 6, or 15") from exc
+    if str(requested).strip() != str(rpm) or rpm not in QUOTA_RPM_OPTIONS:
+        raise ValueError("'quota_rpm' must be 'auto', 3, 6, or 15")
+    return rpm

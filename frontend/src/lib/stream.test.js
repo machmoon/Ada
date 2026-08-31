@@ -147,12 +147,12 @@ describe('describeStageEvent', () => {
     )
   })
 
-  it('drops the budget clause when the event carries no time limit', () => {
+  it('distinguishes an unlimited solver from a legacy event with no budget field', () => {
     expect(describeStageEvent({ event: 'stage.start', stage: 'place' })).toBe(
       `placing with CP-SAT${ELLIPSIS}`,
     )
     expect(describeStageEvent({ event: 'stage.start', stage: 'place', time_limit_s: null })).toBe(
-      `placing with CP-SAT${ELLIPSIS}`,
+      `placing with CP-SAT (no solver budget)${ELLIPSIS}`,
     )
   })
 
@@ -447,6 +447,28 @@ describe('describeStageEvent', () => {
     expect(
       describeStageEvent({ event: 'model.request', layer: 'worker', stage: 'review' }),
     ).toBe('worker prompt prepared (review)')
+  })
+
+  it('names the orchestrator reasoning effort when a chat starts', () => {
+    expect(
+      describeStageEvent({
+        event: 'chat.accepted',
+        model: 'gemini-3.1-pro-preview',
+        thinking_level: 'high',
+        quota_rpm: 6,
+      }),
+    ).toBe('orchestrator started with gemini-3.1-pro-preview · high thinking · 6 RPM pace')
+  })
+
+  it('explains an app-side quota wait', () => {
+    expect(
+      describeStageEvent({
+        event: 'quota.wait',
+        layer: 'worker',
+        quota_rpm: 6,
+        delay_s: 10,
+      }),
+    ).toBe('worker waiting for quota pace: 10.0 s at 6 RPM')
   })
 
   it('describes orchestrator tool boundaries and clarification completion', () => {

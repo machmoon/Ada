@@ -48,6 +48,10 @@ describe('the run store', () => {
       entries: [],
       needsClarification: false,
       actualModel: '',
+      orchestratorModel: 'gemini-3.7-flash',
+      thinkingLevel: 'auto',
+      actualThinkingLevel: '',
+      quotaRpm: 'auto',
     })
   })
 })
@@ -71,6 +75,7 @@ describe('what the run store logs', () => {
       intent: 'a 3v3 regulator',
       datasheets: { U1: 'https://example.com/u1.pdf' },
       time_limit_s: 20,
+      no_solver_budget: false,
       review: true,
       ground: true,
     })
@@ -84,8 +89,12 @@ describe('what the run store logs', () => {
       intent_chars: 15,
       datasheets: 1,
       time_limit_s: 20,
+      no_solver_budget: false,
       review: true,
       ground: true,
+      orchestrator_model: 'gemini-3.7-flash',
+      thinking_level: 'auto',
+      quota_rpm: 'auto',
     })
     expect(get(run).id).toBe('r1')
   })
@@ -777,11 +786,16 @@ describe('stageEvent: the feed', () => {
   })
 
   it('keeps the session model attributed to the orchestrator across worker calls', () => {
-    startRun({ intent: 'board', datasheets: {} })
+    startRun(
+      { intent: 'board', datasheets: {} },
+      { model: 'gemini-3.1-pro-preview', thinkingLevel: 'high', quotaRpm: '6' },
+    )
     stageEvent({
       event: 'chat.accepted',
       layer: 'orchestrator',
       model: 'gemini-root',
+      thinking_level: 'high',
+      quota_rpm: 6,
     })
     stageEvent({
       event: 'model.call',
@@ -792,6 +806,12 @@ describe('stageEvent: the feed', () => {
     })
 
     expect(get(run).actualModel).toBe('gemini-root')
+    expect(get(run)).toMatchObject({
+      orchestratorModel: 'gemini-3.1-pro-preview',
+      thinkingLevel: 'high',
+      actualThinkingLevel: 'high',
+      quotaRpm: '6',
+    })
   })
 
   it('moves the orchestrator answer into the transcript rather than the activity feed', () => {

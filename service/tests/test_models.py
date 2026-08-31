@@ -1,5 +1,7 @@
 """Model discovery is dynamic, but selection stays server-controlled."""
 
+import pytest
+
 from service import models
 
 
@@ -38,3 +40,44 @@ def test_an_arbitrary_model_id_is_rejected():
         assert "available Gemini model" in str(exc)
     else:  # pragma: no cover - the assertion above is the contract
         raise AssertionError("an unadvertised model was accepted")
+
+
+@pytest.mark.parametrize(
+    ("requested", "expected"),
+    [
+        (None, None),
+        ("", None),
+        ("auto", None),
+        ("LOW", "low"),
+        ("medium", "medium"),
+        ("high", "high"),
+    ],
+)
+def test_thinking_level_is_normalized(requested, expected):
+    assert models.select_thinking_level(requested) == expected
+
+
+def test_an_unsupported_thinking_level_is_rejected():
+    with pytest.raises(ValueError, match="thinking_level"):
+        models.select_thinking_level("off")
+
+
+@pytest.mark.parametrize(
+    ("requested", "expected"),
+    [(None, None), ("auto", None), (3, 3), ("6", 6), (15, 15)],
+)
+def test_quota_rpm_is_normalized(requested, expected):
+    assert models.select_quota_rpm(requested) == expected
+
+
+@pytest.mark.parametrize("requested", [True, 0, 4, 20, "6.0", "fast"])
+def test_an_unsupported_quota_rpm_is_rejected(requested):
+    with pytest.raises(ValueError, match="quota_rpm"):
+        models.select_quota_rpm(requested)
+
+
+def test_fallback_catalog_keeps_both_demo_orchestrators_selectable():
+    catalog = models._fallback("offline")
+    ids = {item["id"] for item in catalog["models"]}
+
+    assert {"gemini-3.7-flash", "gemini-3.1-pro-preview"} <= ids
