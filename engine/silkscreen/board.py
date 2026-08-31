@@ -18,7 +18,15 @@ from collections import Counter
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from .footprints import Footprint, UnsupportedPackage, for_passive, lqfp, soic, sot223
+from .footprints import (
+    Footprint,
+    UnsupportedPackage,
+    for_passive,
+    lqfp,
+    silk_segments,
+    soic,
+    sot223,
+)
 from .ids import stable_uuid
 from .netlist import CircuitSpec
 from .packing import Layer, Part, Placement, pack
@@ -450,17 +458,16 @@ def emit_kicad_pcb(
                 f' (uuid "{_uuid(part.ref + f"crt{i}")}"))'
             )
 
-        if fp.body_w_nm and fp.body_h_nm:
-            bw, bh = fp.body_w_nm, fp.body_h_nm
-            bpts = [(-bw, -bh), (bw, -bh), (bw, bh), (-bw, bh)]
-            for i in range(4):
-                sx, sy = bpts[i]
-                ex, ey = bpts[(i + 1) % 4]
-                out.append(
-                    f"    (fp_line (start {f(sx)} {f(sy)}) (end {f(ex)} {f(ey)})"
-                    f' (stroke (width 0.12) (type solid)) (layer "{side}.SilkS")'
-                    f' (uuid "{_uuid(part.ref + f"silk{i}")}"))'
-                )
+        # The body outline, clipped clear of the pads: stroking the raw body
+        # rectangle put ink on every pad the body edge touches (see
+        # footprints.silk_segments), and ink on a pad is a solderability
+        # defect a fab will clip or flag.
+        for i, (sx, sy, ex, ey) in enumerate(silk_segments(fp)):
+            out.append(
+                f"    (fp_line (start {f(sx)} {f(sy)}) (end {f(ex)} {f(ey)})"
+                f' (stroke (width 0.12) (type solid)) (layer "{side}.SilkS")'
+                f' (uuid "{_uuid(part.ref + f"silk{i}")}"))'
+            )
 
         for pad in fp.pads:
             idx = net_index.get(pad.net, 0)
