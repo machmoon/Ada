@@ -32,6 +32,28 @@ _PRO_ORCHESTRATOR_MODEL = "gemini-3.1-pro-preview"
 
 
 def _fallback(reason: str = "") -> dict[str, Any]:
+    opencode_model = os.getenv("OPENCODE_FALLBACK_MODEL", "").strip()
+    google_key = os.getenv("GOOGLE_API_KEY") or os.getenv("GEMINI_API_KEY")
+    if opencode_model and not google_key:
+        return {
+            "default": "auto",
+            "auto_model": opencode_model,
+            "source": "opencode",
+            "models": [
+                {
+                    "id": opencode_model,
+                    "name": f"OpenCode fallback · {opencode_model.rsplit('/', 1)[-1]}",
+                    "description": (
+                        "Text-only local fallback. The deterministic verifier "
+                        "still gates every generated board."
+                    ),
+                    "input_token_limit": None,
+                    "output_token_limit": None,
+                    "thinking": None,
+                }
+            ],
+            **({"warning": reason} if reason else {}),
+        }
     models = []
     for model_id, label in (
         (DEFAULT_MODEL, "Default Gemini model"),
@@ -130,7 +152,7 @@ def select_model(requested: object, catalog: dict[str, Any]) -> str:
         return str(catalog.get("auto_model") or DEFAULT_MODEL)
     allowed = {str(item.get("id") or "") for item in catalog.get("models", [])}
     if choice not in allowed:
-        raise ValueError("'model' must be 'auto' or an available Gemini model")
+        raise ValueError("'model' must be 'auto' or an available model")
     return choice
 
 

@@ -2,6 +2,7 @@
 
 import http.client
 import json
+import math
 import os
 import re
 import socket
@@ -13,12 +14,15 @@ import urllib.request
 from pathlib import Path
 
 import pytest
+from pcb_verifier.grader import board_to_dict
+from pcb_verifier.pcb_repair import demo_board
+from pcb_verifier.traces import MemoryFailureTraceStore
 from silkscreen.agents.adk.orchestrator import OrchestratorResult
 from silkscreen.agents.model import ScriptedModel
 from silkscreen.kicad import footprint_ref, load_board
 from silkscreen.units import to_mm
 
-from service.app import Handler, make_server
+from service.app import Handler, make_server, resolve_placement_policy
 from service.cache import MemoryFactStore
 
 try:
@@ -108,16 +112,20 @@ def scripted():
 @pytest.fixture
 def server():
     store = MemoryFactStore()
+    failure_trace_store = MemoryFailureTraceStore()
     Handler.model_factory = staticmethod(scripted)
     Handler.store = store
+    Handler.failure_trace_store = failure_trace_store
     srv = make_server(port=0)
     thread = threading.Thread(target=srv.serve_forever, daemon=True)
     thread.start()
     srv.store = store
+    srv.failure_trace_store = failure_trace_store
     yield srv
     srv.shutdown()
     srv.server_close()
     Handler.store = None
+    Handler.failure_trace_store = None
 
 
 @pytest.fixture
@@ -218,6 +226,63 @@ def test_generate_returns_a_board(server):
     assert body["board_mm"][0] > 0
 
 
+def test_generate_carries_an_approved_constraint_manifest_and_receipt(server):
+    constraints = {
+        "version": 2,
+        "approved": True,
+        "board_layers": 2,
+        "net_classes": [
+            {
+                "name": "Power",
+                "kind": "power",
+                "nets": ["VIN", "GND"],
+                "allowed_layers": ["F.Cu", "B.Cu"],
+                "max_layer_transitions": 2,
+                "max_vias_per_net": 4,
+                "expected_current_a": 1,
+                "min_trace_width_mm": 0.2,
+                "copper_weight_oz": 1,
+                "max_voltage_drop_v": 0.1,
+                "min_thermal_separation_mm": 5,
+            }
+        ],
+    }
+
+    status, body = post(
+        server,
+        {"intent": "a 3.3V regulator", "time_limit_s": 5, "constraints": constraints},
+    )
+
+    assert status == 200
+    assert body["constraint_manifest"]["approved"] is True
+    assert body["constraint_manifest"]["net_classes"][0]["nets"] == ["VIN", "GND"]
+    assert body["constraint_receipt"]["hard_gate"] in {"passed", "blocked"}
+    assert body["constraint_receipt"]["net_classes"][0]["net_class"] == "Power"
+    assert body["promotion_status"] == (
+        "constraint_passed"
+        if body["constraint_receipt"]["promotable"]
+        else "constraint_blocked"
+    )
+
+
+def test_generate_rejects_unapproved_constraints_before_model_work(server):
+    status, body = post(
+        server,
+        {
+            "intent": "a 3.3V regulator",
+            "constraints": {
+                "version": 1,
+                "approved": False,
+                "board_layers": 2,
+                "net_classes": [],
+            },
+        },
+    )
+
+    assert status == 400
+    assert "approved" in body["error"]
+
+
 @pytest.mark.skipif(not _HAS_ADK, reason="the 'adk' extra is not installed")
 def test_the_adk_engine_answers_with_the_same_contract(monkeypatch, server):
     """Which driver ran is an implementation detail; the response is not.
@@ -268,6 +333,331 @@ def test_the_adk_engine_answers_with_the_same_contract(monkeypatch, server):
     assert body["blockers"] == sdk_body["blockers"]
 
 
+def test_placement_repair_is_model_free_and_geometry_grounded(server):
+    status, body = post(
+        server,
+        {"profile": "compact-control", "policy": "deterministic"},
+        path="/placement/repair",
+    )
+
+    assert status == 200
+    assert body["completed"] is True
+    assert body["policy"] == "deterministic"
+    assert body["score"]["before"]["hard"] > 0
+    assert body["score"]["after"]["hard"] == 0
+    assert "total" not in body["score"]["before"]
+    assert body["reward"]["outcome"] == 1
+    assert 0 < body["reward"]["preference"] <= 0.1
+    assert "quality" not in body["reward"]
+    assert body["steps"][0]["accepted"]
+
+
+@pytest.mark.parametrize(
+    ("available", "expected"),
+    [
+        ({"hybrid": True, "tinker": True, "ollama": True}, "hybrid"),
+        ({"tinker": True, "ollama": True}, "tinker"),
+        ({"ollama": True}, "ollama"),
+        ({}, "deterministic"),
+    ],
+)
+def test_fast_policy_resolves_to_best_configured_backend(available, expected):
+    assert resolve_placement_policy("fast", available) == expected
+
+
+def test_fast_policy_falls_back_safely(server, monkeypatch):
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    monkeypatch.delenv("GOOGLE_API_KEY", raising=False)
+    monkeypatch.delenv("TINKER_API_KEY", raising=False)
+    monkeypatch.delenv("TINKER_PLACEMENT_MODEL", raising=False)
+    monkeypatch.delenv("OLLAMA_PLACEMENT_URL", raising=False)
+
+    status, body = post(
+        server,
+        {"profile": "compact-control", "policy": "fast"},
+        path="/placement/repair",
+    )
+
+    assert status == 200
+    assert body["requested_policy"] == "fast"
+    assert body["policy"] == "deterministic"
+    assert body["completed"] is True
+
+
+def test_fast_policy_runtime_failure_falls_back_safely(server, monkeypatch):
+    class OfflinePolicy:
+        proposer_name = "ollama"
+
+        def generate(self, prompt, **kwargs):
+            del prompt, kwargs
+            raise OSError("local policy endpoint refused the connection")
+
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    monkeypatch.delenv("GOOGLE_API_KEY", raising=False)
+    monkeypatch.delenv("TINKER_API_KEY", raising=False)
+    monkeypatch.delenv("TINKER_PLACEMENT_MODEL", raising=False)
+    monkeypatch.setenv("OLLAMA_PLACEMENT_URL", "http://offline.invalid")
+    monkeypatch.setattr("service.app.build_ollama_model", OfflinePolicy)
+
+    status, body = post(
+        server,
+        {"profile": "compact-control", "policy": "fast"},
+        path="/placement/repair",
+    )
+
+    assert status == 200
+    assert body["requested_policy"] == "fast"
+    assert body["policy"] == "deterministic"
+    assert body["completed"] is True
+    assert body["policy_fallback"] == {
+        "from": "ollama",
+        "to": "deterministic",
+        "reason": "fast proposer unavailable",
+    }
+
+
+def test_fast_policy_provider_specific_failure_falls_back(server, monkeypatch):
+    class BrokenPolicy:
+        proposer_name = "gemma-local"
+
+        def generate(self, prompt, **kwargs):
+            del prompt, kwargs
+            raise RuntimeError("provider response schema changed")
+
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    monkeypatch.delenv("GOOGLE_API_KEY", raising=False)
+    monkeypatch.delenv("TINKER_API_KEY", raising=False)
+    monkeypatch.delenv("TINKER_PLACEMENT_MODEL", raising=False)
+    monkeypatch.setenv("OLLAMA_PLACEMENT_URL", "http://offline.invalid")
+    monkeypatch.setattr("service.app.build_ollama_model", BrokenPolicy)
+
+    status, body = post(
+        server,
+        {"profile": "compact-control", "policy": "fast"},
+        path="/placement/repair",
+    )
+
+    assert status == 200
+    assert body["policy"] == "deterministic"
+    assert body["completed"] is True
+    assert body["policy_fallback"]["reason"] == "fast proposer unavailable"
+
+
+def test_fast_policy_unusable_output_falls_back(server, monkeypatch):
+    class EmptyPolicy:
+        proposer_name = "gemma-local"
+
+        def generate(self, prompt, **kwargs):
+            del prompt, kwargs
+            return '{"message": {}}'
+
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    monkeypatch.delenv("GOOGLE_API_KEY", raising=False)
+    monkeypatch.delenv("TINKER_API_KEY", raising=False)
+    monkeypatch.delenv("TINKER_PLACEMENT_MODEL", raising=False)
+    monkeypatch.setenv("OLLAMA_PLACEMENT_URL", "http://offline.invalid")
+    monkeypatch.setattr("service.app.build_ollama_model", EmptyPolicy)
+
+    status, body = post(
+        server,
+        {"profile": "compact-control", "policy": "fast", "max_turns": 1},
+        path="/placement/repair",
+    )
+
+    assert status == 200
+    assert body["policy"] == "deterministic"
+    assert body["completed"] is True
+    assert body["policy_fallback"] == {
+        "from": "ollama",
+        "to": "deterministic",
+        "reason": "fast proposer did not complete repair",
+    }
+
+
+def test_placement_feedback_is_request_local_without_authentication(server):
+    first_status, first = post(
+        server,
+        {
+            "profile": "compact-control",
+            "feedback": {"fixed_refs_add": ["C1"]},
+        },
+        path="/placement/repair",
+    )
+    second_status, second = post(
+        server,
+        {"profile": "compact-control"},
+        path="/placement/repair",
+    )
+
+    assert first_status == second_status == 200
+    assert first["profile_memory"] == "request-only"
+    assert second["profile_memory"] == "none"
+    assert "C1" in first["profile"]["fixed_refs"]
+    assert "C1" not in second["profile"]["fixed_refs"]
+
+
+def test_placement_rejects_unauthenticated_server_profile_memory(server):
+    status, body = post(
+        server,
+        {"profile": "compact-control", "profile_id": "shared-team"},
+        path="/placement/repair",
+    )
+
+    assert status == 400
+    assert "unauthenticated placement endpoint" in body["error"]
+
+
+@pytest.mark.parametrize("value", [b"NaN", b"Infinity", b"-Infinity", b"1e309"])
+def test_non_finite_json_is_rejected_before_placement(server, value):
+    raw = b'{"profile":{"clearance":' + value + b"}}"
+    status, _, body_bytes = post_raw(
+        server,
+        "/placement/repair",
+        body=raw,
+        content_length=len(raw),
+    )
+    body = json.loads(body_bytes)
+
+    assert status == 400
+    assert "non-finite number" in body["error"]
+
+
+def test_extreme_finite_geometry_is_rejected_before_scoring(server):
+    board = board_to_dict(demo_board())
+    board["components"][0]["x"] = 1e308
+
+    status, body = post(
+        server,
+        {"board": board, "profile": "compact-control"},
+        path="/placement/repair",
+    )
+
+    assert status == 400
+    assert "must be between" in body["error"]
+
+
+def test_request_sized_candidate_grid_is_rejected(server):
+    board = {
+        "width": 2000,
+        "height": 2000,
+        "components": [
+            {"ref": "U1", "x": 1, "y": 1, "width": 10, "height": 10},
+            {"ref": "U2", "x": 2, "y": 2, "width": 10, "height": 10},
+        ],
+    }
+
+    status, body = post(
+        server,
+        {"board": board, "profile": "compact-control"},
+        path="/placement/repair",
+    )
+
+    assert status == 400
+    assert "candidate grid exceeds" in body["error"]
+
+
+def test_unserializable_placement_result_is_a_json_500(server, monkeypatch):
+    monkeypatch.setattr(
+        "service.app._run_placement_policy",
+        lambda *args, **kwargs: {"score": math.inf, "completed": True},
+    )
+
+    status, body = post(
+        server,
+        {"profile": "compact-control"},
+        path="/placement/repair",
+    )
+
+    assert status == 500
+    assert body["error"] == "internal error"
+    assert body["error_id"]
+
+
+def test_placement_rejects_unknown_profile(server):
+    status, body = post(
+        server,
+        {"profile": "anything-goes"},
+        path="/placement/repair",
+    )
+    assert status == 400
+    assert "unknown placement profile" in body["error"]
+
+
+def test_placement_tinker_policy_requires_promoted_checkpoint(server, monkeypatch):
+    monkeypatch.delenv("TINKER_API_KEY", raising=False)
+    monkeypatch.delenv("TINKER_PLACEMENT_MODEL", raising=False)
+
+    status, body = post(
+        server,
+        {"profile": "compact-control", "policy": "tinker"},
+        path="/placement/repair",
+    )
+
+    assert status == 400
+    assert "TINKER_PLACEMENT_MODEL" in body["error"]
+
+
+def test_policy_failures_are_consent_aware_training_traces(server, monkeypatch):
+    class RejectingPolicy:
+        proposer_name = "qwen-tinker"
+
+        def generate(self, prompt, **kwargs):
+            del prompt, kwargs
+            return "MOVE MADE_UP 1 1"
+
+    monkeypatch.setattr("service.app.build_tinker_model", lambda: RejectingPolicy())
+    trace_store = Handler.failure_trace_store
+    assert isinstance(trace_store, MemoryFailureTraceStore)
+
+    status, demo = post(
+        server,
+        {"profile": "compact-control", "policy": "tinker"},
+        path="/placement/repair",
+    )
+    assert status == 200
+    assert demo["failure_trace_count"] > 0
+    demo_trace_count = len(trace_store.traces)
+    assert trace_store.traces[0]["input_origin"] == "demo-board"
+
+    status, private = post(
+        server,
+        {
+            "board": demo["start"],
+            "profile": "compact-control",
+            "policy": "tinker",
+        },
+        path="/placement/repair",
+    )
+    assert status == 200
+    assert private["failure_trace_count"] == 0
+    assert len(trace_store.traces) == demo_trace_count
+
+    status, opted_in = post(
+        server,
+        {
+            "board": demo["start"],
+            "profile": "compact-control",
+            "policy": "tinker",
+            "record_trace": True,
+        },
+        path="/placement/repair",
+    )
+    assert status == 200
+    assert opted_in["failure_trace_count"] > 0
+    assert trace_store.traces[-1]["input_origin"] == "uploaded-board"
+
+
+def test_placement_rejects_non_boolean_trace_consent(server):
+    status, body = post(
+        server,
+        {"record_trace": "yes"},
+        path="/placement/repair",
+    )
+
+    assert status == 400
+    assert body["error"] == "record_trace must be a boolean"
+
+
 def test_intent_is_required(server):
     status, body = post(server, {})
     assert status == 400 and "intent" in body["error"]
@@ -280,7 +670,8 @@ def test_datasheets_must_be_an_object(server):
 
 def test_malformed_json_is_400(server):
     req = urllib.request.Request(
-        url(server, "/generate"), data=b"{not json",
+        url(server, "/generate"),
+        data=b"{not json",
         headers={"Content-Type": "application/json"},
     )
     try:
@@ -921,9 +1312,7 @@ def test_placements_carry_the_contract(server):
     assert placements["board_mm"] == body["board_mm"], (
         "one board size, reported once -- two copies that can disagree is a bug"
     )
-    assert [p["ref"] for p in placements["parts"]] == [
-        p["ref"] for p in body["parts"]
-    ]
+    assert [p["ref"] for p in placements["parts"]] == [p["ref"] for p in body["parts"]]
 
     for part in placements["parts"]:
         assert set(part) == PART_KEYS
@@ -1089,8 +1478,7 @@ def test_placements_are_additive(server):
     ):
         assert key in body, f"{key} disappeared from the response"
     assert all(set(p) == {"ref", "footprint"} for p in body["parts"]), (
-        "the flat parts list is a separate contract; geometry belongs in "
-        "placements"
+        "the flat parts list is a separate contract; geometry belongs in placements"
     )
     assert "grounding" not in body, "grounding stays opt-in"
 
@@ -1294,9 +1682,7 @@ def test_the_web_dist_env_var_is_honoured_by_a_fresh_import(tmp_path):
         [
             sys.executable,
             "-c",
-            "import service.app as app;"
-            "print(app.WEB_DIST);"
-            "print(app.Handler.web_root)",
+            "import service.app as app;print(app.WEB_DIST);print(app.Handler.web_root)",
         ],
         capture_output=True,
         text=True,
@@ -1310,14 +1696,14 @@ def test_the_web_dist_env_var_is_honoured_by_a_fresh_import(tmp_path):
     assert reported == [dist, dist], (
         "the override has to reach Handler.web_root, not just the constant"
     )
+
+
 GROUND_REVIEW = {
     "findings": [
         {
             "severity": "marginal",
             "title": "VOUT capacitor may be undersized",
-            "detail": (
-                "The output requires a 22uF tantalum capacitor for stability"
-            ),
+            "detail": ("The output requires a 22uF tantalum capacitor for stability"),
             "parts": ["C2"],
             "citation": "p.3",
             "suggested_fix": "use 22uF tantalum",
@@ -1704,9 +2090,7 @@ def test_models_lists_the_server_catalog(server):
     assert catalog["models"][0]["id"] == "gemini-test"
 
 
-def test_chat_stream_wraps_the_pipeline_in_an_orchestrator_turn(
-    monkeypatch, server
-):
+def test_chat_stream_wraps_the_pipeline_in_an_orchestrator_turn(monkeypatch, server):
     import service.app as app
 
     previous_catalog = Handler.__dict__["model_catalog_factory"]
@@ -1796,6 +2180,40 @@ def test_chat_stream_wraps_the_pipeline_in_an_orchestrator_turn(
     assert orchestrator_calls[0]["model"] == "gemini-3.1-pro-preview"
     assert orchestrator_calls[0]["thinking_level"] == "high"
     assert orchestrator_calls[0]["before_model_call"] is not None
+
+
+def test_chat_orchestrator_runs_approved_request_through_opencode_fallback(
+    monkeypatch,
+):
+    import service.app as app
+
+    monkeypatch.delenv("GOOGLE_API_KEY", raising=False)
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    monkeypatch.setenv("OPENCODE_FALLBACK_MODEL", "opencode-go/glm-5.3-flash")
+    events = []
+    result = {"status": "FEASIBLE", "parts": [{"ref": "U1"}], "nets": ["GND"]}
+
+    outcome = app.run_chat_orchestrator(
+        message="approved regulator",
+        clarification="",
+        model="opencode-go/glm-5.3-flash",
+        thinking_level=None,
+        session_id="fallback-test",
+        generate=lambda: result,
+        emit=events.append,
+        debug=False,
+        before_model_call=lambda: None,
+    )
+
+    assert outcome.result is result
+    assert outcome.needs_clarification is False
+    assert [event["event"] for event in events] == [
+        "tool.start",
+        "tool.done",
+        "assistant.message",
+    ]
+    assert events[1]["result"]["parts"] == 1
+    assert "OpenCode fallback" in outcome.assistant
 
 
 def test_chat_stream_rejects_an_invalid_reasoning_effort_before_streaming(server):

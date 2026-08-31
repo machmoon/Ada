@@ -1,0 +1,44 @@
+{
+  "plugin": "devpost-hackathon",
+  "version": 2,
+  "hackathon": {
+    "slug": "allthingsagentichackathon",
+    "name": "All Things Agentic Hackathon",
+    "url": "https://allthingsagentichackathon.devpost.com/",
+    "selected": true,
+    "source": "devpost"
+  },
+  "participant": {
+    "name": "",
+    "display_name": "Ajinkya"
+  },
+  "project": {
+    "name": "Silkscreen Placement Agent",
+    "summary": "A verifiable agent that repairs PCB placement faults and follows a hardware team's explicit layout preferences.",
+    "ai_usage": "Gemini can recover failed placement proposals; deterministic geometry verifies every move; synthetic and failure traces support later Qwen SFT, preference training, and RL.",
+    "codex_usage": "Planning, implementation, testing, integration, and verification support."
+  },
+  "current_stage": "resources",
+  "completed_stages": [
+    "start-hackathon"
+  ],
+  "rules_acknowledged": false,
+  "learning": {
+    "status": "active",
+    "current_step": "build",
+    "completed_steps": [
+      "onboard",
+      "scope",
+      "prd",
+      "spec",
+      "checklist"
+    ],
+    "plan_file": "docs/hackathon-build/spec.md",
+    "checklist_file": "docs/hackathon-build/checklist.md"
+  },
+  "submission": {
+    "draft_file": "DEVPOST.md",
+    "status": "not-started"
+  },
+  "next_command": "build-project"
+}

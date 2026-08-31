@@ -10,6 +10,7 @@ import {
   generate,
   generateStream,
   listModels,
+  normalizePlacementRequest,
   normalizeRequest,
   requestBytes,
 } from './api.js'
@@ -251,6 +252,71 @@ describe('normalizeRequest', () => {
       'review',
       'time_limit_s',
     ])
+  })
+
+  it('includes an approved machine-readable constraint manifest when supplied', () => {
+    const constraints = {
+      approved: true,
+      board_layers: 2,
+      net_classes: [
+        {
+          name: 'I2C',
+          kind: 'i2c',
+          nets: ['SDA', 'SCL'],
+          allowed_layers: ['F.Cu', 'B.Cu'],
+          max_layer_transitions: 2,
+          max_vias_per_net: 2,
+          pullups_required: true,
+          pullup_voltage_v: 3.3,
+        },
+      ],
+    }
+
+    expect(normalizeRequest({ constraints }).constraints).toMatchObject({
+      approved: true,
+      board_layers: 2,
+      net_classes: [{ nets: ['SDA', 'SCL'], max_layer_transitions: 2 }],
+    })
+  })
+})
+
+describe('normalizePlacementRequest', () => {
+  it('defaults to the reproducible placement demo', () => {
+    expect(normalizePlacementRequest()).toEqual({
+      profile: 'compact-control',
+      policy: 'deterministic',
+    })
+  })
+
+  it('keeps structured feedback and normalizes the policy', () => {
+    expect(
+      normalizePlacementRequest({
+        profile: 'thermal-first',
+        policy: 'gemini',
+        feedback: { fixed_refs_add: ['C1'] },
+      }),
+    ).toEqual({
+      profile: 'thermal-first',
+      policy: 'gemini',
+      feedback: { fixed_refs_add: ['C1'] },
+    })
+  })
+
+  it('does not forward caller-selected profile memory ids', () => {
+    expect(
+      normalizePlacementRequest({ profile_id: 'shared-team' }).profile_id,
+    ).toBeUndefined()
+  })
+
+  it.each(['fast', 'deterministic', 'gemini', 'ollama', 'tinker', 'hybrid'])(
+    'preserves the supported %s policy',
+    (policy) => {
+      expect(normalizePlacementRequest({ policy }).policy).toBe(policy)
+    },
+  )
+
+  it('falls back when the placement policy is unknown', () => {
+    expect(normalizePlacementRequest({ policy: 'invented' }).policy).toBe('deterministic')
   })
 })
 

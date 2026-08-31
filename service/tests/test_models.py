@@ -37,7 +37,7 @@ def test_an_arbitrary_model_id_is_rejected():
     try:
         models.select_model("gemini-invented", catalog)
     except ValueError as exc:
-        assert "available Gemini model" in str(exc)
+        assert "available model" in str(exc)
     else:  # pragma: no cover - the assertion above is the contract
         raise AssertionError("an unadvertised model was accepted")
 
@@ -81,3 +81,19 @@ def test_fallback_catalog_keeps_both_demo_orchestrators_selectable():
     ids = {item["id"] for item in catalog["models"]}
 
     assert {"gemini-3.7-flash", "gemini-3.1-pro-preview"} <= ids
+
+
+def test_fallback_catalog_advertises_only_configured_opencode_without_google(
+    monkeypatch,
+):
+    monkeypatch.delenv("GOOGLE_API_KEY", raising=False)
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    monkeypatch.setenv("OPENCODE_FALLBACK_MODEL", "opencode-go/glm-5.3-flash")
+
+    catalog = models._fallback("Gemini unavailable")
+
+    assert catalog["source"] == "opencode"
+    assert catalog["auto_model"] == "opencode-go/glm-5.3-flash"
+    assert [item["id"] for item in catalog["models"]] == [
+        "opencode-go/glm-5.3-flash"
+    ]

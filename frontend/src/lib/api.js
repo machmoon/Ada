@@ -4,11 +4,13 @@
 
 import { logError, logEvent, logWarn } from './log.js'
 import { parseNdjson } from './stream.js'
+import { normalizeConstraintManifest } from './constraints.js'
 
 const ENDPOINT = '/generate'
 const STREAM_ENDPOINT = '/generate/stream'
 const CHAT_STREAM_ENDPOINT = '/chat/stream'
 const MODELS_ENDPOINT = '/models'
+const PLACEMENT_ENDPOINT = '/placement/repair'
 const NDJSON_TYPE = 'application/x-ndjson'
 const TIMEOUT_MESSAGE = 'The run passed the 300 second budget and was cancelled.'
 
@@ -42,7 +44,7 @@ export function normalizeRequest(request) {
     const u = String(url).trim()
     if (p && u) datasheets[p] = u
   }
-  return {
+  const normalized = {
     intent: String(request.intent ?? '').trim(),
     datasheets,
     time_limit_s: clampTimeLimit(request.time_limit_s),
@@ -55,6 +57,53 @@ export function normalizeRequest(request) {
     // is the service's default, so a stray `ground: false` would say nothing.
     ...(request.ground === true ? { ground: true } : {}),
   }
+  if (request.constraints && typeof request.constraints === 'object') {
+    normalized.constraints = normalizeConstraintManifest(request.constraints)
+  }
+  return normalized
+}
+
+export function normalizePlacementRequest(request = {}) {
+  const policies = new Set(['fast', 'deterministic', 'gemini', 'ollama', 'tinker', 'hybrid'])
+  const requestedPolicy = String(request.policy || 'deterministic')
+  const profile =
+    request.profile && typeof request.profile === 'object'
+      ? request.profile
+      : String(request.profile || 'compact-control')
+  const normalized = {
+    profile,
+    policy: policies.has(requestedPolicy) ? requestedPolicy : 'deterministic',
+  }
+  if (request.board && typeof request.board === 'object') normalized.board = request.board
+  if (request.feedback && typeof request.feedback === 'object') {
+    normalized.feedback = request.feedback
+  }
+  return normalized
+}
+
+export async function repairPlacement(request) {
+  const body = JSON.stringify(normalizePlacementRequest(request))
+  guardSize(body)
+  let response
+  try {
+    response = await fetch(PLACEMENT_ENDPOINT, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body,
+    })
+  } catch (err) {
+    throw new ApiError('network', String(err && err.message ? err.message : err))
+  }
+  let data = {}
+  try {
+    data = await response.json()
+  } catch {
+    throw new ApiError('internal', 'The placement service returned invalid JSON.', {
+      status: response.status,
+    })
+  }
+  if (!response.ok) throw errorFor(response.status, data)
+  return data
 }
 
 export function requestBytes(request) {

@@ -132,7 +132,11 @@ class GeminiEmbedder:
 
         import os
 
-        key = api_key or os.getenv("GOOGLE_API_KEY")
+        key = (
+            api_key
+            or os.getenv("GOOGLE_API_KEY")
+            or os.getenv("GEMINI_API_KEY")
+        )
         if not key:
             raise ModelError("GOOGLE_API_KEY is not set.")
         self._client = genai.Client(api_key=key)

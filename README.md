@@ -100,7 +100,7 @@ Every stage is a real KiCad file you can open and inspect on its own, so you can
 where a design went wrong instead of only seeing the last artifact.
 
 ```
-727 tests collected — no network, no API key, no KiCad install
+807 tests collected — no network, no API key, no KiCad install
 ```
 
 **Next:** [full install guide and troubleshooting](docs/install.md) ·
@@ -174,14 +174,89 @@ Platform-by-platform commands are in [docs/install.md](docs/install.md#kicad-opt
 | `order.py` — order options, manufacturability preflight | **Working** · blocks an unrouted board |
 | `mcp/` — MCP server over stdio | **Working** · 43 tests |
 | `audit/` — optional visual design review | **Working** · 52 tests |
-| `service/` — Cloud Run + Firestore cache | **Working** · 108 tests · not deployed anywhere yet; no live URL |
+| `service/` — Cloud Run + Firestore cache | **Working** · 132 tests · not deployed anywhere yet; no live URL |
 | `frontend/` — Svelte review UI, served by the service | **Working** · persistent orchestrator chat, expandable model/tool traces, session JSON, review, schematic and board tabs |
 | Voice / talk input | Not built |
+| `pcb_verifier/` — placement repair, company profiles, portable rewards | **Working** · deterministic and Gemini policies |
 | Overlay UI, guided cursor | Not built (mockups only) |
 
 Every module above is covered by tests that run with no network, no API key, and no
 KiCad install. The count is deliberately not quoted here — it drifts, and
 `scripts/check_docs.py` fails CI when a quoted one goes stale.
+
+---
+
+## PCB placement agent
+
+Open `/?mode=placement` on the service to run the focused hackathon demo. It
+starts from an intentionally damaged motor-controller placement, applies either
+the Compact Control or Thermal First company profile, and shows the exact
+geometry score before and after every accepted repair.
+
+The legality boundary is deterministic: board bounds, courtyard clearance,
+keepouts, and fixed parts. Company preferences are lower-priority terms for
+functional grouping, connector access, compactness, and thermal separation.
+Gemini can propose `PLACE` and `MOVE` actions, but it cannot override the
+verifier. The model-free policy remains available for reproducible demos.
+
+An engineer can reject a move and pin that component into the company profile.
+The demo persists the correction in browser-local storage, isolated from other
+visitors. The public API applies feedback only to the current request and rejects
+caller-selected server memory IDs. The repaired placement downloads as JSON.
+
+See [the placement-agent architecture](docs/placement-agent.md) for the precise
+agent, supervised fine-tuning, reinforcement learning, and verifier boundary.
+
+Before generation, the main board flow now proposes a versioned net and routing
+contract from the prompt. The engineer must confirm exact nets, electrical limits,
+allowed layers, via budgets, and mechanical constraints before build. The receipt
+then marks every hard check as verified, violated, unresolved, or not required.
+Violations and unresolved high-risk checks block promotion. Soft preferences such
+as shorter traces, fewer vias, compact grouping, thermal separation, and connector
+access only rank boards that already pass the hard gate. Impedance, continuous
+reference planes, routed stubs, guards, and component height stay unresolved until
+the project has the required stackup, zone, topology, or package-height evidence.
+
+---
+
+## Install
+
+**1. Silkscreen itself** — Python 3.11+, no KiCad required:
+
+```bash
+git clone https://github.com/machmoon/silkscreen && cd silkscreen
+python3 -m venv .venv
+./.venv/bin/pip install -e ".[dev,agents]"
+```
+
+**2. Model access.** A Gemini key is the primary path and is required for native
+datasheet documents and Gemini embeddings. The local web service can use an
+authenticated OpenCode text model as a temporary final fallback.
+
+```bash
+cp .env.example .env      # then put your GOOGLE_API_KEY in it
+```
+
+For the text-only fallback used by the local demo:
+
+```bash
+echo 'OPENCODE_FALLBACK_MODEL=opencode-go/glm-5.3-flash' >> .env
+```
+
+This fallback is reported as GLM in the build receipt. It is not Gemini and it
+does not handle datasheet documents or semantic retrieval.
+
+**3. KiCad** — recommended, so you can open the result:
+
+| Platform | Command |
+|---|---|
+| macOS | `brew install --cask kicad` |
+| Windows | `winget install KiCad.KiCad` |
+| Debian/Ubuntu | `sudo add-apt-repository ppa:kicad/kicad-8.0-releases && sudo apt install kicad` |
+| Fedora / any Linux | `flatpak install flathub org.kicad.KiCad` |
+
+Or download from [kicad.org/download](https://www.kicad.org/download/). Then open the
+output with **File → Open** in the PCB Editor, or `pcbnew placed.kicad_pcb`.
 
 ---
 
@@ -374,7 +449,7 @@ treats the board file as the interface.
 | Requires KiCad running | Yes | **No** |
 | Headless / CI | Hard | **Native** |
 | Platform lock | KiCad's plugin loader | **None — pure Python** |
-| Testable without KiCad | No | **Yes, all 727 tests** |
+| Testable without KiCad | No | **Yes, all 807 tests** |
 
 ### What it reads
 
@@ -721,7 +796,7 @@ engine/
       pipeline.py   prompt -> PCB
       adk/          ADK dynamic workflow over the same stage bodies
     audit/        optional visual review of a finished board
-  tests/          727 tests — no network, no API keys, no KiCad
+  tests/          807 tests — no network, no API keys, no KiCad
     fixtures/     ref.kicad_pcb -- 11-footprint board fixture
 scripts/
   demo.py         end-to-end: read -> place -> write -> verify
@@ -809,7 +884,7 @@ docker build .                                      # the `docker` job
 
 ### Expected output
 
-**1. Test suite** — 727 tests (live-model and local-simulator cases skip when
+**1. Test suite** — 807 tests (live-model and local-simulator cases skip when
 their optional dependency is unavailable):
 
 ```

@@ -1,5 +1,5 @@
-/* Drafting Table — every value below is lifted from design/Review.dc.html.
-   Change a token here rather than hard-coding a colour in a component.
+/* Drafting Table palette. Change a token here rather than hard-coding a
+   colour in a component.
 
    Night mode is the same instrument under a lamp rather than daylight: the
    hues and the elevation order are the daylight palette's, read against a dark
@@ -11,31 +11,35 @@
 
   /* paper stack, lightest surface to deepest well in daylight; the same
      raised-to-recessed order, mirrored, at night */
-  --paper: light-dark(#F5F4EF, #1B1B19);      /* KiCad schematic paper, the app background */
-  --surface: light-dark(#FCFBF8, #232320);    /* cards, title bar */
-  --rail: light-dark(#FAF9F5, #1F1F1D);       /* right rail */
-  --well: light-dark(#EDEBE3, #121210);       /* status bar, note chips, selected rows */
+  --paper: light-dark(#F2ECE2, #24231F);      /* warm drafting paper, the app background */
+  --surface: light-dark(#FAF6EE, #2D2B26);    /* cards, title bar */
+  --rail: light-dark(#F6F0E6, #292823);       /* right rail */
+  --well: light-dark(#E7DED0, #1E1D1A);       /* status bar, note chips, selected rows */
 
   /* ink tiers */
-  --ink: light-dark(#14130F, #F0EEE6);
-  --ink-mid: light-dark(#484848, #B9B5AA);
-  --ink-soft: light-dark(#7C796E, #8C8A80);
-  --ink-faint: light-dark(#A9A69A, #6A685F);
+  --ink: light-dark(#241F1A, #E7E1D6);
+  --ink-mid: light-dark(#554E45, #C1BAAE);
+  --ink-soft: light-dark(#726A5E, #9C958A);
+  --ink-faint: light-dark(#A29A8D, #777168);
 
   /* hairlines: --rule bounds the chrome, --rule-soft divides within it */
-  --rule: light-dark(#B5B5B5, #4A4943);
-  --rule-soft: light-dark(#D6D3C8, #34332F);
+  --rule: light-dark(#C7BCAE, #45423C);
+  --rule-soft: light-dark(#DED4C6, #37352F);
 
-  /* the board well, from design/Board.dc.html. It is a dark well in both
-     themes — the board is the board — so none of these turn over at night. */
-  --well-bg: #001023;
-  --well-text: #5B7291;
-  --board-grid-dot: #848484;
-  --board-edge-cuts: #D0D2CD;
-  --board-courtyard: #FF26E2;
-  --board-silkscreen: #F2EDA1;
-  --board-copper-top: #C83434;
-  --board-copper-bottom: #4D7FC4;
+  /* The PCB is a pale drafting object by day and a deep KiCad-like canvas at
+     night. Every layer changes together so the board belongs to the theme. */
+  --well-bg: light-dark(#D9D4C8, #101B29);
+  --well-text: light-dark(#52616D, #6F8198);
+  --board-fill: light-dark(#9FB9C4, #19344F);
+  --board-grid-dot: light-dark(#6E7778, #747C83);
+  --board-edge-cuts: light-dark(#3E4A52, #B7BCB8);
+  --board-courtyard: light-dark(#8C2F72, #D359B8);
+  --board-silkscreen: light-dark(#2F2B16, #DDD7A4);
+  --board-copper-top: light-dark(#A84640, #B84B45);
+  --board-copper-bottom: light-dark(#4B6F9E, #5A7FB3);
+  --board-component-fill: light-dark(rgba(168, 70, 64, .58), rgba(184, 75, 69, .55));
+  --board-power-fill: light-dark(rgba(75, 108, 151, .62), rgba(90, 127, 179, .7));
+  --board-keepout-fill: light-dark(rgba(34, 40, 43, .08), rgba(255, 255, 255, .08));
 
   /* the guided pointer (docs/guided-cursor.md §5). The halo lands on the
      paper chrome and on the always-dark board well alike, so it cannot come
@@ -45,10 +49,10 @@
   --guide-glow: light-dark(rgba(165, 21, 126, .28), rgba(255, 79, 224, .32));
 
   /* KiCad symbol colours, as ink: dark on paper, lifted off the dark ground */
-  --oxblood: light-dark(#840000, #D9736A);
-  --teal: light-dark(#006464, #5FB8B0);
-  --green: light-dark(#009600, #4FB870);
-  --navy: light-dark(#000084, #7FA8E0);
+  --oxblood: light-dark(#8F2F27, #D07A70);
+  --teal: light-dark(#256B68, #71B4AC);
+  --green: light-dark(#347842, #69B77B);
+  --navy: light-dark(#405F8F, #8BA6C8);
 
   /* schematic sheet: KiCad's symbol fill and net-label ink, adapted for the
      same topology in both paper themes */
@@ -59,26 +63,26 @@
   /* the one filled button, and the text that sits on it. Separate from
      --oxblood because a fill and a word on the ground cannot be one colour in
      both themes: at night the fill stays deep and the ink on it goes pale. */
-  --accent: light-dark(#840000, #B23A32);
-  --accent-ink: light-dark(#FCFBF8, #F7EFEC);
-  --accent-off: light-dark(#B5B5B5, #3A3934);
-  --accent-off-ink: light-dark(#FCFBF8, #6A685F);
+  --accent: light-dark(#8F2F27, #A9473E);
+  --accent-ink: light-dark(#FFF8F0, #FFF5F0);
+  --accent-off: light-dark(#C7BCAE, #3B3934);
+  --accent-off-ink: light-dark(#FFF8F0, #777168);
 
   /* severity. The mockup's fourth "sourcing" tier is deliberately dropped —
      the engine has no supplier data, so it could only ever be invented. */
-  --sev-blocker-fg: light-dark(#E6090D, #FF6B63);
-  --sev-blocker-bg: light-dark(#FBEAEA, #2E1A19);
-  --sev-blocker-rule: light-dark(#E6090D, #FF6B63);
+  --sev-blocker-fg: light-dark(#B72E2E, #E47B73);
+  --sev-blocker-bg: light-dark(#F5E4DF, #362320);
+  --sev-blocker-rule: light-dark(#B72E2E, #C8655D);
   --sev-marginal-fg: light-dark(#8A6300, #E7B54A);
   --sev-marginal-bg: light-dark(#F7EFD8, #2C2416);
   --sev-marginal-rule: light-dark(#D19200, #C8912B);
-  --sev-note-fg: light-dark(#484848, #B9B5AA);
-  --sev-note-bg: light-dark(#EDEBE3, #121210);
-  --sev-note-rule: light-dark(#484848, #A8A499);
+  --sev-note-fg: light-dark(#554E45, #C1BAAE);
+  --sev-note-bg: light-dark(#E7DED0, #1E1D1A);
+  --sev-note-rule: light-dark(#554E45, #918A80);
 
   /* shadow colours only; the offsets stay with the thing casting them */
-  --shadow-inset: rgba(0, 0, 0, .5);
-  --shadow-pop: light-dark(rgba(0, 0, 0, .35), rgba(0, 0, 0, .6));
+  --shadow-inset: rgba(0, 0, 0, .38);
+  --shadow-pop: light-dark(rgba(65, 45, 25, .18), rgba(0, 0, 0, .34));
 
   /* geometry */
   --titlebar-h: 44px;
