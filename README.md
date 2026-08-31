@@ -101,7 +101,7 @@ Every stage is a real KiCad file you can open and inspect on its own, so you can
 where a design went wrong instead of only seeing the last artifact.
 
 ```
-841 tests collected — no network, no API key, no KiCad install
+869 tests collected — no network, no API key, no KiCad install
 ```
 
 **Next:** [full install guide and troubleshooting](docs/install.md) ·
@@ -167,7 +167,7 @@ Platform-by-platform commands are in [docs/install.md](docs/install.md#kicad-opt
 | `schematic.py` — `.kicad_sch` + `.kicad_pro` emission | **Working** · 22 tests · KiCad ERC clean |
 | `routing.py` — two-layer grid autorouter | **Working, partial by design** · 20 tests — see below |
 | `footprints.py` + `board.py` — land patterns, board emission | **Working** · 23 tests |
-| `agents/` — datasheet, propose, review, pipeline | **Working** · 35 tests |
+| `agents/` — datasheet, propose, review, pipeline | **Working** · 38 tests |
 | `agents/adk/` — ADK dynamic-workflow driver for the pipeline | **Working** · 20 tests |
 | `agents/retrieval.py` — page-cited datasheet retrieval | **Working** · 15 tests |
 | `agents/resilience.py` — provider failover | **Working** · 15 tests |
@@ -175,7 +175,7 @@ Platform-by-platform commands are in [docs/install.md](docs/install.md#kicad-opt
 | `order.py` — order options, manufacturability preflight | **Working** · blocks an unrouted board |
 | `mcp/` — MCP server over stdio | **Working** · 43 tests |
 | `audit/` — optional visual design review | **Working** · 52 tests |
-| `service/` — Cloud Run + Firestore cache | **Working** · 143 tests · not deployed anywhere yet; no live URL |
+| `service/` — Cloud Run + Firestore cache | **Working** · 146 tests · live at <https://silkscreen-958855443063.us-central1.run.app> |
 | `frontend/` — Svelte review UI, served by the service | **Working** · persistent orchestrator chat, expandable traces, session JSON, review, schematic, placement and board tabs |
 | `engine/silkscreen/placement/` — verifier-grounded repair and company profiles | **Working** · deterministic and Gemini policies; experimental providers are opt-in |
 | `constraints.py` — approved build contract and post-route receipt | **Working** · opt-in, fail-closed, and deterministically tested |
@@ -437,7 +437,7 @@ treats the board file as the interface.
 | Requires KiCad running | Yes | **No** |
 | Headless / CI | Hard | **Native** |
 | Platform lock | KiCad's plugin loader | **None — pure Python** |
-| Testable without KiCad | No | **Yes, all 841 tests** |
+| Testable without KiCad | No | **Yes, all 869 tests** |
 
 ### What it reads
 
@@ -538,11 +538,16 @@ by unit tests, not by the number above.
 
 ```bash
 gcloud run deploy silkscreen --source . --region us-central1 \
-  --set-env-vars GOOGLE_API_KEY=...,GOOGLE_CLOUD_PROJECT=your-project
+  --set-secrets GOOGLE_API_KEY=google-api-key:latest \
+  --set-env-vars GOOGLE_CLOUD_PROJECT=your-project
 ```
 
-Nothing in this repo performs a deploy and no instance is running anywhere — that
-command is the recipe, not a description of something live.
+A live instance is running at
+<https://silkscreen-958855443063.us-central1.run.app> (deployed 2026-08-31 from
+`main`, project `kaleo-hack-2026`; the Gemini key comes from Secret Manager, the
+fact cache from Firestore). Probe it with `/readyz`, not `/healthz` — Google's
+frontend intercepts `/healthz` on `run.app` domains at the edge and answers 404
+before the request reaches the container.
 
 `POST /generate` with `{"intent": "...", "datasheets": {"PART": "url"}}` returns
 the board, the emitted `.kicad_pcb`, and a versioned `schematic` topology block
@@ -793,7 +798,7 @@ engine/
       pipeline.py   prompt -> PCB
       adk/          ADK dynamic workflow over the same stage bodies
     audit/        optional visual review of a finished board
-  tests/          841 tests — no network, no API keys, no KiCad
+  tests/          869 tests — no network, no API keys, no KiCad
     fixtures/     ref.kicad_pcb -- 11-footprint board fixture
 scripts/
   demo.py         end-to-end: read -> place -> write -> verify

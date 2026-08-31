@@ -36,6 +36,12 @@ DEFAULT_MODEL = "gemini-3.7-flash"
 #: Cheaper tier for high-volume mechanical passes.
 CHEAP_MODEL = "gemini-3.5-flash-lite"
 
+#: Open-weights Gemma, served through the same Gemini API. The last rung of the
+#: service fallback chain: when both Gemini tiers are down or throttled, Gemma
+#: degrades the answer rather than losing the request. A different model family
+#: is unlikely to share the Gemini tiers' outage or quota pool.
+GEMMA_MODEL = "gemma-4-31b-it"
+
 
 #: Per-request deadline, in seconds. The SDK sets no timeout of its own, so
 #: without this a degraded model that accepts the connection and never answers

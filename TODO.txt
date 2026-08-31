@@ -88,14 +88,28 @@ feature is tracked under feature 12.
  ----- Request timeout so a hung primary fails over    [DONE]        60 s http_options deadline (SDK unit: ms) on
                                                                      GeminiModel + GeminiEmbedder clients; override
                                                                      SILKSCREEN_MODEL_TIMEOUT_S; timeout -> ModelError
+ ----- Gemma open-weights last-resort rung             [DONE]        gemma-4-31b-it as the third build_model
+                                                                     provider, one attempt; a different model family
+                                                                     is unlikely to share the Gemini tiers' outage
+                                                                     or quota pool. Key-gated live test exercises
+                                                                     the rung for real
  6   Confirmation gates on file writes                 [NOT BUILT]
  ----- Inventory write points, define the gate         [NOT BUILT]   save_board, CLI output, service response
  ----- CLI confirmation prompt before board write      [NOT BUILT]   with a --yes bypass
  ----- Service dry-run mode                            [NOT BUILT]   placement report without writing a board
  7   Cloud Run deployment                              [PARTIAL]
  ----- HTTP surface + Dockerfile, tested offline       [DONE]
- ----- The deploy itself, live URL in README           [NOT BUILT]   gcloud run deploy
- ----- Post-deploy smoke check                         [NOT BUILT]   healthz + one real /generate against live URL
+ ----- The deploy itself, live URL in README           [DONE]        2026-08-31: gcloud run deploy --source from a
+                                                                     clean main clone; project kaleo-hack-2026,
+                                                                     us-central1; key via Secret Manager, Firestore
+                                                                     db created, GOOGLE_CLOUD_PROJECT set
+ ----- Post-deploy smoke check                         [DONE]        /, /models and one real /generate verified
+                                                                     live 2026-08-31: the AMS1117 demo prompt came
+                                                                     back optimal, 5 parts, 3/3 nets routed, in
+                                                                     10.5 s. NOTE: Google's frontend intercepts
+                                                                     /healthz on run.app at the edge (404 before
+                                                                     the container); /readyz is the alias external
+                                                                     probes must use
  8   Firestore fact cache                              [DONE]
  ----- FactStore protocol + MemoryFactStore            [DONE]        service/cache.py; tests need no GCP project
  ----- Real write-back + preloaded_facts feed-in       [DONE]        commit 4249c5b
