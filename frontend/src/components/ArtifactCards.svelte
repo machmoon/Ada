@@ -2,6 +2,7 @@
   let {
     result,
     schematicEnabled = false,
+    placementEnabled = false,
     boardEnabled = false,
     onopen = null,
   } = $props()
@@ -21,6 +22,11 @@
     <strong>{parts} placed parts</strong>
     <span>Open board →</span>
   </button>
+  <button type="button" disabled={!placementEnabled} onclick={() => onopen?.('placement')} data-material="panel">
+    <span class="lbl">Placement</span>
+    <strong>{placementEnabled ? `${result.placement_repair?.steps?.length || 0} verified rounds` : 'Not requested'}</strong>
+    <span>Open receipts →</span>
+  </button>
   <button type="button" onclick={() => onopen?.('review')} data-material="panel">
     <span class="lbl">Review</span>
     <strong>{findings} findings</strong>
@@ -29,7 +35,7 @@
 </div>
 
 <style>
-  .artifacts { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; margin-top: 13px; }
+  .artifacts { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; margin-top: 13px; }
   button { min-width: 0; padding: 10px 11px; text-align: left; background: var(--surface); border: 1px solid var(--rule-soft); }
   button:hover:not(:disabled) { border-color: var(--rule); }
   button:disabled { opacity: .45; }

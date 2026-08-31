@@ -41,9 +41,11 @@ For each user request, take exactly one of these paths:
 
 If the message includes a clarification answer, do not ask another question;
 call generate_board. After the tool returns, summarize the outcome in friendly,
-compact language and mention blockers or unrouted nets honestly. Do not reveal
-private chain-of-thought. The interface separately shows observable tool calls,
-prompts, responses, validation, and retry events for debugging.
+compact language and mention blockers, unrouted nets, and production-promotion
+eligibility honestly. A blocked constraint receipt does not remove the generated
+artifact; it means the board is not eligible for production promotion. Do not
+reveal private chain-of-thought. The interface separately shows observable tool
+calls, prompts, responses, validation, and retry events for debugging.
 """
 
 
@@ -90,7 +92,7 @@ def _text(content: object) -> str:
 
 def _summary(result: dict[str, Any]) -> dict[str, Any]:
     route = result.get("routing") if isinstance(result.get("routing"), dict) else {}
-    return {
+    summary = {
         "status": result.get("status"),
         "parts": len(result.get("parts") or []),
         "nets": len(result.get("nets") or []),
@@ -102,6 +104,52 @@ def _summary(result: dict[str, Any]) -> dict[str, Any]:
         "duration_s": result.get("duration_s"),
         "served_by": result.get("served_by"),
     }
+    receipt = result.get("constraint_receipt")
+    manifest = result.get("constraint_manifest")
+    if isinstance(receipt, dict):
+        checks = [
+            check
+            for group in receipt.get("net_classes", [])
+            if isinstance(group, dict)
+            for check in group.get("checks", [])
+            if isinstance(check, dict)
+        ]
+        checks.extend(
+            check
+            for check in receipt.get("mechanical", [])
+            if isinstance(check, dict)
+        )
+        blockers = [
+            {
+                key: blocker.get(key)
+                for key in ("scope", "name", "status", "detail")
+            }
+            for blocker in receipt.get("blockers", [])
+            if isinstance(blocker, dict)
+        ]
+        summary.update(
+            {
+                "promotion_status": result.get("promotion_status"),
+                "constraint_manifest_version": (
+                    manifest.get("version") if isinstance(manifest, dict) else None
+                ),
+                "constraint_receipt": {
+                    "hard_gate": receipt.get("hard_gate"),
+                    "promotable": receipt.get("promotable"),
+                    "verified": sum(
+                        check.get("status") == "verified" for check in checks
+                    ),
+                    "violated": sum(
+                        check.get("status") == "violated" for check in checks
+                    ),
+                    "unresolved": sum(
+                        check.get("status") == "unresolved" for check in checks
+                    ),
+                    "blockers": blockers,
+                },
+            }
+        )
+    return summary
 
 
 async def _run(
@@ -322,6 +370,16 @@ async def _run(
             f"The board finished with {summary['parts']} parts and "
             f"{summary['findings']} review findings."
         )
+        receipt = summary.get("constraint_receipt")
+        if isinstance(receipt, dict):
+            if receipt.get("promotable"):
+                assistant += " It is eligible for production promotion."
+            else:
+                assistant += (
+                    " It is not eligible for production promotion because "
+                    f"{len(receipt.get('blockers') or [])} constraint checks block it; "
+                    "the generated artifact is still available."
+                )
     if not assistant:
         assistant = "I need one more detail before I can generate this board."
 

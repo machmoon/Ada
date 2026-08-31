@@ -55,19 +55,50 @@ cited.
 ## What it does
 
 Silkscreen takes a plain-language description of what you want to build and produces a
-schematic, a placed board, and — the part we care about — **a review of its own work,
-with citations.**
+validated circuit, a placed board, and a review of its own work with citations. For the
+Collaborative Partner track, it also ships a focused placement agent that repairs a
+damaged board and learns a hardware team's explicit layout preferences.
 
 Each stage below is tagged **[built]** or **[not yet built]** against the code in this
 repository today.
 
-**1. Understand the parts. [not yet built]**
+**Placement repair and company profiles. [built]**
+An engineer opens the placement lab, selects Compact Control or Thermal First, and
+watches the same broken motor-controller board become two different legal layouts.
+The screen shows the starting violations, accepted actions, exact score deltas, and
+the final geometry. The engineer can reject a move and pin that component into the
+company profile. The demo keeps that correction in tab-local session storage, isolated
+from other visitors. The repaired placement downloads as JSON. Server-side team
+memory stays disabled until an authenticated tenant boundary exists.
+
+Hard rules cover board boundaries, clearance, fixed components, and keepouts. Soft
+preferences cover connector access, functional grouping, compactness, and thermal
+separation. Gemini may propose actions, but a deterministic verifier accepts or rejects
+every move.
+
+**Approved build constraints. [built]**
+The normal prompt-only path remains unchanged, but an engineer can open an optional
+constraint contract, name exact nets and physical limits, and approve it for one run.
+Any edit clears approval. The service rejects malformed or unapproved version 2
+contracts before cache access or model spend, includes an approved contract in circuit
+proposal context, and then checks the validated circuit, final placement, and routed
+copper. The chat trace exposes this as a separate constraint-verification event, and
+the review screen shows every blocker and its evidence.
+
+The receipt is deliberately fail-closed. Missing routing, stackup, field-solver,
+component-height, or full voltage-drop evidence is `unresolved`, not silently clean.
+Today this is post-build production-promotion eligibility: the artifact remains
+available for engineering inspection, and the declared limits do not yet configure
+CP-SAT or A* directly. Soft preferences provide an advisory score for the generated
+board; they do not claim that alternative layouts were ranked.
+
+**1. Understand the parts. [built]**
 Point Silkscreen at a component and it reads the actual datasheet. Gemini's native PDF
 vision matters here in a way that text extraction does not: pinout tables, package
 drawings, and reference schematics are *pictures*, and the numbers we need live inside
 them. Every extracted fact carries the page it came from.
 
-**2. Propose a circuit. [not yet built]**
+**2. Propose a circuit. [built]**
 The model emits a `CircuitSpec` — devices, passives, and nets — into a validated
 intermediate representation.
 
@@ -140,7 +171,8 @@ the difference between automating a beginner out of the loop and bringing them i
 straight-line driver one environment variable away.
 
 The agent layer is Google's Agent Development Kit. The pipeline — read → propose →
-validate → place → review — is an ADK dynamic **Workflow** in
+validate → place → verifier repair → schematic → route → review — is an ADK
+dynamic **Workflow** in
 `engine/silkscreen/agents/adk/`, where each stage is a node that calls the same stage
 body the plain SDK path calls. `generate_pcb(engine=...)` chooses the driver, and both
 drivers emit the same events from inside those shared bodies, so which one ran is not
@@ -160,6 +192,18 @@ prompts:
   since parts are independent: an `asyncio.gather` inside the read node. Today parts are
   read one after another.
 
+**[built]** Placement repair is a separate bounded agent loop. Gemini reads the board,
+company profile, and verifier feedback, then proposes absolute `PLACE` or relative
+`MOVE` actions. Unknown references are ignored, fixed parts cannot move, and a batch is
+accepted only when its geometry and preference score improves. The deterministic
+repairer also exports synthetic board-to-action trajectories for future Qwen supervised
+fine-tuning. With the default-off experimental gate and separate trace consent
+enabled, rejected proposals are stored with verifier receipts and a better Gemini or
+deterministic target for preference training. Portable reward functions expose legality
+first, progress second, and a small company-preference reward last for a future RL run.
+This submission does not claim that a trained checkpoint exists or beats the
+deterministic baseline.
+
 Model tiering: `gemini-3.7-flash` for datasheet vision and reasoning, dropping to
 `gemini-3.5-flash-lite` behind it. It is a failover chain rather than per-task routing,
 and every provider's output is checked for usable text before it is accepted, because a
@@ -169,14 +213,15 @@ free.
 
 **[not yet built]** Tool confirmation gates any step that writes a file.
 
-**[built]** The engine underneath is deliberately boring and has no network in it at all:
+**[built]** The deterministic engine kernel is deliberately boring and makes no
+network calls; Gemini and the opt-in placement providers sit behind policy adapters:
 
 - **OR-Tools CP-SAT** for placement
 - **kiutils** for `.kicad_pcb` I/O — pure Python, no KiCad install
 - Pure-integer nanometre arithmetic end to end, because unit confusion between
   millimetres, mils, and KiCad's internal nanometres is a silent, board-destroying class
   of bug
-- 727 tests that run with no network, no API key, and no KiCad installed
+- 841 tests that run with no network, no API key, and no KiCad installed
 
 Splitting it this way is the point. The parts that must be *correct* are testable
 offline. The parts that must be *smart* are the ones talking to a model.
@@ -233,8 +278,8 @@ valuable engineering artifact we produced was an honest list of what was actuall
 
 What we're proud of in the new one:
 
-- **The engine has no network calls.** Every correctness-critical path is tested offline.
-- **727 tests, and the interesting ones are regressions** — each pins down a specific bug
+- **The deterministic kernel has no network calls.** Every correctness-critical path is tested offline.
+- **841 tests, and the interesting ones are regressions** — each pins down a specific bug
   that shipped in the previous version and can never ship again.
 - **A validation layer whose job is to say no.** The IR makes a floating capacitor and a
   hallucinated pin unrepresentable rather than merely unlikely.
@@ -271,7 +316,7 @@ meant to build. The lesson we took is that the README should be written from the
 at revision `ad58192`, MIT licensed, included unmodified with its licence file
 intact as a working reference for the guided-cursor overlay we have not built
 yet. Nothing in `engine/`, `service/`, or `scripts/` imports from it, it is
-excluded from lint and tests, and it contributes nothing to the 727 tests or to
+excluded from lint and tests, and it contributes nothing to the 841 tests or to
 any figure quoted in this document. Everything else in the repository was
 written during the submission period.
 
