@@ -71,6 +71,16 @@ MODULES: dict[str, tuple[str, ...]] = {
         "test_http.py",
         "test_end_to_end.py",
     ),
+    "googleapps/": (
+        "test_auth.py",
+        "test_calendar.py",
+        "test_chat.py",
+        "test_gmail.py",
+        "test_transport.py",
+        "test_workspace_cli.py",
+        "test_workspace_config.py",
+        "test_workspace_end_to_end.py",
+    ),
 }
 
 
