@@ -1,6 +1,6 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "Kaleo",
+  "productName": "Ada",
   "version": "0.3.1",
   "identifier": "com.silkscreen.kaleo",
   "build": {
@@ -13,7 +13,7 @@
     "macOSPrivateApi": true,
     "windows": [
       {
-        "title": "Kaleo",
+        "title": "Ada",
         "width": 600,
         "height": 54,
         "decorations": false,

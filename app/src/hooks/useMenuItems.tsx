@@ -74,7 +74,7 @@ export const useMenuItems = () => {
     },
     {
       icon: PowerIcon,
-      label: "Quit Kaleo",
+      label: "Quit Ada",
       action: async () => {
         await invoke("exit_app");
       },

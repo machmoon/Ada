@@ -37,7 +37,7 @@ const Dashboard = () => {
 
   return (
     <PageLayout
-      title="Kaleo"
+      title="Ada"
       description="A desktop client for the silkscreen PCB engine. Describe a board in the overlay, and the run lands here."
     >
       <div className="grid gap-3 sm:grid-cols-3">

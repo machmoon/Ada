@@ -37,7 +37,7 @@ export const DEFAULT_SHORTCUT_ACTIONS: ShortcutAction[] = [
   {
     id: "focus_input",
     name: "Refocus Input Box",
-    description: "Bring Kaleo forward and place the cursor in the input area",
+    description: "Bring Ada forward and place the cursor in the input area",
     defaultKey: {
       macos: "cmd+shift+i",
       windows: "ctrl+shift+i",

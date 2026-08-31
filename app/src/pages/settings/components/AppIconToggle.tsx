@@ -16,7 +16,7 @@ export const AppIconToggle = ({ className }: AppIconToggleProps) => {
     <div id="app-icon" className={`space-y-2 ${className}`}>
       <Header
         title="Dock Icon"
-        description="Kaleo lives in the floating bar, so its Dock icon is optional. Hide it to keep the Dock uncluttered; the app stays fully visible on screen and in screen shares either way."
+        description="Ada lives in the floating bar, so its Dock icon is optional. Hide it to keep the Dock uncluttered; the app stays fully visible on screen and in screen shares either way."
         isMainTitle
       />
       <div className="flex items-center justify-between">
