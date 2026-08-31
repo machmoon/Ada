@@ -65,6 +65,17 @@ MODULES: dict[str, tuple[str, ...]] = {
     "gate.py": ("test_gate.py",),
     "approval.py": ("test_approval.py",),
     "service/": ("test_app.py", "test_cache.py"),
+    "slackbot/": (
+        "test_commands.py",
+        "test_slack.py",
+        "test_render.py",
+        "test_blocks.py",
+        "test_order.py",
+        "test_config.py",
+        "test_runner.py",
+        "test_http.py",
+        "test_end_to_end.py",
+    ),
 }
 
 
