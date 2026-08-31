@@ -1,6 +1,6 @@
 [package]
 name = "kaleo"
-version = "0.2.1"
+version = "0.2.2"
 description = "Kaleo: silkscreen's desktop app - describe a board, the engine generates it, review the result. A GPL-3.0 fork of Pluely."
 authors = ["Pat Liu <liujkaleo@gmail.com>", "Srikanth Nani <mail@srikanthnani.com> (upstream Pluely)"]
 license = "GPL-3.0"
