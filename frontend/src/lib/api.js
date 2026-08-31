@@ -11,6 +11,7 @@ const STREAM_ENDPOINT = '/generate/stream'
 const PLACEMENT_ENDPOINT = '/placement/repair'
 const CHAT_STREAM_ENDPOINT = '/chat/stream'
 const MODELS_ENDPOINT = '/models'
+const CONFIG_STATUS_ENDPOINT = '/config/status'
 const NDJSON_TYPE = 'application/x-ndjson'
 const TIMEOUT_MESSAGE = 'The run passed the 300 second budget and was cancelled.'
 
@@ -658,5 +659,51 @@ export async function listModels() {
           ? data.placement.policies
           : {},
     },
+  }
+}
+
+/** Secret-safe backend and .env readiness for the live side-rail monitor. */
+export async function getConfigurationStatus({ signal } = {}) {
+  let response
+  try {
+    response = await fetch(CONFIG_STATUS_ENDPOINT, {
+      headers: { accept: 'application/json' },
+      cache: 'no-store',
+      ...(signal ? { signal } : {}),
+    })
+  } catch (err) {
+    throw new ApiError('network', String(err && err.message ? err.message : err))
+  }
+  let data = {}
+  try {
+    data = await response.json()
+  } catch {
+    throw new ApiError('internal', 'The configuration status is not JSON.', {
+      status: response.status,
+    })
+  }
+  if (!response.ok) throw errorFor(response.status, data || {})
+
+  const states = new Set(['ready', 'off', 'warning', 'error', 'restart'])
+  const state = (value) => (states.has(String(value)) ? String(value) : 'warning')
+  return {
+    version: Number(data.version) || 1,
+    dotenv: {
+      present: data.dotenv?.present === true,
+      state: state(data.dotenv?.state),
+      summary: String(data.dotenv?.summary ?? ''),
+      reload_required: data.dotenv?.reload_required === true,
+      changed_since_start: data.dotenv?.changed_since_start === true,
+      pending: asArray(data.dotenv?.pending).map(String),
+    },
+    features: asArray(data.features)
+      .map((feature) => ({
+        id: String(feature?.id ?? ''),
+        label: String(feature?.label ?? ''),
+        state: state(feature?.state),
+        summary: String(feature?.summary ?? ''),
+        variables: asArray(feature?.variables).map(String),
+      }))
+      .filter((feature) => feature.id && feature.label),
   }
 }

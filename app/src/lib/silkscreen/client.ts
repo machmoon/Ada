@@ -311,7 +311,11 @@ export async function generateStream(
     // only way to keep it from reading as "the run failed for an unknown
     // reason". A caller abort is left for the caller's own signal check.
     if (deadline.timedOut() && !signal?.aborted) throw timeoutError();
-    throw error;
+    // A terminal frame already arrived, so the run finished on the engine and
+    // the board is in hand; the connection dying on the next read does not
+    // un-finish it. Reporting a completed board as failed would also drop it
+    // from history, which is the one copy the user has.
+    if (result === null && failure === null) throw error;
   }
   handle(buffered);
 

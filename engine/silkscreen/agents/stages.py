@@ -83,7 +83,26 @@ def read_stage(
         )
         if cached:
             continue
-        facts.append(read_datasheet(agent_model, part_number, pdf_url=url))
+
+        # The download is the slowest thing in the stage and the only one that
+        # can stall on a remote host. Reporting the bytes it landed is what
+        # separates "still fetching" from "hung" while someone watches a demo.
+        def announce(target: str, _part: str = part_number, **kwargs) -> bytes:
+            from .grounding import fetch_pdf
+
+            data = fetch_pdf(target, **kwargs)
+            emit(
+                {
+                    "event": "read.fetch",
+                    "part": _part,
+                    "bytes": len(data),
+                }
+            )
+            return data
+
+        facts.append(
+            read_datasheet(agent_model, part_number, pdf_url=url, fetch=announce)
+        )
     if sheets:
         emit(
             {

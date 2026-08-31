@@ -28,6 +28,7 @@ export default defineConfig({
         proxyTimeout: 300000,
       },
       '/models': { target: API, changeOrigin: false },
+      '/config': { target: API, changeOrigin: false },
       '/healthz': { target: API, changeOrigin: false },
     },
   },

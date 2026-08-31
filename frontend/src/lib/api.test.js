@@ -9,6 +9,7 @@ import {
   chatStream,
   generate,
   generateStream,
+  getConfigurationStatus,
   listModels,
   normalizePlacementRequest,
   normalizeRequest,
@@ -1337,5 +1338,70 @@ describe('listModels', () => {
         policies: {},
       },
     })
+  })
+})
+
+describe('getConfigurationStatus', () => {
+  it('normalizes the secret-safe backend readiness response', async () => {
+    const fetch = stubFetch(
+      jsonResponse(200, {
+        version: 1,
+        dotenv: {
+          present: true,
+          state: 'restart',
+          summary: 'Restart to apply one setting.',
+          reload_required: true,
+          changed_since_start: true,
+          pending: ['GOOGLE_API_KEY'],
+        },
+        features: [
+          {
+            id: 'gemini',
+            label: 'Gemini agents',
+            state: 'ready',
+            summary: 'API access verified.',
+            variables: ['GOOGLE_API_KEY'],
+          },
+        ],
+      }),
+    )
+
+    await expect(getConfigurationStatus()).resolves.toEqual({
+      version: 1,
+      dotenv: {
+        present: true,
+        state: 'restart',
+        summary: 'Restart to apply one setting.',
+        reload_required: true,
+        changed_since_start: true,
+        pending: ['GOOGLE_API_KEY'],
+      },
+      features: [
+        {
+          id: 'gemini',
+          label: 'Gemini agents',
+          state: 'ready',
+          summary: 'API access verified.',
+          variables: ['GOOGLE_API_KEY'],
+        },
+      ],
+    })
+    expect(fetch).toHaveBeenCalledWith('/config/status', {
+      headers: { accept: 'application/json' },
+      cache: 'no-store',
+    })
+  })
+
+  it('downgrades unknown states instead of trusting server markup', async () => {
+    stubFetch(
+      jsonResponse(200, {
+        dotenv: { state: 'surprise' },
+        features: [{ id: 'x', label: 'X', state: '<script>' }],
+      }),
+    )
+
+    const status = await getConfigurationStatus()
+    expect(status.dotenv.state).toBe('warning')
+    expect(status.features[0].state).toBe('warning')
   })
 })

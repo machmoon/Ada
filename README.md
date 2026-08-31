@@ -101,7 +101,7 @@ Every stage is a real KiCad file you can open and inspect on its own, so you can
 where a design went wrong instead of only seeing the last artifact.
 
 ```
-859 tests collected — no network, no API key, no KiCad install
+884 tests collected — no network, no API key, no KiCad install
 ```
 
 **Next:** [full install guide and troubleshooting](docs/install.md) ·
@@ -167,7 +167,7 @@ Platform-by-platform commands are in [docs/install.md](docs/install.md#kicad-opt
 | `schematic.py` — `.kicad_sch` + `.kicad_pro` emission | **Working** · 22 tests · KiCad ERC clean |
 | `routing.py` — two-layer grid autorouter | **Working, partial by design** · 20 tests — see below |
 | `footprints.py` + `board.py` — land patterns, board emission | **Working** · 23 tests |
-| `agents/` — datasheet, propose, review, pipeline | **Working** · 35 tests |
+| `agents/` — datasheet, propose, review, pipeline | **Working** · 38 tests |
 | `agents/adk/` — ADK dynamic-workflow driver for the pipeline | **Working** · 20 tests |
 | `agents/retrieval.py` — page-cited datasheet retrieval | **Working** · 15 tests |
 | `agents/resilience.py` — provider failover | **Working** · 15 tests |
@@ -175,7 +175,7 @@ Platform-by-platform commands are in [docs/install.md](docs/install.md#kicad-opt
 | `order.py` — order options, manufacturability preflight | **Working** · blocks an unrouted board |
 | `mcp/` — MCP server over stdio | **Working** · 43 tests |
 | `audit/` — optional visual design review | **Working** · 52 tests |
-| `service/` — Cloud Run + Firestore cache | **Working** · 143 tests · not deployed anywhere yet; no live URL |
+| `service/` — Cloud Run + Firestore cache | **Working** · 144 tests · not deployed anywhere yet; no live URL |
 | `frontend/` — Svelte review UI, served by the service | **Working** · persistent orchestrator chat, expandable traces, session JSON, review, schematic, placement and board tabs |
 | `engine/silkscreen/placement/` — verifier-grounded repair and company profiles | **Working** · deterministic and Gemini policies; experimental providers are opt-in |
 | `constraints.py` — approved build contract and post-route receipt | **Working** · opt-in, fail-closed, and deterministically tested |
@@ -437,7 +437,7 @@ treats the board file as the interface.
 | Requires KiCad running | Yes | **No** |
 | Headless / CI | Hard | **Native** |
 | Platform lock | KiCad's plugin loader | **None — pure Python** |
-| Testable without KiCad | No | **Yes, all 859 tests** |
+| Testable without KiCad | No | **Yes, all 884 tests** |
 
 ### What it reads
 
@@ -556,11 +556,18 @@ worker calls, and final result. `GET /models` discovers the current key's
 catalog. `GET /healthz` is the readiness probe. The container serves the built UI at `/`,
 same origin as all of these routes, so there is no CORS anywhere.
 
+`GET /config/status` backs the live backend-readiness section in the right side rail.
+It reports whether Gemini, ADK, Ollama, Tinker, and Firestore can use the active
+process configuration, probes a configured Ollama server for its selected model,
+and notices local `.env` edits that require a backend restart. The response contains
+variable names and status messages only; it never returns configuration values or
+credentials. These checks do not make paid generation calls.
+
 ### Running the web UI
 
 The UI is a Svelte SPA in `frontend/`, and it needs Node 22 or newer
 (`node --version`). In development it runs on Vite's dev server, which proxies
-`/generate`, `/chat`, `/models`, and `/healthz` to the Python service — two terminals:
+`/generate`, `/chat`, `/models`, `/config`, and `/healthz` to the Python service — two terminals:
 
 ```bash
 PORT=8081 python -m service.app            # terminal 1: the API
@@ -786,7 +793,7 @@ engine/
       pipeline.py   prompt -> PCB
       adk/          ADK dynamic workflow over the same stage bodies
     audit/        optional visual review of a finished board
-  tests/          859 tests — no network, no API keys, no KiCad
+  tests/          884 tests — no network, no API keys, no KiCad
     fixtures/     ref.kicad_pcb -- 11-footprint board fixture
 scripts/
   demo.py         end-to-end: read -> place -> write -> verify

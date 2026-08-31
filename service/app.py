@@ -79,6 +79,7 @@ from silkscreen.placement.traces import (  # noqa: E402
 from silkscreen.units import to_mm  # noqa: E402
 
 from .cache import FactStore, MemoryFactStore  # noqa: E402
+from .configuration import configuration_status  # noqa: E402
 from .models import (  # noqa: E402
     model_catalog,
     select_model,
@@ -1131,6 +1132,7 @@ class Handler(BaseHTTPRequestHandler):
 
     model_factory = staticmethod(build_model)
     model_catalog_factory = staticmethod(model_catalog)
+    configuration_status_factory = staticmethod(configuration_status)
     orchestrator_runner = staticmethod(run_chat_orchestrator)
     request_pacer: RequestPacer = GEMINI_REQUEST_PACER
     store: FactStore | None = None
@@ -1145,7 +1147,13 @@ class Handler(BaseHTTPRequestHandler):
     # served from this same origin, so nothing the UI sends is cross-origin.
     # Adding them defensively would only widen who may call /generate.
 
-    def _send(self, code: int, payload: dict[str, Any]) -> None:
+    def _send(
+        self,
+        code: int,
+        payload: dict[str, Any],
+        *,
+        cache_control: str | None = None,
+    ) -> None:
         try:
             body = json.dumps(payload, allow_nan=False).encode()
         except (TypeError, ValueError) as exc:
@@ -1160,6 +1168,8 @@ class Handler(BaseHTTPRequestHandler):
         self.send_response(code)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(body)))
+        if cache_control:
+            self.send_header("Cache-Control", cache_control)
         self.end_headers()
         self.wfile.write(body)
 
@@ -1246,6 +1256,14 @@ class Handler(BaseHTTPRequestHandler):
                 "policies": placement_policy_status(experimental=True),
             }
             self._send(200, catalog)
+            return
+
+        if route == "/config/status":
+            self._send(
+                200,
+                self.configuration_status_factory(),
+                cache_control="no-store",
+            )
             return
 
         static = self._resolve_static(route)
