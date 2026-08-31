@@ -101,7 +101,7 @@ Every stage is a real KiCad file you can open and inspect on its own, so you can
 where a design went wrong instead of only seeing the last artifact.
 
 ```
-869 tests collected — no network, no API key, no KiCad install
+948 tests collected — no network, no API key, no KiCad install
 ```
 
 **Next:** [full install guide and troubleshooting](docs/install.md) ·
@@ -171,14 +171,14 @@ Platform-by-platform commands are in [docs/install.md](docs/install.md#kicad-opt
 | `agents/adk/` — ADK dynamic-workflow driver for the pipeline | **Working** · 20 tests |
 | `agents/retrieval.py` — page-cited datasheet retrieval | **Working** · 15 tests |
 | `agents/resilience.py` — provider failover | **Working** · 15 tests |
-| `fab.py` — Gerber, Excellon, BOM, pick-and-place, fab notes | **Working** · 34 tests |
+| `fab.py` — Gerber, Excellon, BOM, pick-and-place, fab notes | **Working** · 35 tests |
 | `order.py` — order options, manufacturability preflight | **Working** · 30 tests · blocks an unrouted board |
-| `fabhouse.py` — OSH Park / JLCPCB / PCBWay limits and pricing | **Working** · 23 tests · one real quote, two honest refusals |
+| `fabhouse.py` — OSH Park / JLCPCB / PCBWay limits and pricing | **Working** · 24 tests · one real quote, two honest refusals |
 | `gate.py` — the twelve-check pre-flight gate | **Working** · 26 tests |
 | `approval.py` — the prepared order, and the human it stops at | **Working** · 19 tests · no submission path, by design |
 | `mcp/` — MCP server over stdio | **Working** · 43 tests |
 | `audit/` — optional visual design review | **Working** · 52 tests |
-| `service/` — Cloud Run + Firestore cache | **Working** · 146 tests · live at <https://silkscreen-vqdj4x5qbq-uc.a.run.app> |
+| `service/` — Cloud Run + Firestore cache | **Working** · 151 tests · live at <https://silkscreen-vqdj4x5qbq-uc.a.run.app> |
 | `frontend/` — Svelte review UI, served by the service | **Working** · persistent orchestrator chat, expandable traces, session JSON, review, schematic, placement, board and order tabs |
 | `engine/silkscreen/placement/` — verifier-grounded repair and company profiles | **Working** · deterministic and Gemini policies; experimental providers are opt-in |
 | `constraints.py` — approved build contract and post-route receipt | **Working** · opt-in, fail-closed, and deterministically tested |
@@ -440,7 +440,7 @@ treats the board file as the interface.
 | Requires KiCad running | Yes | **No** |
 | Headless / CI | Hard | **Native** |
 | Platform lock | KiCad's plugin loader | **None — pure Python** |
-| Testable without KiCad | No | **Yes, all 869 tests** |
+| Testable without KiCad | No | **Yes, all 948 tests** |
 
 ### What it reads
 
@@ -935,7 +935,7 @@ engine/
       pipeline.py   prompt -> PCB
       adk/          ADK dynamic workflow over the same stage bodies
     audit/        optional visual review of a finished board
-  tests/          869 tests — no network, no API keys, no KiCad
+  tests/          948 tests — no network, no API keys, no KiCad
     fixtures/     ref.kicad_pcb -- 11-footprint board fixture
 scripts/
   demo.py         end-to-end: read -> place -> write -> verify
