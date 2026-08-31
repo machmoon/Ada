@@ -545,6 +545,68 @@ def _candidate_rank(
     )
 
 
+def _lane_models(
+    board: Board,
+    profile: CompanyProfile,
+    model_factory: Callable[[], TextModel],
+    prompt: str,
+    width: int,
+) -> tuple[dict[int, TextModel], list[EvaluatedCandidate]]:
+    models = {}
+    failures = []
+    for lane in range(1, width + 1):
+        try:
+            models[lane] = model_factory()
+        except Exception:
+            failures.append(
+                _factory_failure_candidate(board, profile, prompt, lane, width)
+            )
+    return models, failures
+
+
+def _early_winner(
+    completed: list[EvaluatedCandidate],
+    target: tuple[float, float],
+    enabled: bool,
+) -> EvaluatedCandidate | None:
+    if not enabled:
+        return None
+    eligible = [item for item in completed if _meets_early_target(item, target)]
+    return min(eligible, key=_candidate_rank) if eligible else None
+
+
+def _cancel_candidates(
+    pending: set[Future],
+    future_lanes: dict[Future, int],
+    models: dict[int, TextModel],
+    board: Board,
+    profile: CompanyProfile,
+    prompt: str,
+    width: int,
+    timeout_s: float,
+    status: str,
+) -> list[EvaluatedCandidate]:
+    cancelled = []
+    for future in pending:
+        lane = future_lanes[future]
+        future.cancel()
+        cancel = getattr(models[lane], "cancel", None)
+        if callable(cancel):
+            cancel()
+        cancelled.append(
+            _deadline_candidate(
+                board,
+                profile,
+                prompt,
+                lane,
+                width,
+                timeout_s,
+                status=status,
+            )
+        )
+    return cancelled
+
+
 def _parallel_candidates(
     board: Board,
     profile: CompanyProfile,
@@ -555,15 +617,9 @@ def _parallel_candidates(
     early_target: tuple[float, float],
     early_commit_enabled: bool,
 ) -> tuple[tuple[EvaluatedCandidate, ...], EvaluatedCandidate | None]:
-    models: dict[int, TextModel] = {}
-    evaluated: list[EvaluatedCandidate] = []
-    for lane in range(1, width + 1):
-        try:
-            models[lane] = model_factory()
-        except Exception:
-            evaluated.append(
-                _factory_failure_candidate(board, profile, prompt, lane, width)
-            )
+    models, evaluated = _lane_models(
+        board, profile, model_factory, prompt, width
+    )
     pool = ThreadPoolExecutor(
         max_workers=width, thread_name_prefix="placement-lane"
     )
@@ -595,30 +651,23 @@ def _parallel_candidates(
             break
         completed = [future.result() for future in done]
         evaluated.extend(completed)
-        if early_commit_enabled:
-            eligible = [
-                item for item in completed if _meets_early_target(item, early_target)
-            ]
-            if eligible:
-                early_winner = min(eligible, key=_candidate_rank)
-    status = "cancelled-after-early-commit" if early_winner else "deadline"
-    for future in pending:
-        lane = future_lanes[future]
-        future.cancel()
-        cancel = getattr(models[lane], "cancel", None)
-        if callable(cancel):
-            cancel()
-        evaluated.append(
-            _deadline_candidate(
-                board,
-                profile,
-                prompt,
-                lane,
-                width,
-                timeout_s,
-                status=status,
-            )
+        early_winner = _early_winner(
+            completed, early_target, early_commit_enabled
         )
+    status = "cancelled-after-early-commit" if early_winner else "deadline"
+    evaluated.extend(
+        _cancel_candidates(
+            pending,
+            future_lanes,
+            models,
+            board,
+            profile,
+            prompt,
+            width,
+            timeout_s,
+            status,
+        )
+    )
     pool.shutdown(wait=False, cancel_futures=True)
     return _mark_duplicates(evaluated), early_winner
 
