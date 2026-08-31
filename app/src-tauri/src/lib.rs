@@ -43,6 +43,14 @@ pub fn run() {
         .manage(shortcuts::LicenseState::default())
         .manage(shortcuts::MoveWindowState::default())
         .plugin(tauri_plugin_opener::init())
+        // Dialog + fs exist for exactly one flow: "save this board where I
+        // point". The capability files grant `dialog:allow-save` and the two
+        // text-file commands with NO static scope -- the dialog plugin adds
+        // the user-picked path to the fs scope at runtime, so the webview can
+        // only ever write (and read back) files the user chose in a native
+        // save dialog.
+        .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_fs::init())
         // The fork deliberately ships no updater: upstream's endpoint was
         // removed from tauri.conf.json so a build phones nobody. Registering
         // the plugin anyway makes it read a `plugins.updater` block that is

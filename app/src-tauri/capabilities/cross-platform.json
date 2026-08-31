@@ -13,6 +13,10 @@
   "permissions": [
     "core:default",
     "opener:default",
+    "opener:allow-open-path",
+    "dialog:allow-save",
+    "fs:allow-write-text-file",
+    "fs:allow-read-text-file",
     "keychain:default",
     "keychain:allow-get-item",
     "keychain:allow-save-item",

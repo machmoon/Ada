@@ -176,6 +176,72 @@ describe("http capability scope", () => {
   });
 });
 
+// The save flow's grants, pinned in the same spirit as the http scope above.
+// The two fs command permissions are deliberately granted as bare strings:
+// with no static `allow` list, the fs scope starts empty and the ONLY way a
+// path enters it is the dialog plugin registering what the user picked in a
+// native save dialog. A `{ identifier, allow: [...] }` form here would be a
+// standing write grant (and one more scope whose entries can fail to parse,
+// the `https://**` failure mode) — so its absence is asserted, not assumed.
+describe("save-to-disk capability", () => {
+  const capabilities = ["default", "cross-platform"].map((name) => ({
+    name,
+    json: readJson(`../../src-tauri/capabilities/${name}.json`) as {
+      permissions: (string | { identifier: string })[];
+    },
+  }));
+
+  it.each(capabilities)(
+    "$name grants exactly the save dialog, the two text-file commands, and open-path",
+    ({ json }) => {
+      for (const grant of [
+        "dialog:allow-save",
+        "fs:allow-write-text-file",
+        "fs:allow-read-text-file",
+        "opener:allow-open-path",
+      ]) {
+        expect(json.permissions).toContain(grant);
+      }
+    }
+  );
+
+  it.each(capabilities)(
+    "$name keeps every dialog/fs grant scopeless — no blanket filesystem access",
+    ({ json }) => {
+      const scoped = json.permissions.filter(
+        (p): p is { identifier: string } =>
+          typeof p === "object" &&
+          /^(fs|dialog):/.test(p.identifier)
+      );
+      expect(scoped).toEqual([]);
+
+      const named = json.permissions.filter(
+        (p): p is string =>
+          typeof p === "string" && /^(fs|dialog):/.test(p)
+      );
+      expect(named.sort()).toEqual([
+        "dialog:allow-save",
+        "fs:allow-read-text-file",
+        "fs:allow-write-text-file",
+      ]);
+    }
+  );
+
+  it("keeps both platforms' capability files in step", () => {
+    const saveGrants = (json: {
+      permissions: (string | { identifier: string })[];
+    }) =>
+      json.permissions
+        .filter((p): p is string => typeof p === "string")
+        .filter((p) => /^(fs|dialog|opener):/.test(p))
+        .sort();
+
+    expect(saveGrants(capabilities[0].json)).toEqual(
+      saveGrants(capabilities[1].json)
+    );
+  });
+});
+
 // Upstream excluded its windows from screen capture so they stayed hidden
 // during a call. This app is demoed and screen-shared, and a protected window
 // records as a blank rectangle -- the board, schematic and review would be

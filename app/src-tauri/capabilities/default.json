@@ -12,6 +12,10 @@
   "permissions": [
     "core:default",
     "opener:default",
+    "opener:allow-open-path",
+    "dialog:allow-save",
+    "fs:allow-write-text-file",
+    "fs:allow-read-text-file",
     "macos-permissions:default",
     "keychain:default",
     "keychain:allow-get-item",
