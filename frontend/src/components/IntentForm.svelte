@@ -1,6 +1,7 @@
 <script>
   import MicButton from './MicButton.svelte'
   import { MAX_REQUEST_BYTES, MAX_TIME_LIMIT_S, MIN_TIME_LIMIT_S, normalizeRequest, requestBytes } from '../lib/api.js'
+  import { DATASHEET_PRESETS } from '../lib/datasheets.js'
 
   let { onsubmit, initial = null } = $props()
 
@@ -56,6 +57,21 @@
     rows = [...rows, { part: '', url: '' }]
   }
 
+  function useDatasheet(preset) {
+    const next = rows.map((row) => ({ ...row }))
+    const existing = next.findIndex((row) => String(row.part ?? '').trim() === preset.part)
+    const blank = next.findIndex(
+      (row) => !String(row.part ?? '').trim() && !String(row.url ?? '').trim(),
+    )
+
+    if (existing >= 0) next[existing] = { part: preset.part, url: preset.url }
+    else if (blank >= 0) next[blank] = { part: preset.part, url: preset.url }
+    else next.push({ part: preset.part, url: preset.url })
+
+    rows = next
+    showDatasheets = true
+  }
+
   function submit(event) {
     event.preventDefault()
     if (!canSubmit) return
@@ -84,6 +100,33 @@
 
   <details class="sheets" bind:open={showDatasheets} data-testid="intent-form-datasheets">
     <summary class="lbl" data-testid="intent-form-datasheets-summary">with datasheets</summary>
+    <div class="presets" data-testid="intent-form-datasheet-presets">
+      <div class="preset-heading lbl">available to use</div>
+      {#each DATASHEET_PRESETS as preset (preset.part)}
+        <div class="preset" data-testid="intent-form-datasheet-preset">
+          <div class="preset-copy">
+            <span class="mono preset-part">{preset.part}</span>
+            <span class="preset-maker">{preset.manufacturer}</span>
+          </div>
+          <a class="pdf" href={preset.url} target="_blank" rel="noreferrer">View PDF</a>
+          <button
+            type="button"
+            class="use"
+            data-testid="intent-form-use-datasheet"
+            disabled={rows.some(
+              (row) => String(row.part ?? '').trim() === preset.part
+                && String(row.url ?? '').trim() === preset.url,
+            )}
+            onclick={() => useDatasheet(preset)}
+          >
+            {rows.some(
+              (row) => String(row.part ?? '').trim() === preset.part
+                && String(row.url ?? '').trim() === preset.url,
+            ) ? 'Selected' : 'Use datasheet'}
+          </button>
+        </div>
+      {/each}
+    </div>
     <div class="sheet-rows">
       {#each rows as row, i (i)}
         <div class="sheet-row" data-testid="intent-form-datasheet-row">
@@ -162,6 +205,30 @@
 
   .sheets { margin-top: 18px; border-top: 1px solid var(--rule-soft); padding-top: 14px; }
   summary { cursor: pointer; }
+  .presets { margin-top: 12px; }
+  .preset-heading { margin-bottom: 6px; }
+  .preset {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 9px 10px;
+    background: var(--surface);
+    border: 1px solid var(--rule-soft);
+  }
+  .preset-copy { display: flex; flex-direction: column; min-width: 0; }
+  .preset-part { color: var(--ink); }
+  .preset-maker { font-size: 12px; color: var(--ink-soft); }
+  .pdf { margin-left: auto; font-size: 12px; color: var(--ink-mid); white-space: nowrap; }
+  .use {
+    padding: 5px 10px;
+    background: transparent;
+    color: var(--ink-mid);
+    border: 1px solid var(--rule);
+    border-radius: var(--radius);
+    font-size: 12px;
+    white-space: nowrap;
+  }
+  .use:disabled { color: var(--ink-faint); border-color: var(--rule-soft); }
   .sheet-rows { display: flex; flex-direction: column; gap: 8px; margin-top: 12px; }
   .sheet-row { display: flex; gap: 8px; }
   .sheet-row input {
