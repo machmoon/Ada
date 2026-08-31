@@ -194,6 +194,22 @@ describe('describeStageEvent', () => {
     )
   })
 
+  it('reports the datasheet download separately from the read', () => {
+    // The download is the one step that waits on someone else's web server, so
+    // it gets its own line: without it a slow host is indistinguishable from a
+    // hung run.
+    expect(
+      describeStageEvent({ event: 'read.fetch', part: 'AMS1117-3.3', bytes: 95151 }),
+    ).toBe('AMS1117-3.3: downloaded 93 kB')
+  })
+
+  it('still describes a download that reports no size', () => {
+    expect(describeStageEvent({ event: 'read.fetch', part: 'AMS1117-3.3' })).toBe(
+      'AMS1117-3.3: downloaded the PDF',
+    )
+    expect(describeStageEvent({ event: 'read.fetch', bytes: 2048 })).toBe('downloaded 2 kB')
+  })
+
   it('still reads as a sentence when the part is missing', () => {
     expect(describeStageEvent({ event: 'read.part', part: null, index: 1, total: 2 })).toBe(
       `reading a datasheet (1 of 2)${ELLIPSIS}`,
@@ -545,6 +561,30 @@ describe('describeStageEvent', () => {
     )
   })
 
+  it('summarizes constraint eligibility without hiding a blocked artifact', () => {
+    expect(
+      describeStageEvent({
+        event: 'constraints.verify',
+        promotable: true,
+        verified: 12,
+        blockers: 0,
+        artifact_available: true,
+      }),
+    ).toBe('constraints verified: 12 checks; production promotion eligible')
+    expect(
+      describeStageEvent({
+        event: 'constraints.verify',
+        promotable: false,
+        blockers: 2,
+        violated: 1,
+        unresolved: 1,
+        artifact_available: true,
+      }),
+    ).toBe(
+      'constraints checked: 2 blockers (1 violated, 1 unresolved); artifact available; production promotion blocked',
+    )
+  })
+
   it('announces a finished run', () => {
     expect(describeStageEvent({ event: 'run.done', t_s: 41.2 })).toBe('run complete')
   })
@@ -608,6 +648,7 @@ describe('describeStageEvent', () => {
       'tool.done',
       'tool.error',
       'ground.part',
+      'constraints.verify',
       'run.done',
       'run.error',
       'assistant.message',

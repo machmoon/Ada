@@ -585,22 +585,69 @@ def test_footprint_without_a_body_gets_copper_but_no_silkscreen():
 
 
 def test_silkscreen_traces_the_body_outline_with_a_pen(board):
-    """The legend is stroked, not flashed, and only bodies appear on it."""
+    """The legend is stroked, not flashed, and every stroke lies on a body edge."""
     silk = gerber_silkscreen(board)
-    bodied = [p for p in board.parts if p.footprint.body_w_nm and p.footprint.body_h_nm]
-    assert bodied, "the fixture circuit should have bodies to draw"
-    assert len(_coords(silk)) == 8 * len(bodied), "four segments per body"
+    assert _coords(silk), "the fixture circuit should have a legend to draw"
     assert not _rect_apertures(silk)
     circles = _CIRCLE_RE.findall(silk)
     assert {_nm(c[1]) for c in circles} == {mm(0.15)}
 
-    part = bodied[0]
-    fp = part.footprint
-    anchor_x = part.x_nm + fp.courtyard_w_nm + MARGIN_NM
-    anchor_y = part.y_nm + fp.courtyard_h_nm + MARGIN_NM
-    corners = {(x, y) for x, y, _ in _coords(silk)}
-    assert (anchor_x - fp.body_w_nm, anchor_y - fp.body_h_nm) in corners
-    assert (anchor_x + fp.body_w_nm, anchor_y + fp.body_h_nm) in corners
+    # Each stroke endpoint sits on some part's body rectangle: the outline is
+    # clipped around pads, never redrawn somewhere else.
+    edges = set()
+    for part in board.parts:
+        fp = part.footprint
+        if not (fp.body_w_nm and fp.body_h_nm):
+            continue
+        ax = part.x_nm + fp.courtyard_w_nm + MARGIN_NM
+        ay = part.y_nm + fp.courtyard_h_nm + MARGIN_NM
+        edges.add((ax - fp.body_w_nm, ax + fp.body_w_nm,
+                   ay - fp.body_h_nm, ay + fp.body_h_nm))
+    for x, y, _ in _coords(silk):
+        assert any(
+            (x in (x0, x1) and y0 <= y <= y1)
+            or (y in (y0, y1) and x0 <= x <= x1)
+            for x0, x1, y0, y1 in edges
+        ), f"stroke endpoint ({x}, {y}) is on no body outline"
+
+
+def test_silkscreen_strokes_stay_clear_of_every_pad(board):
+    """Regression: the legend used to stroke the raw body rectangle, putting
+    0.06 mm of ink (half the pen) on every pad the body edge touches -- on a
+    chip passive the pads sit under the body ends, on an LQFP the pad row
+    starts exactly at the body edge. Independent math: widen each stroke by
+    the pen half-width and measure axis-aligned separation from each pad flash.
+    """
+    pen_half = mm(0.12) // 2
+    clearance = mm(0.2)
+
+    pads = []
+    for part in board.parts:
+        ax = part.x_nm + part.footprint.courtyard_w_nm + MARGIN_NM
+        ay = part.y_nm + part.footprint.courtyard_h_nm + MARGIN_NM
+        for pad in part.footprint.pads:
+            pads.append((ax + pad.x_nm - pad.w_nm // 2,
+                         ax + pad.x_nm + pad.w_nm // 2,
+                         ay + pad.y_nm - pad.h_nm // 2,
+                         ay + pad.y_nm + pad.h_nm // 2))
+
+    coords = _coords(gerber_silkscreen(board))
+    strokes = [
+        (min(mx, x) - pen_half, max(mx, x) + pen_half,
+         min(my, y) - pen_half, max(my, y) + pen_half)
+        for (mx, my, m_op), (x, y, op) in zip(coords, coords[1:], strict=False)
+        if m_op == 2 and op == 1  # a D02 move followed by its D01 draw
+    ]
+    assert strokes, "the fixture circuit should have a legend to check"
+
+    for sx0, sx1, sy0, sy1 in strokes:
+        for px0, px1, py0, py1 in pads:
+            gap_x = max(px0 - sx1, sx0 - px1)
+            gap_y = max(py0 - sy1, sy0 - py1)
+            assert max(gap_x, gap_y) >= clearance, (
+                f"silk stroke ({sx0}, {sy0})..({sx1}, {sy1}) comes within "
+                f"{max(gap_x, gap_y)} nm of pad ({px0}, {py0})..({px1}, {py1})"
+            )
 
 
 # ------------------------------------------------------------------- rotation

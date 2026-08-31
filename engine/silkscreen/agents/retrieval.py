@@ -23,7 +23,7 @@ import re
 from dataclasses import dataclass, field
 from typing import Protocol
 
-from .model import ModelError
+from .model import ModelError, request_timeout_ms
 
 __all__ = [
     "Chunk",
@@ -122,7 +122,7 @@ class GeminiEmbedder:
     """The live path, through google-genai. Requires ``GOOGLE_API_KEY``."""
 
     def __init__(self, model: str = EMBED_MODEL, *, api_key: str | None = None,
-                 dimension: int = 768):
+                 dimension: int = 768, timeout_s: float | None = None):
         try:
             from google import genai
         except ImportError as exc:  # pragma: no cover - import guard
@@ -132,10 +132,21 @@ class GeminiEmbedder:
 
         import os
 
-        key = api_key or os.getenv("GOOGLE_API_KEY")
+        key = (
+            api_key
+            or os.getenv("GOOGLE_API_KEY")
+            or os.getenv("GEMINI_API_KEY")
+        )
         if not key:
             raise ModelError("GOOGLE_API_KEY is not set.")
-        self._client = genai.Client(api_key=key)
+        # Same per-request deadline as GeminiModel, resolved by the same
+        # function: a hung embedding call would stall retrieval exactly the
+        # way a hung generate call stalls propose.
+        timeout_ms = request_timeout_ms(timeout_s)
+        self.timeout_s = timeout_ms / 1000.0
+        self._client = genai.Client(
+            api_key=key, http_options={"timeout": timeout_ms}
+        )
         self.model = model
         self.dimension = dimension
 

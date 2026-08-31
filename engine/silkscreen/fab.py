@@ -41,6 +41,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from .board import BoardResult, PlacedPart
+from .footprints import SILK_STROKE_NM, silk_segments
 from .packing import Layer
 from .units import NM_PER_MM, mm
 
@@ -74,13 +75,11 @@ _MARGIN_NM = mm(2.0)
 _OUTLINE_WIDTH_NM = mm(0.1)
 
 #: Silkscreen pen. 0.15 mm rather than the 0.12 mm this used to be, because
-#: 0.12 is under the minimum legend width every house in
-#: :mod:`silkscreen.fabhouse` publishes -- OSH Park prints 5 mil (0.127 mm),
-#: JLCPCB and PCBWay 0.15 mm. Ink under the house minimum is not refused at
-#: checkout; it is printed badly or dropped, and the board arrives with
-#: reference designators missing. Public because the capability check reads it
-#: rather than restating it.
-SILK_WIDTH_NM = mm(0.15)
+#: The legend pen, re-exported for the capability check. One constant feeds
+#: the stroke, the clip margin in :func:`silkscreen.footprints.silk_segments`,
+#: and the fab-house minimum-legend comparison, so the checked width cannot
+#: drift from the drawn one.
+SILK_WIDTH_NM = SILK_STROKE_NM
 
 #: Soldermask expansion per side. 0.051 mm (2 mil) is the industry-default
 #: opening enlargement: enough that a small registration error still leaves the
@@ -422,18 +421,19 @@ def gerber_silkscreen(board: BoardResult, *, bottom: bool = False) -> str:
         if _is_bottom(part) != bottom:
             continue
         fp = part.footprint
-        if not fp.body_w_nm or not fp.body_h_nm:
+        # The outline comes pre-clipped clear of the pads (see
+        # footprints.silk_segments) and each endpoint goes through the same
+        # rotation as the pads, so ink and copper cannot disagree about where
+        # the pads are.
+        segments = silk_segments(fp)
+        if not segments:
             continue
-        half_w, half_h = _rotate_size(fp.body_w_nm, fp.body_h_nm, part.rotated)
         anchor_x, anchor_y = _anchor_nm(part)
         gerber.select(gerber.circle(SILK_WIDTH_NM))
-        _rectangle(
-            gerber,
-            anchor_x - half_w,
-            anchor_y - half_h,
-            anchor_x + half_w,
-            anchor_y + half_h,
-        )
+        for x0, y0, x1, y1 in segments:
+            sx, sy = _rotate_offset(x0, y0, part.rotated)
+            ex, ey = _rotate_offset(x1, y1, part.rotated)
+            gerber.line(anchor_x + sx, anchor_y + sy, anchor_x + ex, anchor_y + ey)
     return gerber.render()
 
 

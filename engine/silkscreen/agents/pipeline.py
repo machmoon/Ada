@@ -1,16 +1,13 @@
 """Prompt to PCB, with the model checked at every step.
 
-    intent ─► datasheets ─► propose ─► validate/repair ─► .kicad_sch ─► place
-                                            │                            │
-                                            │                          route
-                                            │                            │
-                                            └───────► review ──────► .kicad_pcb
+    intent -> datasheets -> propose/validate -> CP-SAT place
+           -> placement repair -> schematic -> route -> review -> .kicad_pcb
 
-Two gates sit between the model and the board. The first is structural: the
-circuit IR refuses to build something malformed and hands every error back for
-repair. The second is semantic: a reviewer re-reads the datasheets and argues
-against the design. Neither existed in the project this replaces, which is why
-its netlists were confidently wrong.
+Three gates stand between model output and the final board. The circuit IR
+refuses malformed proposals and hands every error back for repair. The
+placement verifier admits only geometry that satisfies the selected profile.
+Finally, a semantic reviewer re-reads the datasheets and argues against the
+design.
 """
 
 from __future__ import annotations
@@ -24,6 +21,7 @@ from typing import Any
 
 from ..board import BoardResult, write_board
 from ..netlist import CircuitSpec
+from ..placement.adapter import GeneratedPlacement
 from ..routing import RouteResult
 from .datasheet import PartFacts
 from .model import Document, Model
@@ -33,6 +31,7 @@ from .stages import (
     NO_ARTIFACTS,
     SchematicArtifacts,
     place_stage,
+    placement_repair_stage,
     propose_stage,
     read_stage,
     review_stage,
@@ -72,6 +71,8 @@ class PipelineResult:
     schematic_path: Path | None = None
     project_path: Path | None = None
     placed_board_path: Path | None = None
+    #: Verifier-grounded placement receipt when integrated repair is enabled.
+    placement: GeneratedPlacement | None = None
 
     @property
     def artifacts(self) -> list[Path]:
@@ -124,9 +125,12 @@ class _EventingModel:
         model: Model,
         emit: Callable[[dict[str, Any]], None],
         include_responses: bool = False,
+        *,
+        call_prefix: str = "worker",
     ):
         self._model = model
         self._emit = emit
+        self._call_prefix = call_prefix
         self.stage = ""
         self.include_responses = include_responses
         self._call_seq = 0
@@ -141,7 +145,7 @@ class _EventingModel:
         max_output_tokens: int = 8192,
     ) -> str:
         self._call_seq += 1
-        call_id = f"worker-{self._call_seq}"
+        call_id = f"{self._call_prefix}-{self._call_seq}"
         if self.include_responses:
             document_refs = []
             for document in documents or []:
@@ -245,8 +249,13 @@ def _wire_events(
     model: Model,
     on_event: Callable[[dict[str, Any]], None] | None,
     include_responses: bool,
-) -> tuple[Callable[[dict[str, Any]], None], Model, Callable[[str], None]]:
-    """Build the ``(emit, agent_model, enter)`` trio every driver hands the stages.
+) -> tuple[
+    Callable[[dict[str, Any]], None],
+    Model,
+    Callable[[str], None],
+    Callable[[Model | None, str, str], Model | None],
+]:
+    """Build the event plumbing shared by both pipeline drivers.
 
     With no callback the model is passed through unwrapped and ``emit`` does
     nothing, so an unwatched run pays nothing for the seam.
@@ -264,12 +273,39 @@ def _wire_events(
     if on_event is not None:
         tap = _EventingModel(model, emit, include_responses)
         agent_model = tap
+    observed: dict[int, Model] = {id(model): agent_model}
 
     def enter(stage: str) -> None:
         if tap is not None:
             tap.stage = stage
 
-    return emit, agent_model, enter
+    def observe(
+        secondary: Model | None,
+        stage: str,
+        call_prefix: str,
+    ) -> Model | None:
+        """Give a secondary policy model the same logging contract.
+
+        Placement may use a model other than the circuit worker. Reusing a
+        wrapper for the same object keeps call IDs monotonic; a distinct model
+        receives a distinct prefix so its IDs cannot collide with worker IDs.
+        """
+        if secondary is None or on_event is None:
+            return secondary
+        existing = observed.get(id(secondary))
+        if existing is not None:
+            return existing
+        secondary_tap = _EventingModel(
+            secondary,
+            emit,
+            include_responses,
+            call_prefix=call_prefix,
+        )
+        secondary_tap.stage = stage
+        observed[id(secondary)] = secondary_tap
+        return secondary_tap
+
+    return emit, agent_model, enter, observe
 
 
 def _finish(
@@ -283,6 +319,7 @@ def _finish(
     output: str | Path | None,
     route: RouteResult | None = None,
     artifacts: SchematicArtifacts = NO_ARTIFACTS,
+    placement: GeneratedPlacement | None = None,
 ) -> PipelineResult:
     """Write the board if asked, then assemble the result. Emits nothing.
 
@@ -307,6 +344,7 @@ def _finish(
         schematic_path=artifacts.schematic_path,
         project_path=artifacts.project_path,
         placed_board_path=artifacts.placed_board_path,
+        placement=placement,
     )
 
 
@@ -324,9 +362,23 @@ def _generate_pcb_sdk(
     emit_stages: bool = True,
     on_event: Callable[[dict[str, Any]], None] | None = None,
     include_responses: bool = False,
+    placement_profile: str | None = None,
+    placement_policy: str = "deterministic",
+    placement_feedback: dict[str, Any] | None = None,
+    placement_model: Model | None = None,
+    placement_fallback_model: Model | None = None,
+    placement_max_turns: int = 8,
 ) -> PipelineResult:
     """Run the stages as a straight line. See :func:`generate_pcb`."""
-    emit, agent_model, enter = _wire_events(model, on_event, include_responses)
+    emit, agent_model, enter, observe = _wire_events(
+        model, on_event, include_responses
+    )
+    placement_model = observe(
+        placement_model, "placement_repair", "placement"
+    )
+    placement_fallback_model = observe(
+        placement_fallback_model, "placement_repair", "placement-fallback"
+    )
 
     facts = read_stage(
         agent_model,
@@ -345,6 +397,19 @@ def _generate_pcb_sdk(
         propose_on_event=emit if on_event is not None else None,
     )
     board = place_stage(spec, time_limit_s=time_limit_s, emit=emit, enter=enter)
+    placement = placement_repair_stage(
+        board,
+        profile=placement_profile,
+        policy=placement_policy,
+        feedback=placement_feedback,
+        model=placement_model,
+        fallback_model=placement_fallback_model,
+        max_turns=placement_max_turns,
+        emit=emit,
+        enter=enter,
+    )
+    if placement is not None:
+        board = placement.board
     artifacts = schematic_stage(
         spec,
         board,
@@ -368,6 +433,7 @@ def _generate_pcb_sdk(
         output=output,
         route=route_result,
         artifacts=artifacts,
+        placement=placement,
     )
 
 
@@ -385,6 +451,12 @@ def generate_pcb(
     emit_stages: bool = True,
     on_event: Callable[[dict[str, Any]], None] | None = None,
     include_responses: bool = False,
+    placement_profile: str | None = None,
+    placement_policy: str = "deterministic",
+    placement_feedback: dict[str, Any] | None = None,
+    placement_model: Model | None = None,
+    placement_fallback_model: Model | None = None,
+    placement_max_turns: int = 8,
     engine: str = "",
 ) -> PipelineResult:
     """Generate a placed board from a natural-language intent.
@@ -422,6 +494,13 @@ def generate_pcb(
             a service cancels work for a client that has disconnected. The
             event shape mirrors Google ADK's callback and event model, so this
             seam can be driven by an ADK runner without changing its callers.
+        placement_profile: Company profile to verifier-gate after CP-SAT, or
+            ``None`` to leave the original placement unchanged.
+        placement_policy: Deterministic, Gemini, or an enabled experimental policy.
+        placement_feedback: Structured request-local company-profile corrections.
+        placement_model: Proposal model for a non-deterministic placement policy.
+        placement_fallback_model: Recovery model used by the hybrid policy.
+        placement_max_turns: Bounded number of placement proposal turns.
         engine: Which driver runs the stages -- ``"sdk"`` for the straight line
             in this module, ``"adk"`` for the Google ADK workflow in
             :mod:`silkscreen.agents.adk`. Both call the same stage bodies and
@@ -452,6 +531,12 @@ def generate_pcb(
             emit_stages=emit_stages,
             on_event=on_event,
             include_responses=include_responses,
+            placement_profile=placement_profile,
+            placement_policy=placement_policy,
+            placement_feedback=placement_feedback,
+            placement_model=placement_model,
+            placement_fallback_model=placement_fallback_model,
+            placement_max_turns=placement_max_turns,
         )
     if chosen == "adk":
         # Imported here, never at module scope: a base install has no google.adk,
@@ -475,6 +560,12 @@ def generate_pcb(
             emit_stages=emit_stages,
             on_event=on_event,
             include_responses=include_responses,
+            placement_profile=placement_profile,
+            placement_policy=placement_policy,
+            placement_feedback=placement_feedback,
+            placement_model=placement_model,
+            placement_fallback_model=placement_fallback_model,
+            placement_max_turns=placement_max_turns,
         )
     # RuntimeError, not ValueError: the service answers a pipeline ValueError as
     # a 400 with the raw message, and a bad engine name is not a client's fault.

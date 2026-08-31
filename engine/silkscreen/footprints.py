@@ -27,6 +27,9 @@ __all__ = [
     "Pad",
     "Footprint",
     "fit_courtyard",
+    "silk_segments",
+    "SILK_STROKE_NM",
+    "SILK_PAD_CLEARANCE_NM",
     "chip_passive",
     "sot23",
     "sot223",
@@ -103,6 +106,86 @@ def fit_courtyard(fp: Footprint, excess_mm: float = _COURTYARD_EXCESS_MM) -> Non
         half_h = max(half_h, abs(pad.y_nm) + pad.h_nm // 2)
     fp.courtyard_w_nm = half_w + mm(excess_mm)
     fp.courtyard_h_nm = half_h + mm(excess_mm)
+
+
+#: Pen width both emitters stroke silkscreen with. 0.15 mm because 0.12 is
+#: under the minimum legend width every house in :mod:`silkscreen.fabhouse`
+#: publishes -- OSH Park prints 5 mil (0.127 mm), JLCPCB and PCBWay 0.15 mm.
+#: Ink under the house minimum is not refused at checkout; it is printed badly
+#: or dropped, and the board arrives with reference designators missing.
+SILK_STROKE_NM = mm(0.15)
+
+#: Minimum gap between silkscreen ink and solderable copper. Ink on a pad
+#: resists solder; most fabs clip it silently, so the shipped board stops
+#: matching the approved artwork. 0.2 mm is the KLC/IPC convention.
+SILK_PAD_CLEARANCE_NM = mm(0.2)
+
+#: Clipped remnants shorter than this are dropped -- a speck of ink marks
+#: nothing and just reads as debris on the legend.
+_MIN_SILK_SEG_NM = mm(0.2)
+
+
+def silk_segments(
+    fp: Footprint,
+    *,
+    stroke_nm: int = SILK_STROKE_NM,
+    clearance_nm: int = SILK_PAD_CLEARANCE_NM,
+) -> list[tuple[int, int, int, int]]:
+    """The body outline as strokes, clipped clear of every pad.
+
+    Stroking the body rectangle directly puts ink on copper wherever the body
+    edge meets a pad -- on a chip passive the pads sit under the body ends, on
+    an LQFP the pad row starts exactly at the body edge -- so every emitted
+    footprint used to overlap its own pads by half the pen width. Instead the
+    four edges are cut wherever the stroked line would come within
+    ``clearance_nm`` of a pad, and what survives is returned as
+    ``(x0, y0, x1, y1)`` segments in footprint-local nanometres.
+
+    Both emitters draw these same segments (KiCad s-expressions and the Gerber
+    legend), transformed exactly as they transform pads, so the clipping stays
+    valid in either frame. A part whose outline is swallowed entirely (an 0603
+    body barely wider than its own pads) gets no outline, which is what real
+    library footprints do too.
+    """
+    if not fp.body_w_nm or not fp.body_h_nm:
+        return []
+    margin = stroke_nm // 2 + clearance_nm
+    bw, bh = fp.body_w_nm, fp.body_h_nm
+    # (fixed axis, fixed coordinate, span start, span end)
+    edges = [
+        ("y", -bh, -bw, bw),  # top
+        ("y", bh, -bw, bw),  # bottom
+        ("x", -bw, -bh, bh),  # left
+        ("x", bw, -bh, bh),  # right
+    ]
+    out: list[tuple[int, int, int, int]] = []
+    for axis, fixed, lo, hi in edges:
+        spans = [(lo, hi)]
+        for pad in fp.pads:
+            if axis == "y":
+                near = abs(fixed - pad.y_nm) <= pad.h_nm // 2 + margin
+                cut = (pad.x_nm - pad.w_nm // 2 - margin,
+                       pad.x_nm + pad.w_nm // 2 + margin)
+            else:
+                near = abs(fixed - pad.x_nm) <= pad.w_nm // 2 + margin
+                cut = (pad.y_nm - pad.h_nm // 2 - margin,
+                       pad.y_nm + pad.h_nm // 2 + margin)
+            if not near:
+                continue
+            spans = [
+                piece
+                for a, b in spans
+                for piece in ((a, min(b, cut[0])), (max(a, cut[1]), b))
+                if piece[1] > piece[0]
+            ]
+        for a, b in spans:
+            if b - a < _MIN_SILK_SEG_NM:
+                continue
+            if axis == "y":
+                out.append((a, fixed, b, fixed))
+            else:
+                out.append((fixed, a, fixed, b))
+    return out
 
 
 def chip_passive(size: str = "0603", *, net1: str = "", net2: str = "") -> Footprint:

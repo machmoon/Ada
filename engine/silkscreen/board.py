@@ -14,11 +14,19 @@ if KiCad's own parser cannot read what we wrote, the tests fail.
 
 from __future__ import annotations
 
-from collections import Counter
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from .footprints import Footprint, UnsupportedPackage, for_passive, lqfp, soic, sot223
+from .footprints import (
+    SILK_STROKE_NM,
+    Footprint,
+    UnsupportedPackage,
+    for_passive,
+    lqfp,
+    silk_segments,
+    soic,
+    sot223,
+)
 from .ids import stable_uuid
 from .netlist import CircuitSpec
 from .packing import Layer, Part, Placement, pack
@@ -32,6 +40,9 @@ __all__ = [
     "DEFAULT_BOARD_MARGIN_NM",
     "build_board",
     "board_pads",
+    "part_anchor",
+    "placed_half_extents",
+    "rotate_offset",
     "route_board",
     "emit_kicad_pcb",
     "write_board",
@@ -158,9 +169,14 @@ def build_board(
     clearance_nm: int = DEFAULT_CLEARANCE_NM,
     time_limit_s: float | None = 20.0,
     edge_refs: set[str] | None = None,
+    rotatable_refs: set[str] | None = None,
     two_sided: bool = False,
 ) -> BoardResult:
     """Turn a validated circuit into footprints, nets and a placement.
+
+    ``rotatable_refs`` names parts the solver may turn 90 degrees. Rotation is
+    off by default because it only pays when a board is tight, and it costs
+    determinism nothing either way.
 
     With ``two_sided``, passives may go on either side while ICs stay on top --
     an IC on the underside complicates assembly and rework for little area
@@ -173,6 +189,18 @@ def build_board(
     # drawing is R2 on the board. Numbering them separately would give two
     # self-consistent files that describe different circuits.
     ref_of = spec.assign_refs()
+
+    # A ref that names nothing is a caller error, not a no-op -- the same
+    # convention pack() and kicad.py already follow. Silently ignoring it means
+    # a part the caller asked to rotate quietly does not, and the board looks
+    # like the solver simply preferred it that way.
+    known = set(ref_of.values())
+    unknown = sorted(set(rotatable_refs or ()) - known)
+    if unknown:
+        raise ValueError(
+            f"rotatable_refs names {unknown}, which are not on this board; "
+            f"known refs: {sorted(known)}"
+        )
 
     placed: list[PlacedPart] = []
 
@@ -210,6 +238,7 @@ def build_board(
             height_nm=p.footprint.courtyard_h_nm * 2,
             ref=p.ref,
             must_be_on_edge=p.ref in (edge_refs or set()),
+            allow_rotation=p.ref in (rotatable_refs or set()),
             layer=Layer.EITHER if two_sided and p.ref.startswith(("C", "R"))
             else Layer.TOP,
         )
@@ -272,6 +301,48 @@ def build_board(
     )
 
 
+def placed_half_extents(part: PlacedPart) -> tuple[int, int]:
+    """The part's courtyard half-extents **as placed**, not as drawn.
+
+    A 90-degree rotation swaps them. The placer reserves the swapped box and
+    reports its bottom-left corner, so anything deriving a position from that
+    corner has to swap too. Not swapping is the recorded bug this function
+    exists to end: the anchor came out short by exactly ``(ch-cw, cw-ch)``, the
+    file still parsed, the courtyard still drew, and only the pads were wrong.
+    """
+    fp = part.footprint
+    if part.rotated:
+        return fp.courtyard_h_nm, fp.courtyard_w_nm
+    return fp.courtyard_w_nm, fp.courtyard_h_nm
+
+
+def part_anchor(part: PlacedPart) -> tuple[int, int]:
+    """The footprint anchor in the solver's Y-up frame.
+
+    One definition, used by the emitter and by the router's pad geometry. Two
+    copies of this arithmetic is how the copper and the footprints ended up in
+    different places while both looked right on their own.
+    """
+    half_w, half_h = placed_half_extents(part)
+    return part.x_nm + half_w, part.y_nm + half_h
+
+
+def rotate_offset(x_nm: int, y_nm: int, *, rotated: bool) -> tuple[int, int]:
+    """A footprint-local offset mapped into the board frame.
+
+    Only 0 and 90 degrees occur, and both are exact in integer nanometres, so
+    this stays integer arithmetic rather than going through sin/cos. KiCad
+    turns a footprint counter-clockwise on screen and screen Y points down, so
+    the board-frame image of a local point is a rotation by ``-angle``: at 90
+    degrees, ``(x, y) -> (y, -x)``. That is the same mapping
+    :func:`silkscreen.kicad._rotate_mm` applies when reading a board back, and
+    the two must agree or a board does not survive a round trip.
+    """
+    if not rotated:
+        return x_nm, y_nm
+    return y_nm, -x_nm
+
+
 def board_pads(board: BoardResult) -> list[RoutePad]:
     """Every pad on the board, absolute, in the solver's Y-up frame.
 
@@ -283,22 +354,28 @@ def board_pads(board: BoardResult) -> list[RoutePad]:
     coordinates no pad occupies, the run would report success, and the board
     would come back with tracks ending in bare laminate.
 
-    Rotated parts are refused rather than approximated -- see
-    :func:`route_board`.
+    A rotated part turns its pads with it: the offset is mapped through
+    :func:`rotate_offset` and the pad's own width and height swap, because a
+    1.95 x 0.6 mm pad laid on its side is 0.6 x 1.95 mm of copper for the
+    router to keep clear of.
     """
     pads: list[RoutePad] = []
     for part in board.parts:
-        fp = part.footprint
-        anchor_x = part.x_nm + fp.courtyard_w_nm
-        anchor_y = part.y_nm + fp.courtyard_h_nm
-        for pad in fp.pads:
+        anchor_x, anchor_y = part_anchor(part)
+        for pad in part.footprint.pads:
+            ox, oy = rotate_offset(pad.x_nm, pad.y_nm, rotated=part.rotated)
+            w_nm, h_nm = (
+                (pad.h_nm, pad.w_nm) if part.rotated else (pad.w_nm, pad.h_nm)
+            )
             pads.append(
                 RoutePad(
                     net=pad.net,
-                    x_nm=anchor_x + pad.x_nm,
-                    y_nm=anchor_y - pad.y_nm,
-                    w_nm=pad.w_nm,
-                    h_nm=pad.h_nm,
+                    x_nm=anchor_x + ox,
+                    # The one Y flip: pad offsets are written Y-down, the
+                    # router works Y-up.
+                    y_nm=anchor_y - oy,
+                    w_nm=w_nm,
+                    h_nm=h_nm,
                     layer=part.layer,
                     ref=part.ref,
                     number=pad.number,
@@ -320,31 +397,13 @@ def route_board(
     be written out and inspected before any copper exists. That is the step the
     pipeline used to skip past.
 
-    Rotated parts abort routing. :func:`emit_kicad_pcb` is known to misplace a
-    rotated footprint's anchor (a recorded, unfixed bug), so pad coordinates
-    for a rotated part disagree with the file it writes. Routing to them would
-    turn a latent placement bug into copper that lands nowhere, so this refuses
-    and says why. Nothing sets rotation today, which is why the fix belongs to
-    that bug rather than to this function.
+    Rotated parts route like any other. They used to abort here, because the
+    emitter misplaced a rotated footprint's anchor and routing to those
+    coordinates would have turned a latent placement bug into copper landing on
+    bare laminate. That bug is fixed: :func:`part_anchor` is now the one
+    definition of where a part sits, and the emitter and this function both
+    read it.
     """
-    rotated = [p.ref for p in board.parts if p.rotated]
-    if rotated:
-        result = RouteResult()
-        reason = (
-            "not routed: rotated footprints "
-            f"({', '.join(sorted(rotated))}) have a known anchor bug in the "
-            "board emitter, so their pad coordinates cannot be trusted"
-        )
-        # Name every net the refusal covers, not just the refusal. An empty
-        # unrouted map reads as "nothing left to route" to route_completion.
-        for net, count in Counter(p.net for p in board_pads(board) if p.net).items():
-            if count >= 2:
-                result.unrouted[net] = reason
-        result.warnings.append(reason)
-        board.warnings.extend(result.warnings)
-        board.unrouted_nets = dict(result.unrouted)
-        return result
-
     result = route(
         board_pads(board),
         min_x_nm=-margin_nm,
@@ -412,8 +471,11 @@ def emit_kicad_pcb(
         fp = part.footprint
         # The placer gives a bottom-left corner with Y up; KiCad wants the
         # anchor with Y down, and the courtyard is centred on the anchor.
-        anchor_x = part.x_nm + fp.courtyard_w_nm
-        anchor_y = board.height_nm - part.y_nm - fp.courtyard_h_nm
+        # part_anchor owns the rotation swap, so this cannot drift from the
+        # pad geometry the router was handed.
+        anchor_up_x, anchor_up_y = part_anchor(part)
+        anchor_x = anchor_up_x
+        anchor_y = board.height_nm - anchor_up_y
         angle = 90 if part.rotated else 0
         at = f"{f(anchor_x)} {f(anchor_y)}" + (f" {angle}" if angle else "")
 
@@ -450,17 +512,18 @@ def emit_kicad_pcb(
                 f' (uuid "{_uuid(part.ref + f"crt{i}")}"))'
             )
 
-        if fp.body_w_nm and fp.body_h_nm:
-            bw, bh = fp.body_w_nm, fp.body_h_nm
-            bpts = [(-bw, -bh), (bw, -bh), (bw, bh), (-bw, bh)]
-            for i in range(4):
-                sx, sy = bpts[i]
-                ex, ey = bpts[(i + 1) % 4]
-                out.append(
-                    f"    (fp_line (start {f(sx)} {f(sy)}) (end {f(ex)} {f(ey)})"
-                    f' (stroke (width 0.15) (type solid)) (layer "{side}.SilkS")'
-                    f' (uuid "{_uuid(part.ref + f"silk{i}")}"))'
-                )
+        # The body outline, clipped clear of the pads: stroking the raw body
+        # rectangle put ink on every pad the body edge touches (see
+        # footprints.silk_segments), and ink on a pad is a solderability
+        # defect a fab will clip or flag. The pen matches SILK_STROKE_NM,
+        # which also sets the clip margin.
+        for i, (sx, sy, ex, ey) in enumerate(silk_segments(fp)):
+            out.append(
+                f"    (fp_line (start {f(sx)} {f(sy)}) (end {f(ex)} {f(ey)})"
+                f" (stroke (width {f(SILK_STROKE_NM)}) (type solid))"
+                f' (layer "{side}.SilkS")'
+                f' (uuid "{_uuid(part.ref + f"silk{i}")}"))'
+            )
 
         for pad in fp.pads:
             idx = net_index.get(pad.net, 0)

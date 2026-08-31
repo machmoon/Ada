@@ -8,6 +8,7 @@
     reviewed = true,
     tab = 'review',
     schematicEnabled = false,
+    placementEnabled = false,
     boardEnabled = false,
     orderEnabled = false,
     orderGo = false,
@@ -70,6 +71,18 @@
       data-testid="status-bar-tab-schematic"
       data-enabled="false"
     >Schematic</span>
+  {/if}
+  {#if placementEnabled}
+    <a
+      class="lbl tab"
+      class:current={tab === 'placement'}
+      href="#placement"
+      aria-current={tab === 'placement' ? 'page' : undefined}
+      data-testid="status-bar-tab-placement"
+      data-enabled="true"
+    >Placement</a>
+  {:else}
+    <span class="lbl tab" aria-disabled="true" title="Enable verified placement for this run" data-testid="status-bar-tab-placement" data-enabled="false">Placement</span>
   {/if}
   {#if boardEnabled}
     <a

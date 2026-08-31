@@ -1,5 +1,6 @@
 <script>
-  import { formatClock } from '../lib/format.js'
+  import { formatClock, formatDuration } from '../lib/format.js'
+  import { elapsed } from '../lib/run.js'
 
   let { entry } = $props()
 
@@ -8,6 +9,7 @@
     ['propose', 'propose circuit'],
     ['validate', 'validate and repair'],
     ['place', 'place'],
+    ['placement_repair', 'verify placement'],
     ['route', 'route copper'],
     ['review', 'review'],
   ]
@@ -27,6 +29,9 @@
       <div class="title">Orchestrator activity</div>
       <div class="meta mono">
         {entry.phase === 'running' ? 'running' : entry.phase}
+        <!-- The clock, not the feed, is what says "working" before the first
+             stream frame arrives — the ticker only exists while running. -->
+        {#if entry.phase === 'running'} · {formatDuration($elapsed / 1000)}{/if}
         {#if entry.feed?.length} · {entry.feed.length} events{/if}
       </div>
     </div>

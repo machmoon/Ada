@@ -8,8 +8,19 @@ describe('datasheet presets', () => {
     expect(DATASHEET_PRESETS).toContainEqual({
       part: 'AMS1117-3.3',
       manufacturer: 'Advanced Monolithic Systems',
-      url: 'https://datasheet.lcsc.com/lcsc/1811142212_Advanced-Monolithic-Systems-AMS1117-3-3_C6186.pdf',
+      url: 'http://www.advanced-monolithic.com/pdf/ds1117.pdf',
     })
+  })
+
+  it('points every preset at a PDF the service can download', () => {
+    // The previous AMS1117 link was a distributor page that answered
+    // 200 text/html from a .pdf URL, which the run could only discover at the
+    // model. A preset is demo material, so it has to be a direct document.
+    for (const preset of DATASHEET_PRESETS) {
+      expect(preset.url).toMatch(/^https?:\/\//)
+      expect(preset.url.toLowerCase()).toMatch(/\.pdf$/)
+      expect(preset.url).not.toMatch(/lcsc\.com/)
+    }
   })
 
   it('can be copied into a ready-to-submit request', () => {

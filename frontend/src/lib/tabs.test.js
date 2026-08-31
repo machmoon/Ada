@@ -21,8 +21,8 @@ describe('parseTab', () => {
     expect(parseTab(null)).toBe('')
   })
 
-  it('knows the tabs the status bar shows', () => {
-    expect(TABS).toEqual(['chat', 'schematic', 'board', 'review', 'order'])
+  it('knows the six tabs the status bar shows', () => {
+    expect(TABS).toEqual(['chat', 'schematic', 'placement', 'board', 'review', 'order'])
   })
 
   it('falls back to chat when no order was prepared', () => {
@@ -44,6 +44,11 @@ describe('resolveTab', () => {
 
   it('shows the schematic once a run carries validated topology', () => {
     expect(resolveTab('#schematic', { schematic: true })).toBe('schematic')
+  })
+
+  it('shows verifier receipts only when a placement run exists', () => {
+    expect(resolveTab('#placement', { placement: true })).toBe('placement')
+    expect(resolveTab('#placement', { placement: false, board: true })).toBe('chat')
   })
 
   it('falls back to chat when there is no schematic to show', () => {

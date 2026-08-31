@@ -19,6 +19,7 @@ from __future__ import annotations
 import contextlib
 import hashlib
 import json
+import math
 import os
 import sys
 import time
@@ -54,15 +55,28 @@ from silkscreen.agents.resilience import (  # noqa: E402
 from silkscreen.agents.retrieval import GeminiEmbedder  # noqa: E402
 from silkscreen.approval import prepare_order  # noqa: E402
 from silkscreen.board import emit_kicad_pcb  # noqa: E402
+from silkscreen.constraints import (  # noqa: E402
+    parse_constraint_manifest,
+    verify_constraint_manifest,
+)
 from silkscreen.fabhouse import DEFAULT_SERVICE_ID, service_by_id  # noqa: E402
 from silkscreen.order import (  # noqa: E402
     OrderOptions,
     SolderMaskColour,
     SurfaceFinish,
 )
+from silkscreen.placement.agent import PlacementPolicyError  # noqa: E402
+from silkscreen.placement.api import repair_request, run_to_dict  # noqa: E402
+from silkscreen.placement.traces import (  # noqa: E402
+    FactFailureTraceStore,
+    FailureTraceStore,
+    JsonlFailureTraceStore,
+    build_failure_traces,
+)
 from silkscreen.units import to_mm  # noqa: E402
 
 from .cache import FactStore, MemoryFactStore  # noqa: E402
+from .configuration import configuration_status  # noqa: E402
 from .models import (  # noqa: E402
     model_catalog,
     select_model,
@@ -75,8 +89,13 @@ __all__ = [
     "Handler",
     "build_embedder",
     "build_model",
+    "build_ollama_model",
     "build_pages_store",
+    "build_failure_trace_store",
     "build_store",
+    "build_tinker_model",
+    "placement_policy_status",
+    "resolve_placement_policy",
     "caused_by_model_failure",
     "generate",
     "make_server",
@@ -121,6 +140,31 @@ _CONTENT_TYPES = {
     ".woff2": "font/woff2",
 }
 _DEFAULT_CONTENT_TYPE = "application/octet-stream"
+
+
+class _ResponseSerializationError(RuntimeError):
+    """A response or stream frame could not be represented as strict JSON."""
+
+
+def _reject_nonfinite_json(value: str) -> None:
+    raise ValueError(f"non-finite number {value} is not valid JSON")
+
+
+def _parse_json_float(value: str) -> float:
+    number = float(value)
+    if not math.isfinite(number):
+        _reject_nonfinite_json(value)
+    return number
+
+
+def _json_line(payload: dict[str, Any]) -> bytes:
+    """Encode one NDJSON frame without emitting JavaScript-only NaN values."""
+    try:
+        return (json.dumps(payload, allow_nan=False) + "\n").encode()
+    except (TypeError, ValueError) as exc:
+        raise _ResponseSerializationError(
+            "stream frame is not JSON serializable"
+        ) from exc
 
 
 def _refs_by_spec_name(spec, board) -> dict[str, str]:
@@ -455,7 +499,10 @@ def _error_response(exc: BaseException) -> tuple[int, dict[str, Any]]:
         # arriving here is an internal bug and falls through to the 500 branch
         # with its error id and logged traceback.
         return 400, {"error": str(exc)}
-    if isinstance(exc, (AllProvidersFailed, GroundingError, ModelError)):
+    if isinstance(
+        exc,
+        (AllProvidersFailed, GroundingError, ModelError, PlacementPolicyError),
+    ):
         # Upstream is down, not the caller's fault: 502, not 500.
         return 502, {"error": str(exc)}
     if caused_by_model_failure(exc):
@@ -487,24 +534,216 @@ def build_pages_store() -> FactStore:
     return MemoryFactStore()
 
 
+def build_failure_trace_store() -> FailureTraceStore:
+    """Firestore in Cloud Run, append-only JSONL for local post-training."""
+    if os.getenv("GOOGLE_CLOUD_PROJECT") and os.getenv("USE_FIRESTORE", "1") != "0":
+        from .cache import FirestoreFactStore
+
+        return FactFailureTraceStore(
+            FirestoreFactStore("placement_failure_traces")
+        )
+    configured = os.getenv("PLACEMENT_FAILURE_TRACE_PATH", "").strip()
+    path = (
+        Path(configured)
+        if configured
+        else Path(__file__).resolve().parent.parent
+        / "artifacts"
+        / "placement-failure-traces.jsonl"
+    )
+    return JsonlFailureTraceStore(path)
+
+
 def build_embedder() -> BatchingEmbedder:
     return BatchingEmbedder(GeminiEmbedder())
 
 
 def build_model():
-    """Primary Gemini model with a cheaper tier behind it.
+    """Primary Gemini model with a cheaper tier and open-weights Gemma behind it.
 
-    Two tiers, not one: a rate limit or a transient 5xx on the primary should
-    degrade the answer, not lose the request.
+    Three tiers, not one: a rate limit or a transient 5xx on the primary should
+    degrade the answer, not lose the request. Gemma is a different model family
+    behind the same API, so an outage or quota exhaustion shared by both Gemini
+    tiers still leaves one rung standing. One attempt only on that last rung:
+    by then the caller has already waited through four Gemini attempts.
     """
-    from silkscreen.agents.model import CHEAP_MODEL, DEFAULT_MODEL
+    from silkscreen.agents.model import CHEAP_MODEL, DEFAULT_MODEL, GEMMA_MODEL
 
     return FallbackModel(
         providers=[
             Provider("gemini-primary", GeminiModel(DEFAULT_MODEL), attempts=2),
             Provider("gemini-cheap", GeminiModel(CHEAP_MODEL), attempts=2),
+            Provider("gemma-open", GeminiModel(GEMMA_MODEL), attempts=1),
         ]
     )
+
+
+def build_tinker_model():
+    """Load the promoted small-policy checkpoint, never an untrained base model."""
+    checkpoint = os.getenv("TINKER_PLACEMENT_MODEL", "").strip()
+    if not checkpoint:
+        raise ValueError(
+            "tinker policy is not configured; set TINKER_PLACEMENT_MODEL to "
+            "the promoted tinker:// sampler checkpoint"
+        )
+    if not checkpoint.startswith("tinker://"):
+        raise ValueError("TINKER_PLACEMENT_MODEL must be a tinker:// checkpoint")
+    from silkscreen.placement.tinker_policy import TinkerPlacementModel
+
+    return TinkerPlacementModel(model_path=checkpoint)
+
+
+def build_ollama_model():
+    base_url = os.getenv("OLLAMA_PLACEMENT_URL", "").strip()
+    if not base_url:
+        raise ValueError(
+            "local policy is not configured; set OLLAMA_PLACEMENT_URL to the "
+            "private Ollama endpoint"
+        )
+    from silkscreen.placement.ollama_policy import OllamaPlacementModel
+
+    return OllamaPlacementModel(
+        base_url=base_url,
+        model=os.getenv("OLLAMA_PLACEMENT_MODEL", "gemma3:4b"),
+    )
+
+
+def build_fast_placement_model():
+    if _tinker_configured():
+        return build_tinker_model()
+    return build_ollama_model()
+
+
+def _tinker_configured() -> bool:
+    checkpoint = os.getenv("TINKER_PLACEMENT_MODEL", "").strip()
+    return bool(os.getenv("TINKER_API_KEY") and checkpoint.startswith("tinker://"))
+
+
+def _experimental_requested(payload: dict[str, Any]) -> bool:
+    value = payload.get("experimental_placement", False)
+    if not isinstance(value, bool):
+        raise ValueError("experimental_placement must be a boolean")
+    return value
+
+
+def placement_policy_status(*, experimental: bool = False) -> dict[str, bool]:
+    gemini = bool(os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY"))
+    tinker = experimental and _tinker_configured()
+    ollama = experimental and bool(os.getenv("OLLAMA_PLACEMENT_URL"))
+    return {
+        "deterministic": True,
+        "gemini": gemini,
+        "tinker": tinker,
+        "ollama": ollama,
+        "hybrid": gemini and (tinker or ollama),
+    }
+
+
+def resolve_placement_policy(
+    requested: str, available: dict[str, bool] | None = None
+) -> str:
+    """Resolve the single fast product mode to the best configured backend."""
+    status = available if available is not None else placement_policy_status()
+    if requested != "fast":
+        if requested not in status:
+            raise ValueError(f"unknown placement policy {requested!r}")
+        if not status[requested]:
+            raise ValueError(f"placement policy {requested!r} is not available")
+        return requested
+    for candidate in ("hybrid", "tinker", "ollama"):
+        if status.get(candidate):
+            return candidate
+    return "deterministic"
+
+
+def _placement_model_id(policy: str) -> str:
+    if policy == "ollama":
+        return os.getenv("OLLAMA_PLACEMENT_MODEL", "gemma3:4b")
+    if policy == "tinker":
+        return os.getenv("TINKER_PLACEMENT_MODEL", "Qwen/Qwen3.5-4B")
+    if policy == "hybrid":
+        if os.getenv("TINKER_PLACEMENT_MODEL"):
+            return os.getenv("TINKER_PLACEMENT_MODEL", "Qwen/Qwen3.5-4B")
+        return os.getenv("OLLAMA_PLACEMENT_MODEL", "gemma3:4b")
+    return policy
+
+
+def _trace_consent(payload: dict[str, Any]) -> tuple[bool, str]:
+    """Training traces are always an explicit, experimental opt-in."""
+    supplied = payload.get("record_trace")
+    if "record_trace" in payload and not isinstance(supplied, bool):
+        raise ValueError("record_trace must be a boolean")
+    if supplied and payload.get("experimental_placement") is not True:
+        raise ValueError("record_trace requires experimental placement features")
+    origin = "uploaded-board" if "board" in payload else "generated-board"
+    return bool(supplied), origin
+
+
+def _store_failure_traces(
+    result: dict[str, Any],
+    store: FailureTraceStore,
+    *,
+    input_origin: str,
+) -> list[str]:
+    traces = build_failure_traces(
+        result,
+        model_id=_placement_model_id(str(result.get("policy", ""))),
+        input_origin=input_origin,
+    )
+    return [store.append(trace) for trace in traces]
+
+
+def _placement_models(
+    policy: str,
+    gemini_factory: Callable[[], Any],
+) -> tuple[Any | None, Any | None]:
+    if policy == "gemini":
+        return gemini_factory(), None
+    if policy == "tinker":
+        return build_tinker_model(), None
+    if policy == "ollama":
+        return build_ollama_model(), None
+    if policy == "hybrid":
+        return build_fast_placement_model(), gemini_factory()
+    return None, None
+
+
+def _run_placement_policy(
+    payload: dict[str, Any],
+    policy: str,
+    gemini_factory: Callable[[], Any],
+) -> dict[str, Any]:
+    model, fallback_model = _placement_models(policy, gemini_factory)
+    return repair_request(
+        {**payload, "policy": policy},
+        model=model,
+        fallback_model=fallback_model,
+    )
+
+
+def _record_failure_trace_ids(
+    payload: dict[str, Any],
+    result: dict[str, Any],
+    store: FailureTraceStore | None = None,
+) -> list[str]:
+    consent, input_origin = _trace_consent(payload)
+    if not consent:
+        return []
+    attempted = result.get("policy_attempt")
+    trace_result = attempted if isinstance(attempted, dict) else result
+    selected_store = store or build_failure_trace_store()
+    try:
+        return _store_failure_traces(
+            trace_result,
+            selected_store,
+            input_origin=input_origin,
+        )
+    except Exception as exc:
+        # Training telemetry must never take down board repair.
+        sys.stderr.write(
+            "placement trace write failed: "
+            f"{type(exc).__name__}: {exc}\n"
+        )
+        return []
 
 
 def run_chat_orchestrator(**kwargs):
@@ -553,6 +792,9 @@ def generate(
     pages_store: FactStore | None = None,
     embedder_factory: Callable[[], Any] | None = None,
     on_event: Callable[[dict[str, Any]], None] | None = None,
+    placement_policy: str = "deterministic",
+    placement_model=None,
+    placement_fallback_model=None,
 ) -> dict[str, Any]:
     """Run the pipeline for one request body.
 
@@ -576,6 +818,13 @@ def generate(
     intent = str(payload.get("intent") or "").strip()
     if not intent:
         raise ValueError("'intent' is required")
+
+    # An approved manifest is caller-owned input, so reject it before cache
+    # reads, datasheet downloads, or a model call can spend time or quota.
+    constraint_manifest = parse_constraint_manifest(payload.get("constraints"))
+    model_intent = intent
+    if constraint_manifest is not None:
+        model_intent += constraint_manifest.prompt_block()
 
     datasheets = payload.get("datasheets") or {}
     if not isinstance(datasheets, dict):
@@ -637,9 +886,23 @@ def generate(
         except (TypeError, ValueError):
             raise ValueError("'time_limit_s' must be a number") from None
 
+    placement_profile = payload.get("placement_profile")
+    if placement_profile is not None and (
+        not isinstance(placement_profile, str) or not placement_profile.strip()
+    ):
+        raise ValueError("'placement_profile' must be a non-empty profile name")
+    placement_feedback = payload.get("placement_feedback")
+    if placement_feedback is not None and not isinstance(placement_feedback, dict):
+        raise ValueError("'placement_feedback' must be an object")
+    placement_max_turns = payload.get("placement_max_turns", 8)
+    if isinstance(placement_max_turns, bool) or not isinstance(
+        placement_max_turns, int
+    ):
+        raise ValueError("'placement_max_turns' must be an integer")
+
     result = generate_pcb(
         model,
-        intent,
+        model_intent,
         datasheets=to_read,
         preloaded_facts=preloaded,
         time_limit_s=time_limit_s,
@@ -648,6 +911,12 @@ def generate(
         # Debugging a run means reading what the model actually said, so the
         # raw answers join the stream only when the caller asks for them.
         include_responses=bool(payload.get("debug", False)),
+        placement_profile=placement_profile,
+        placement_policy=placement_policy,
+        placement_feedback=placement_feedback,
+        placement_model=placement_model,
+        placement_fallback_model=placement_fallback_model,
+        placement_max_turns=placement_max_turns,
     )
 
     for fact in result.facts:
@@ -705,6 +974,49 @@ def generate(
         ),
     }
 
+    if constraint_manifest is not None:
+        receipt = verify_constraint_manifest(
+            constraint_manifest,
+            result.spec,
+            board,
+            result.route,
+        )
+        checks = [
+            check
+            for group in receipt.get("net_classes", [])
+            for check in group.get("checks", [])
+        ]
+        checks.extend(receipt.get("mechanical", []))
+        counts = {
+            status: sum(check.get("status") == status for check in checks)
+            for status in ("verified", "violated", "unresolved")
+        }
+
+        response["constraint_manifest"] = constraint_manifest.to_dict()
+        response["constraint_receipt"] = receipt
+        # This is production-promotion eligibility metadata, not an artifact
+        # gate. The generated KiCad board stays available in this response.
+        response["promotion_status"] = (
+            "constraint_passed" if receipt["promotable"] else "constraint_blocked"
+        )
+        response["blockers"].extend(
+            f"constraint {item['scope']}/{item['name']}: {item['detail']}"
+            for item in receipt["blockers"]
+        )
+        emit(
+            {
+                "event": "constraints.verify",
+                "manifest_version": constraint_manifest.version,
+                "hard_gate": receipt["hard_gate"],
+                "promotable": receipt["promotable"],
+                "blockers": len(receipt["blockers"]),
+                "verified": counts["verified"],
+                "violated": counts["violated"],
+                "unresolved": counts["unresolved"],
+                "artifact_available": True,
+            }
+        )
+
     if result.route is not None:
         response["routing"] = {
             "tracks": len(result.route.tracks),
@@ -714,6 +1026,18 @@ def generate(
             "warnings": list(result.route.warnings),
             "completion": round(result.route.completion, 4),
         }
+
+    if result.placement is not None:
+        placement = run_to_dict(result.placement.run, placement_feedback)
+        placement["requested_policy"] = result.placement.requested_policy
+        placement["applied"] = result.placement.applied
+        placement["policy_fallback"] = result.placement.policy_fallback
+        if result.placement.attempted_run is not None:
+            placement["policy_attempt"] = run_to_dict(
+                result.placement.attempted_run,
+                placement_feedback,
+            )
+        response["placement_repair"] = placement
 
     if order_opts is not None:
         response["order"] = _order_block(
@@ -783,14 +1107,16 @@ def generate(
 
 
 class Handler(BaseHTTPRequestHandler):
-    """Same-origin API and built web bundle for the review interface."""
+    """Same-origin chat, generation, placement repair, and built web UI."""
 
     model_factory = staticmethod(build_model)
     model_catalog_factory = staticmethod(model_catalog)
+    configuration_status_factory = staticmethod(configuration_status)
     orchestrator_runner = staticmethod(run_chat_orchestrator)
     request_pacer: RequestPacer = GEMINI_REQUEST_PACER
     store: FactStore | None = None
     pages_store: FactStore | None = None
+    failure_trace_store: FailureTraceStore | None = None
     embedder_factory = staticmethod(build_embedder)
 
     #: Root of the built bundle; None serves no static files at all.
@@ -800,11 +1126,29 @@ class Handler(BaseHTTPRequestHandler):
     # served from this same origin, so nothing the UI sends is cross-origin.
     # Adding them defensively would only widen who may call /generate.
 
-    def _send(self, code: int, payload: dict[str, Any]) -> None:
-        body = json.dumps(payload).encode()
+    def _send(
+        self,
+        code: int,
+        payload: dict[str, Any],
+        *,
+        cache_control: str | None = None,
+    ) -> None:
+        try:
+            body = json.dumps(payload, allow_nan=False).encode()
+        except (TypeError, ValueError) as exc:
+            error_id = uuid.uuid4().hex[:12]
+            sys.stderr.write(
+                f"error {error_id}: response serialization failed: {exc}\n"
+            )
+            code = 500
+            body = json.dumps(
+                {"error": "internal error", "error_id": error_id}
+            ).encode()
         self.send_response(code)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(body)))
+        if cache_control:
+            self.send_header("Cache-Control", cache_control)
         self.end_headers()
         self.wfile.write(body)
 
@@ -876,13 +1220,32 @@ class Handler(BaseHTTPRequestHandler):
 
         # The probe is answered before the bundle is consulted, so a build
         # output file named "healthz" can never shadow the check Cloud Run
-        # uses to decide whether this revision is alive.
-        if route == "/healthz":
+        # uses to decide whether this revision is alive. /readyz exists because
+        # Google's frontend intercepts /healthz on run.app domains at the edge
+        # (404, request never reaches the container), so an external smoke
+        # check needs a name the frontend leaves alone.
+        if route in ("/healthz", "/readyz"):
             self._send(200, {"ok": True, "service": "silkscreen"})
             return
 
         if route == "/models":
-            self._send(200, self.model_catalog_factory())
+            catalog = dict(self.model_catalog_factory())
+            catalog["placement"] = {
+                # The visible request toggle is the opt-in. Individual providers
+                # remain unavailable until their server-side configuration exists.
+                "experimental_enabled": True,
+                "profiles": ["compact-control", "thermal-first"],
+                "policies": placement_policy_status(experimental=True),
+            }
+            self._send(200, catalog)
+            return
+
+        if route == "/config/status":
+            self._send(
+                200,
+                self.configuration_status_factory(),
+                cache_control="no-store",
+            )
             return
 
         static = self._resolve_static(route)
@@ -901,6 +1264,9 @@ class Handler(BaseHTTPRequestHandler):
         self._send(404, {"error": f"no route {self.path}"})
 
     def do_POST(self) -> None:
+        if self.path == "/placement/repair":
+            self._placement_repair()
+            return
         if self.path == "/chat/stream":
             self._chat_stream()
             return
@@ -911,6 +1277,69 @@ class Handler(BaseHTTPRequestHandler):
             self._generate_once()
             return
         self._send(404, {"error": f"no route {self.path}"})
+
+    def _placement_repair(self) -> None:
+        payload = self._read_payload()
+        if payload is None:
+            return
+        try:
+            experimental = _experimental_requested(payload)
+            requested_policy = str(
+                payload.get("policy", "deterministic")
+            ).strip().lower()
+            policy_status = placement_policy_status(experimental=experimental)
+            policy = resolve_placement_policy(requested_policy, policy_status)
+            quota_rpm = select_quota_rpm(payload.get("quota_rpm"))
+
+            def gemini_factory():
+                model = self.model_factory()
+                if quota_rpm is not None:
+                    model = _with_request_pacing(
+                        model,
+                        lambda _provider: self.request_pacer.wait(quota_rpm),
+                    )
+                return model
+
+            try:
+                result = _run_placement_policy(payload, policy, gemini_factory)
+            except (OSError, PlacementPolicyError, TimeoutError):
+                if requested_policy != "fast" or policy == "deterministic":
+                    raise
+                unavailable_policy = policy
+                policy = "deterministic"
+                result = _run_placement_policy(payload, policy, gemini_factory)
+                result["policy_fallback"] = {
+                    "from": unavailable_policy,
+                    "to": policy,
+                    "reason": "fast proposer unavailable",
+                }
+            if (
+                requested_policy == "fast"
+                and policy != "deterministic"
+                and not result.get("completed")
+            ):
+                incomplete_policy = policy
+                attempted = result
+                policy = "deterministic"
+                result = _run_placement_policy(payload, policy, gemini_factory)
+                result["policy_attempt"] = attempted
+                result["policy_fallback"] = {
+                    "from": incomplete_policy,
+                    "to": policy,
+                    "reason": "fast proposer did not complete repair",
+                }
+            result["requested_policy"] = requested_policy
+            result["available_policies"] = policy_status
+            trace_ids = _record_failure_trace_ids(
+                payload, result, self.failure_trace_store
+            )
+            result["failure_trace_ids"] = trace_ids
+            result["failure_trace_count"] = len(trace_ids)
+        except Exception as exc:
+            status, body = _error_response(exc)
+            self._send(status, body)
+        else:
+            self._send(200, result)
 
     def _read_payload(self) -> dict[str, Any] | None:
         """The request body as a JSON object, or None once its error is sent.
@@ -935,8 +1364,12 @@ class Handler(BaseHTTPRequestHandler):
             self._send(413, {"error": "request body too large"})
             return None
         try:
-            payload = json.loads(self.rfile.read(length) or b"{}")
-        except json.JSONDecodeError as exc:
+            payload = json.loads(
+                self.rfile.read(length) or b"{}",
+                parse_constant=_reject_nonfinite_json,
+                parse_float=_parse_json_float,
+            )
+        except (json.JSONDecodeError, ValueError) as exc:
             self._send(400, {"error": f"invalid JSON: {exc}"})
             return None
         if not isinstance(payload, dict):
@@ -951,6 +1384,8 @@ class Handler(BaseHTTPRequestHandler):
         quota_rpm: int | None = None,
     ) -> dict[str, Any]:
         """One pipeline run, wired to whatever this handler was injected with."""
+        if quota_rpm is None:
+            quota_rpm = select_quota_rpm(payload.get("quota_rpm"))
         store = self.store if self.store is not None else build_store()
         model = self.model_factory()
         if quota_rpm is not None:
@@ -971,14 +1406,51 @@ class Handler(BaseHTTPRequestHandler):
                 )
 
             model = _with_request_pacing(model, before_attempt)
-        return generate(
+
+        experimental = _experimental_requested(payload)
+        trace_consent, _ = _trace_consent(payload)
+        placement_profile = payload.get("placement_profile")
+        placement_status = placement_policy_status(experimental=experimental)
+        placement_policy = "deterministic"
+        requested_placement_policy: str | None = None
+        placement_model = None
+        placement_fallback_model = None
+        if placement_profile is not None:
+            requested_placement_policy = str(
+                payload.get("placement_policy", "deterministic")
+            ).strip().lower()
+            placement_policy = resolve_placement_policy(
+                requested_placement_policy, placement_status
+            )
+            placement_model, placement_fallback_model = _placement_models(
+                placement_policy, lambda: model
+            )
+        elif trace_consent:
+            raise ValueError("record_trace requires placement_profile")
+
+        result = generate(
             payload,
             model=model,
             store=store,
             pages_store=self.pages_store,
             embedder_factory=self.embedder_factory,
             on_event=on_event,
+            placement_policy=placement_policy,
+            placement_model=placement_model,
+            placement_fallback_model=placement_fallback_model,
         )
+        placement = result.get("placement_repair")
+        if isinstance(placement, dict):
+            if requested_placement_policy is not None:
+                placement["requested_policy"] = requested_placement_policy
+            placement["available_policies"] = placement_status
+            placement["experimental_placement"] = experimental
+            trace_ids = _record_failure_trace_ids(
+                payload, placement, self.failure_trace_store
+            )
+            placement["failure_trace_ids"] = trace_ids
+            placement["failure_trace_count"] = len(trace_ids)
+        return result
 
     def _generate_once(self) -> None:
         """The whole run in one response, once it is finished."""
@@ -1021,7 +1493,7 @@ class Handler(BaseHTTPRequestHandler):
             """
             nonlocal gone
             try:
-                self.wfile.write((json.dumps(event) + "\n").encode())
+                self.wfile.write(_json_line(event))
                 self.wfile.flush()
             except ConnectionError:
                 # BrokenPipeError and ConnectionResetError are the two that
@@ -1050,8 +1522,14 @@ class Handler(BaseHTTPRequestHandler):
                 emit({"event": "run.error", "status": status, **body})
             return
 
-        with contextlib.suppress(ConnectionError):
+        try:
             emit({"event": "run.done", "result": result})
+        except _ResponseSerializationError as exc:
+            status, body = _error_response(exc)
+            with contextlib.suppress(ConnectionError):
+                emit({"event": "run.error", "status": status, **body})
+        except ConnectionError:
+            pass
 
     def _chat_stream(self) -> None:
         """One ADK orchestrator turn, with pipeline and model events inline."""
@@ -1078,6 +1556,10 @@ class Handler(BaseHTTPRequestHandler):
             return
 
         try:
+            # Validate board constraints before even resolving the chat model.
+            # generate() repeats this at the tool boundary so direct calls get
+            # the same guarantee.
+            parse_constraint_manifest(payload.get("constraints"))
             catalog = self.model_catalog_factory()
             orchestrator_model = select_model(payload.get("model"), catalog)
             thinking_level = select_thinking_level(payload.get("thinking_level"))
@@ -1107,7 +1589,7 @@ class Handler(BaseHTTPRequestHandler):
             }
             frame.setdefault("t_s", round(time.monotonic() - started, 3))
             try:
-                self.wfile.write((json.dumps(frame) + "\n").encode())
+                self.wfile.write(_json_line(frame))
                 self.wfile.flush()
             except ConnectionError:
                 gone = True
@@ -1177,7 +1659,7 @@ class Handler(BaseHTTPRequestHandler):
                 emit({"event": "chat.error", "status": status, **body})
             return
 
-        with contextlib.suppress(ConnectionError):
+        try:
             emit(
                 {
                     "event": "chat.done",
@@ -1189,6 +1671,12 @@ class Handler(BaseHTTPRequestHandler):
                     "result": outcome.result,
                 }
             )
+        except _ResponseSerializationError as exc:
+            status, body = _error_response(exc)
+            with contextlib.suppress(ConnectionError):
+                emit({"event": "chat.error", "status": status, **body})
+        except ConnectionError:
+            pass
 
     def log_message(self, fmt: str, *args: Any) -> None:
         sys.stderr.write(f"{self.address_string()} - {fmt % args}\n")

@@ -415,21 +415,30 @@ def test_the_back_layer_lets_a_blocked_net_through():
     assert len([v for v in result.vias if v.net == "A"]) == 2
 
 
-def test_a_rotated_part_refuses_to_route_rather_than_guessing():
-    """Rotation has a known anchor bug in the emitter; routing to it would
-    turn a latent placement bug into copper that lands on bare laminate."""
+def test_a_rotated_part_routes_now_that_the_anchor_is_right():
+    """This used to assert the opposite, and that was correct at the time.
+
+    ``route_board`` refused any board with a rotated part, because
+    ``emit_kicad_pcb`` misplaced a rotated footprint's anchor and routing to
+    those coordinates would have produced copper landing on bare laminate.
+    With the anchor fixed -- one ``part_anchor`` read by the emitter and by
+    ``board_pads`` alike -- the refusal has nothing left to protect, so a
+    rotated board routes like any other.
+
+    The geometry itself is covered in ``test_rotated_anchor.py``; this only
+    pins that the refusal is gone and did not leave a half-state behind.
+    """
     spec = parse_circuit_spec(REGULATOR)
     board = build_board(spec, time_limit_s=5.0)
     board.parts[0].rotated = True
     result = route_board(board)
-    assert result.tracks == []
-    assert any("rotated" in w for w in result.warnings)
-    assert any("rotated" in w for w in board.warnings)
-    # And the refusal names the nets it covers, on the board as well as in the
-    # result -- otherwise route_completion reads a board with no copper as 100%.
-    assert result.unrouted and set(board.unrouted_nets) == set(result.unrouted)
-    assert board.route_completion == 0.0
-    assert not board.is_routed
+
+    assert not any("rotated" in w for w in result.warnings), result.warnings
+    assert not any("rotated" in w for w in board.warnings), board.warnings
+    assert result.tracks, "a rotated board produced no copper at all"
+    assert board.route_completion > 0.0
+    # Whatever the router could not finish is still named, as for any board.
+    assert set(board.unrouted_nets) == set(result.unrouted)
 
 
 def test_a_single_terminal_net_is_reported_not_silently_skipped():

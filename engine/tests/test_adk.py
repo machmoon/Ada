@@ -1,6 +1,6 @@
 """The ADK driver, held to the straight-line driver's contract.
 
-:mod:`silkscreen.agents.adk` runs the same four stage bodies as
+:mod:`silkscreen.agents.adk` runs the same seven stage bodies as
 :mod:`silkscreen.agents.pipeline`, through a Google ADK workflow rather than a
 straight line. Nearly every assertion here is one that ``test_agents.py``
 already makes about the SDK driver, because the claim being tested is that a
@@ -80,7 +80,7 @@ def _chain(exc):
 
 
 @needs_adk
-def test_events_trace_every_stage_and_model_call(tmp_path):
+def test_events_trace_every_stage_and_model_call(tmp_path, offline_pdf_fetch):
     """The same sixteen frames, in the same order, as the SDK driver's stream."""
     model = _scripted_pipeline_model()
     events = []
@@ -95,7 +95,7 @@ def test_events_trace_every_stage_and_model_call(tmp_path):
     )
 
     assert [e["event"] for e in events] == [
-        "stage.start", "read.part", "model.call", "stage.done",
+        "stage.start", "read.part", "read.fetch", "model.call", "stage.done",
         "stage.start", "model.call", "stage.done",
         "stage.start", "stage.done",
         "stage.start", "stage.done",
@@ -111,7 +111,7 @@ def test_events_trace_every_stage_and_model_call(tmp_path):
 
 
 @needs_adk
-def test_both_engines_leave_the_same_files_behind(tmp_path):
+def test_both_engines_leave_the_same_files_behind(tmp_path, offline_pdf_fetch):
     """Parity of artifacts, not only of events.
 
     A driver that emitted the right frames and wrote three of the four files
@@ -146,7 +146,7 @@ def test_both_engines_leave_the_same_files_behind(tmp_path):
 
 
 @needs_adk
-def test_the_event_name_set_is_frozen(tmp_path):
+def test_the_event_name_set_is_frozen(tmp_path, offline_pdf_fetch):
     """The same frozen set the SDK driver is held to, from the other driver.
 
     ``frontend/src/lib/stream.js`` switches on these strings to turn a frame
@@ -164,12 +164,13 @@ def test_the_event_name_set_is_frozen(tmp_path):
                      time_limit_s=10.0, on_event=events.append)
 
     assert {e["event"] for e in events} == {
-        "stage.start", "stage.done", "read.part", "propose.round", "model.call",
+        "stage.start", "stage.done", "read.part", "read.fetch",
+        "propose.round", "model.call",
     }
 
 
 @needs_adk
-def test_events_carry_no_payload(tmp_path):
+def test_events_carry_no_payload(tmp_path, offline_pdf_fetch):
     """No event may carry board text, model output or datasheet text."""
     model = _scripted_pipeline_model()
     events = []
@@ -187,7 +188,7 @@ def test_events_carry_no_payload(tmp_path):
 
 
 @needs_adk
-def test_response_events_carry_each_answer_verbatim(tmp_path):
+def test_response_events_carry_each_answer_verbatim(tmp_path, offline_pdf_fetch):
     """The debug stream, from the other driver, mirroring the SDK suite's test.
 
     ``include_responses`` is threaded from the driver into ``_wire_events`` and
@@ -357,7 +358,7 @@ def test_events_surface_a_provider_failover(tmp_path):
 
 
 @needs_adk
-def test_both_drivers_build_the_same_board(tmp_path):
+def test_both_drivers_build_the_same_board(tmp_path, offline_pdf_fetch):
     """Two drivers, one placement: the graph must not change the answer.
 
     The comparison is the placement itself, part by part, not just the board
@@ -385,6 +386,88 @@ def test_both_drivers_build_the_same_board(tmp_path):
 
     assert placement(adk) == placement(sdk)
     assert adk.board.wirelength_nm == sdk.board.wirelength_nm
+
+
+@needs_adk
+def test_integrated_placement_has_sdk_adk_parameter_result_and_event_parity():
+    """The optional verifier stage is the same operation under either driver."""
+    from silkscreen.agents.pipeline import _generate_pcb_sdk
+
+    feedback = {"weights": {"compactness_weight": 1.25}}
+
+    def run(driver):
+        events = []
+        result = driver(
+            ScriptedModel(responses=[json.dumps(GOOD_CIRCUIT)]),
+            "a motor driver",
+            review=False,
+            route=False,
+            time_limit_s=10.0,
+            placement_profile="compact-control",
+            placement_policy="deterministic",
+            placement_feedback=feedback,
+            placement_max_turns=3,
+            on_event=events.append,
+        )
+        return result, events
+
+    sdk, sdk_events = run(_generate_pcb_sdk)
+    adk, adk_events = run(generate_pcb_adk)
+
+    assert sdk.placement is not None and adk.placement is not None
+    assert sdk.placement.applied is sdk.placement.run.completed
+    assert adk.placement.applied is adk.placement.run.completed
+    assert sdk.placement.applied is adk.placement.applied
+    assert sdk.placement.requested_policy == adk.placement.requested_policy
+    assert sdk.placement.run.policy == adk.placement.run.policy == "deterministic"
+    assert sdk.placement.run.profile == adk.placement.run.profile
+
+    def positions(result):
+        return [
+            (part.ref, part.x_nm, part.y_nm, part.rotated)
+            for part in result.board.parts
+        ]
+
+    assert adk.board.size_mm == sdk.board.size_mm
+    assert positions(adk) == positions(sdk)
+
+    def stable(events):
+        return [
+            {
+                key: value
+                for key, value in event.items()
+                if key not in {"t_s", "elapsed_s"}
+            }
+            for event in events
+        ]
+
+    assert stable(adk_events) == stable(sdk_events)
+    assert [
+        e["stage"] for e in adk_events if e["event"] == "stage.start"
+    ] == ["propose", "place", "placement_repair"]
+
+
+@needs_adk
+def test_placement_error_aborts_adk_before_schematic_and_routing(tmp_path):
+    """A verifier configuration error escapes unchanged and stops the graph."""
+    events = []
+    with pytest.raises(ValueError, match="unknown placement profile"):
+        generate_pcb_adk(
+            ScriptedModel(responses=[json.dumps(GOOD_CIRCUIT)]),
+            "a motor driver",
+            output=tmp_path / "board.kicad_pcb",
+            review=False,
+            time_limit_s=10.0,
+            placement_profile="missing-profile",
+            on_event=events.append,
+        )
+
+    assert [e["stage"] for e in events if e["event"] == "stage.start"] == [
+        "propose",
+        "place",
+        "placement_repair",
+    ]
+    assert not list(tmp_path.iterdir())
 
 
 # ---------------------------------------------------------------- failures
@@ -509,7 +592,7 @@ def test_an_unknown_engine_is_a_runtime_error():
 
 
 @needs_adk
-def test_the_adk_engine_is_selectable_by_name(tmp_path):
+def test_the_adk_engine_is_selectable_by_name(tmp_path, offline_pdf_fetch):
     """Everything test_full_pipeline_prompt_to_board asserts, via the dispatcher."""
     out = tmp_path / "board.kicad_pcb"
     result = generate_pcb(_scripted_pipeline_model(), INTENT, datasheets=SHEETS,
