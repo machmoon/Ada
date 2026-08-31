@@ -52,14 +52,13 @@ from silkscreen.agents.resilience import (  # noqa: E402
     Provider,
 )
 from silkscreen.agents.retrieval import GeminiEmbedder  # noqa: E402
+from silkscreen.approval import prepare_order  # noqa: E402
 from silkscreen.board import emit_kicad_pcb  # noqa: E402
-from silkscreen.fab import fab_files  # noqa: E402
+from silkscreen.fabhouse import DEFAULT_SERVICE_ID, service_by_id  # noqa: E402
 from silkscreen.order import (  # noqa: E402
     OrderOptions,
     SolderMaskColour,
     SurfaceFinish,
-    order_manifest,
-    preflight,
 )
 from silkscreen.units import to_mm  # noqa: E402
 
@@ -258,6 +257,24 @@ _ORDER_ENUMS = {
 }
 
 
+def order_service(raw: Any) -> str:
+    """Pull the fab service out of an order body, defaulting to the house we can price.
+
+    Named separately from :func:`order_options` because it is not an option the
+    fab is asked for -- it decides which fab is asked at all, and therefore
+    which capability limits the board is measured against.
+    """
+    if not isinstance(raw, dict):
+        return DEFAULT_SERVICE_ID
+    service_id = raw.get("service", DEFAULT_SERVICE_ID)
+    if not isinstance(service_id, str):
+        raise ValueError(f"order.service must be a string, got {service_id!r}")
+    # Resolve now so a bad id is a 400 on the request rather than a 500 after
+    # a paid model run has already happened.
+    service_by_id(service_id)
+    return service_id
+
+
 def order_options(raw: Any) -> OrderOptions:
     """Build :class:`OrderOptions` from a request body, or refuse it.
 
@@ -268,6 +285,7 @@ def order_options(raw: Any) -> OrderOptions:
     """
     if not isinstance(raw, dict):
         raise ValueError("'order' must be an object of order options")
+    raw = {k: v for k, v in raw.items() if k != "service"}
     known = {f.name for f in fields(OrderOptions)}
     unknown = sorted(set(raw) - known)
     if unknown:
@@ -289,21 +307,40 @@ def order_options(raw: Any) -> OrderOptions:
     return OrderOptions(**kwargs)
 
 
-def _order_block(board, spec, options: OrderOptions) -> dict[str, Any]:
-    """Preflight, manifest and fab files for one board.
+def _order_block(
+    board, spec, options: OrderOptions, service_id: str = DEFAULT_SERVICE_ID
+) -> dict[str, Any]:
+    """The prepared order for one board: gate, price, manifest and fab files.
 
     The files are small enough to inline -- a dozen text artefacts totalling a
     few kilobytes -- so the client gets everything it needs to show, zip or
     download an order in the same response that produced the board.
+
+    Additive only, like the rest of this response. ``orderable``, ``issues``,
+    ``manifest`` and ``files`` keep the shape and the meaning they had; ``gate``
+    and ``quote`` are new alongside them. ``orderable`` is the narrower
+    preflight verdict as before, and ``ready_for_human_review`` is the gate's --
+    a client that has not been updated keeps working, and one that has can ask
+    the stronger question.
+
+    Nothing here contacts a fabricator or spends money. There is no route on
+    this service that submits an order, and adding one is not a matter of
+    wiring: see silkscreen.fabhouse.SUBMISSION_BOUNDARY.
     """
-    pre = preflight(board, spec=spec, options=options)
+    prepared = prepare_order(board, spec=spec, options=options, service=service_id)
+    pre = prepared.preflight
     return {
-        "manifest": order_manifest(board, options, pre),
+        "manifest": prepared.manifest(),
         "issues": [issue.as_dict() for issue in pre.issues],
         "orderable": pre.orderable,
+        "gate": prepared.gate.as_dict(),
+        "quote": prepared.quote.as_dict(),
+        "summary": prepared.render(),
+        "ready_for_human_review": prepared.ready_for_human_review,
+        "requires_human_approval": prepared.requires_human_approval,
         "files": [
             {"filename": layer.filename, "content": layer.content}
-            for layer in fab_files(board)
+            for layer in prepared.files
         ],
     }
 
@@ -546,10 +583,12 @@ def generate(
     if any(not isinstance(u, str) or not u for u in datasheets.values()):
         raise ValueError("each datasheet value must be a non-empty URL string")
     order_opts = None
+    order_service_id = DEFAULT_SERVICE_ID
     if payload.get("order") is not None:
         # Validated here, before the pipeline spends a model call: a rejected
         # option is the caller's to fix and should cost them nothing.
         order_opts = order_options(payload["order"])
+        order_service_id = order_service(payload["order"])
 
     if payload.get("ground") is True:
         if not datasheets:
@@ -677,7 +716,9 @@ def generate(
         }
 
     if order_opts is not None:
-        response["order"] = _order_block(board, result.spec, order_opts)
+        response["order"] = _order_block(
+            board, result.spec, order_opts, order_service_id
+        )
 
     if payload.get("ground") is True:
         if not result.findings:
