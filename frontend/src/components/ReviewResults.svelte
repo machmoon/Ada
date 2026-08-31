@@ -19,6 +19,7 @@
 
   const skipped = $derived(request ? request.review === false : false)
   const findings = $derived(result.findings)
+  const constraintReceipt = $derived(result.constraint_receipt || null)
 
   const summary = $derived(
     joinDot([
@@ -49,6 +50,28 @@
         <li data-testid="review-results-warning">{warning}</li>
       {/each}
     </ul>
+  {/if}
+
+  {#if constraintReceipt}
+    <section
+      class="constraint-receipt"
+      class:violated={constraintReceipt.overall === 'violated'}
+      data-testid="constraint-receipt"
+      data-material="panel"
+    >
+      <div class="receipt-head">
+        <strong>Constraint receipt</strong>
+        <span>{constraintReceipt.overall === 'violated' ? 'approved nets missing' : 'approved nets present'}</span>
+      </div>
+      {#each constraintReceipt.checks as check (check.net_class)}
+        <div class="receipt-row">
+          <span>{check.net_class}</span>
+          <span>connectivity {check.net_presence}</span>
+          <span>routing {check.routing.replace('_', ' ')}</span>
+        </div>
+      {/each}
+      <p>Layer changes, vias, impedance, and pull-ups stay “not checked” until routed copper and KiCad DRC can measure them.</p>
+    </section>
   {/if}
 
   <div class="head">
@@ -148,6 +171,21 @@
     border-left-color: var(--sev-blocker-rule);
     color: var(--sev-blocker-fg);
   }
+
+  .constraint-receipt {
+    max-width: var(--measure-detail);
+    margin: 0 0 20px;
+    padding: 14px 16px;
+    border: 1px solid var(--rule-soft);
+    border-left: var(--sev-bar-w) solid var(--green);
+    background: var(--surface);
+  }
+  .constraint-receipt.violated { border-left-color: var(--sev-blocker-rule); }
+  .receipt-head, .receipt-row { display: flex; align-items: baseline; gap: 14px; }
+  .receipt-head { justify-content: space-between; margin-bottom: 9px; }
+  .receipt-head span, .receipt-row { color: var(--ink-soft); font-size: var(--fs-ui); }
+  .receipt-row span:first-child { color: var(--ink); margin-right: auto; }
+  .constraint-receipt p { margin: 10px 0 0; color: var(--ink-faint); font-size: var(--fs-ui); line-height: 1.45; }
 
   .head { display: flex; align-items: baseline; gap: 14px; margin-bottom: 4px; }
   .title { font-size: var(--fs-h1); font-weight: 600; letter-spacing: -.02em; }

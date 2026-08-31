@@ -13,7 +13,6 @@
 
   const hardExplanation = 'Illegal geometry measured in millimetres. The verifier accepts moves that reduce this first, and the final value must be 0.'
   const softExplanation = 'The selected team profile’s preference cost. Lower is better after legality is protected; it never makes an illegal move acceptable.'
-  const memoryKey = 'silkscreen-placement-feedback-v1'
 
   let profile = $state('compact-control')
   let policy = $state('fast')
@@ -55,11 +54,6 @@
   function remember(feedback) {
     const merged = mergeFeedback(feedbackByProfile[profile], feedback)
     feedbackByProfile = { ...feedbackByProfile, [profile]: merged }
-    try {
-      localStorage.setItem(memoryKey, JSON.stringify(feedbackByProfile))
-    } catch {
-      // Repair still works when browser storage is unavailable.
-    }
     return merged
   }
 
@@ -100,14 +94,6 @@
   }
 
   onMount(() => {
-    try {
-      const saved = JSON.parse(localStorage.getItem(memoryKey) || '{}')
-      if (saved && typeof saved === 'object' && !Array.isArray(saved)) {
-        feedbackByProfile = saved
-      }
-    } catch {
-      feedbackByProfile = {}
-    }
     run()
   })
 </script>
@@ -128,7 +114,7 @@
       <div class="control-group">
         <div class="control-label">
           <span class="lbl">Team placement profile</span>
-          <span>Choose how legal alternatives should be ranked. Corrections stay in this browser.</span>
+          <span>Choose how legal alternatives should be ranked. Corrections stay in this run.</span>
         </div>
         <div class="profiles">
           {#each profiles as item}

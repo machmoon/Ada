@@ -62,6 +62,7 @@ from silkscreen.agents.resilience import (  # noqa: E402
 )
 from silkscreen.agents.retrieval import GeminiEmbedder  # noqa: E402
 from silkscreen.board import emit_kicad_pcb  # noqa: E402
+from silkscreen.constraints import parse_constraint_manifest  # noqa: E402
 from silkscreen.fab import fab_files  # noqa: E402
 from silkscreen.order import (  # noqa: E402
     OrderOptions,
@@ -308,8 +309,7 @@ def order_options(raw: Any) -> OrderOptions:
             except ValueError:
                 allowed = ", ".join(m.value for m in enum)
                 raise ValueError(
-                    f"{field_name} must be one of {allowed}, "
-                    f"got {kwargs[field_name]!r}"
+                    f"{field_name} must be one of {allowed}, got {kwargs[field_name]!r}"
                 ) from None
     return OrderOptions(**kwargs)
 
@@ -480,9 +480,7 @@ def build_failure_trace_store() -> FailureTraceStore:
     if os.getenv("GOOGLE_CLOUD_PROJECT") and os.getenv("USE_FIRESTORE", "1") != "0":
         from .cache import FirestoreFactStore
 
-        return FactFailureTraceStore(
-            FirestoreFactStore("placement_failure_traces")
-        )
+        return FactFailureTraceStore(FirestoreFactStore("placement_failure_traces"))
     configured = os.getenv("PLACEMENT_FAILURE_TRACE_PATH", "").strip()
     path = (
         Path(configured)
@@ -507,10 +505,12 @@ def build_model():
 
     providers: list[Provider] = []
     if os.getenv("GOOGLE_API_KEY") or os.getenv("GEMINI_API_KEY"):
-        providers.extend([
-            Provider("gemini-primary", GeminiModel(DEFAULT_MODEL), attempts=2),
-            Provider("gemini-cheap", GeminiModel(CHEAP_MODEL), attempts=2),
-        ])
+        providers.extend(
+            [
+                Provider("gemini-primary", GeminiModel(DEFAULT_MODEL), attempts=2),
+                Provider("gemini-cheap", GeminiModel(CHEAP_MODEL), attempts=2),
+            ]
+        )
     fallback = os.getenv("OPENCODE_FALLBACK_MODEL", "").strip()
     if fallback:
         timeout_s = float(os.getenv("OPENCODE_FALLBACK_TIMEOUT_S", "300"))
@@ -604,9 +604,7 @@ def build_fast_placement_model():
 
 def placement_policy_status() -> dict[str, bool]:
     gemini = bool(os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY"))
-    tinker = bool(
-        os.getenv("TINKER_API_KEY") and os.getenv("TINKER_PLACEMENT_MODEL")
-    )
+    tinker = bool(os.getenv("TINKER_API_KEY") and os.getenv("TINKER_PLACEMENT_MODEL"))
     ollama = bool(os.getenv("OLLAMA_PLACEMENT_URL"))
     return {
         "deterministic": True,
@@ -710,10 +708,7 @@ def _record_failure_trace_ids(
         )
     except Exception as exc:
         # Training telemetry must never take down board repair.
-        sys.stderr.write(
-            "placement trace write failed: "
-            f"{type(exc).__name__}: {exc}\n"
-        )
+        sys.stderr.write(f"placement trace write failed: {type(exc).__name__}: {exc}\n")
         return []
 
 
@@ -748,6 +743,11 @@ def generate(
     intent = str(payload.get("intent") or "").strip()
     if not intent:
         raise ValueError("'intent' is required")
+
+    constraint_manifest = parse_constraint_manifest(payload.get("constraints"))
+    model_intent = intent
+    if constraint_manifest is not None:
+        model_intent += constraint_manifest.prompt_block()
 
     datasheets = payload.get("datasheets") or {}
     if not isinstance(datasheets, dict):
@@ -809,7 +809,7 @@ def generate(
 
     result = generate_pcb(
         model,
-        intent,
+        model_intent,
         datasheets=to_read,
         preloaded_facts=preloaded,
         time_limit_s=time_limit_s,
@@ -874,6 +874,10 @@ def generate(
             else round(to_mm(board.wirelength_nm), 3)
         ),
     }
+
+    if constraint_manifest is not None:
+        response["constraint_manifest"] = constraint_manifest.to_dict()
+        response["constraint_receipt"] = constraint_manifest.receipt(list(board.nets))
 
     if result.route is not None:
         response["routing"] = {
@@ -970,7 +974,14 @@ class Handler(BaseHTTPRequestHandler):
     # Adding them defensively would only widen who may call /generate.
 
     def _send(self, code: int, payload: dict[str, Any]) -> None:
-        body = json.dumps(payload, allow_nan=False).encode()
+        body = self._json_body(payload)
+        self._send_body(code, body)
+
+    @staticmethod
+    def _json_body(payload: dict[str, Any]) -> bytes:
+        return json.dumps(payload, allow_nan=False).encode()
+
+    def _send_body(self, code: int, body: bytes) -> None:
         self.send_response(code)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(body)))
@@ -1089,9 +1100,9 @@ class Handler(BaseHTTPRequestHandler):
         if payload is None:
             return
         try:
-            requested_policy = str(
-                payload.get("policy", "deterministic")
-            ).strip().lower()
+            requested_policy = (
+                str(payload.get("policy", "deterministic")).strip().lower()
+            )
             policy_status = placement_policy_status()
             policy = resolve_placement_policy(requested_policy, policy_status)
             try:
@@ -1123,16 +1134,18 @@ class Handler(BaseHTTPRequestHandler):
             result["requested_policy"] = requested_policy
             result["available_policies"] = policy_status
             trace_store = self.failure_trace_store or build_failure_trace_store()
-            trace_ids = _record_failure_trace_ids(
-                payload, result, trace_store
-            )
+            trace_ids = _record_failure_trace_ids(payload, result, trace_store)
             result["failure_trace_ids"] = trace_ids
             result["failure_trace_count"] = len(trace_ids)
+            try:
+                response_body = self._json_body(result)
+            except (TypeError, ValueError) as exc:
+                raise RuntimeError("placement response was not JSON-safe") from exc
         except Exception as exc:
             status, body = _error_response(exc)
             self._send(status, body)
         else:
-            self._send(200, result)
+            self._send_body(200, response_body)
 
     def _read_payload(self) -> dict[str, Any] | None:
         """The request body as a JSON object, or None once its error is sent.
@@ -1184,15 +1197,17 @@ class Handler(BaseHTTPRequestHandler):
             def before_attempt(provider: str) -> None:
                 self.request_pacer.wait(
                     quota_rpm,
-                    on_wait=lambda delay: on_event
-                    and on_event(
-                        {
-                            "event": "quota.wait",
-                            "layer": "worker",
-                            "provider": provider,
-                            "quota_rpm": quota_rpm,
-                            "delay_s": round(delay, 3),
-                        }
+                    on_wait=lambda delay: (
+                        on_event
+                        and on_event(
+                            {
+                                "event": "quota.wait",
+                                "layer": "worker",
+                                "provider": provider,
+                                "quota_rpm": quota_rpm,
+                                "delay_s": round(delay, 3),
+                            }
+                        )
                     ),
                 )
 

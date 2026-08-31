@@ -121,10 +121,10 @@ improve the lexicographic score (hard violations first, then preferences).
 
 CURRENT SCORE hard={result.hard:.6f} soft={result.soft:.6f}
 VIOLATIONS
-{violations or '- none; improve the profile score'}
+{violations or "- none; improve the profile score"}
 
 CANDIDATE ACTIONS
-{candidates or '- none; return no action'}
+{candidates or "- none; return no action"}
 
 {board_to_text(board)}
 """
@@ -138,8 +138,8 @@ class PlacementAgent:
         fallback_model: TextModel | None = None,
         max_turns: int = 8,
     ):
-        if max_turns <= 0:
-            raise ValueError("max_turns must be positive")
+        if max_turns <= 0 or max_turns > 16:
+            raise ValueError("max_turns must be between 1 and 16")
         self.model = model
         self.fallback_model = fallback_model
         self.max_turns = max_turns
@@ -215,9 +215,7 @@ def _deterministic_step(
     return updated, step
 
 
-def _deterministic_run(
-    board: Board, profile: CompanyProfile
-) -> PlacementRun:
+def _deterministic_run(board: Board, profile: CompanyProfile) -> PlacementRun:
     final, actions = repair(board, profile)
     current = board
     steps: list[PlacementStep] = []

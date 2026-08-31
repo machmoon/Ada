@@ -2,6 +2,7 @@
 
 import http.client
 import json
+import math
 import os
 import re
 import socket
@@ -13,6 +14,8 @@ import urllib.request
 from pathlib import Path
 
 import pytest
+from pcb_verifier.grader import board_to_dict
+from pcb_verifier.pcb_repair import demo_board
 from pcb_verifier.traces import MemoryFailureTraceStore
 from silkscreen.agents.adk.orchestrator import OrchestratorResult
 from silkscreen.agents.model import ScriptedModel
@@ -221,6 +224,53 @@ def test_generate_returns_a_board(server):
     assert body["kicad_pcb"].startswith("(kicad_pcb")
     assert [p["ref"] for p in body["parts"]] == ["U1", "C1", "C2"]
     assert body["board_mm"][0] > 0
+
+
+def test_generate_carries_an_approved_constraint_manifest_and_receipt(server):
+    constraints = {
+        "version": 1,
+        "approved": True,
+        "board_layers": 2,
+        "net_classes": [
+            {
+                "name": "Power",
+                "kind": "power",
+                "nets": ["VIN", "GND"],
+                "allowed_layers": ["F.Cu", "B.Cu"],
+                "max_layer_transitions": 2,
+                "max_vias_per_net": 4,
+            }
+        ],
+    }
+
+    status, body = post(
+        server,
+        {"intent": "a 3.3V regulator", "time_limit_s": 5, "constraints": constraints},
+    )
+
+    assert status == 200
+    assert body["constraint_manifest"]["approved"] is True
+    assert body["constraint_manifest"]["net_classes"][0]["nets"] == ["VIN", "GND"]
+    assert body["constraint_receipt"]["overall"] == "verified"
+    assert body["constraint_receipt"]["checks"][0]["routing"] == "not_checked"
+
+
+def test_generate_rejects_unapproved_constraints_before_model_work(server):
+    status, body = post(
+        server,
+        {
+            "intent": "a 3.3V regulator",
+            "constraints": {
+                "version": 1,
+                "approved": False,
+                "board_layers": 2,
+                "net_classes": [],
+            },
+        },
+    )
+
+    assert status == 400
+    assert "approved" in body["error"]
 
 
 @pytest.mark.skipif(not _HAS_ADK, reason="the 'adk' extra is not installed")
@@ -462,6 +512,57 @@ def test_non_finite_json_is_rejected_before_placement(server, value):
     assert "non-finite number" in body["error"]
 
 
+def test_extreme_finite_geometry_is_rejected_before_scoring(server):
+    board = board_to_dict(demo_board())
+    board["components"][0]["x"] = 1e308
+
+    status, body = post(
+        server,
+        {"board": board, "profile": "compact-control"},
+        path="/placement/repair",
+    )
+
+    assert status == 400
+    assert "must be between" in body["error"]
+
+
+def test_request_sized_candidate_grid_is_rejected(server):
+    board = {
+        "width": 2000,
+        "height": 2000,
+        "components": [
+            {"ref": "U1", "x": 1, "y": 1, "width": 10, "height": 10},
+            {"ref": "U2", "x": 2, "y": 2, "width": 10, "height": 10},
+        ],
+    }
+
+    status, body = post(
+        server,
+        {"board": board, "profile": "compact-control"},
+        path="/placement/repair",
+    )
+
+    assert status == 400
+    assert "candidate grid exceeds" in body["error"]
+
+
+def test_unserializable_placement_result_is_a_json_500(server, monkeypatch):
+    monkeypatch.setattr(
+        "service.app._run_placement_policy",
+        lambda *args, **kwargs: {"score": math.inf, "completed": True},
+    )
+
+    status, body = post(
+        server,
+        {"profile": "compact-control"},
+        path="/placement/repair",
+    )
+
+    assert status == 500
+    assert body["error"] == "internal error"
+    assert body["error_id"]
+
+
 def test_placement_rejects_unknown_profile(server):
     status, body = post(
         server,
@@ -494,9 +595,7 @@ def test_policy_failures_are_consent_aware_training_traces(server, monkeypatch):
             del prompt, kwargs
             return "MOVE MADE_UP 1 1"
 
-    monkeypatch.setattr(
-        "service.app.build_tinker_model", lambda: RejectingPolicy()
-    )
+    monkeypatch.setattr("service.app.build_tinker_model", lambda: RejectingPolicy())
     trace_store = Handler.failure_trace_store
     assert isinstance(trace_store, MemoryFailureTraceStore)
 
@@ -561,7 +660,8 @@ def test_datasheets_must_be_an_object(server):
 
 def test_malformed_json_is_400(server):
     req = urllib.request.Request(
-        url(server, "/generate"), data=b"{not json",
+        url(server, "/generate"),
+        data=b"{not json",
         headers={"Content-Type": "application/json"},
     )
     try:
@@ -1202,9 +1302,7 @@ def test_placements_carry_the_contract(server):
     assert placements["board_mm"] == body["board_mm"], (
         "one board size, reported once -- two copies that can disagree is a bug"
     )
-    assert [p["ref"] for p in placements["parts"]] == [
-        p["ref"] for p in body["parts"]
-    ]
+    assert [p["ref"] for p in placements["parts"]] == [p["ref"] for p in body["parts"]]
 
     for part in placements["parts"]:
         assert set(part) == PART_KEYS
@@ -1370,8 +1468,7 @@ def test_placements_are_additive(server):
     ):
         assert key in body, f"{key} disappeared from the response"
     assert all(set(p) == {"ref", "footprint"} for p in body["parts"]), (
-        "the flat parts list is a separate contract; geometry belongs in "
-        "placements"
+        "the flat parts list is a separate contract; geometry belongs in placements"
     )
     assert "grounding" not in body, "grounding stays opt-in"
 
@@ -1575,9 +1672,7 @@ def test_the_web_dist_env_var_is_honoured_by_a_fresh_import(tmp_path):
         [
             sys.executable,
             "-c",
-            "import service.app as app;"
-            "print(app.WEB_DIST);"
-            "print(app.Handler.web_root)",
+            "import service.app as app;print(app.WEB_DIST);print(app.Handler.web_root)",
         ],
         capture_output=True,
         text=True,
@@ -1591,14 +1686,14 @@ def test_the_web_dist_env_var_is_honoured_by_a_fresh_import(tmp_path):
     assert reported == [dist, dist], (
         "the override has to reach Handler.web_root, not just the constant"
     )
+
+
 GROUND_REVIEW = {
     "findings": [
         {
             "severity": "marginal",
             "title": "VOUT capacitor may be undersized",
-            "detail": (
-                "The output requires a 22uF tantalum capacitor for stability"
-            ),
+            "detail": ("The output requires a 22uF tantalum capacitor for stability"),
             "parts": ["C2"],
             "citation": "p.3",
             "suggested_fix": "use 22uF tantalum",
@@ -1985,9 +2080,7 @@ def test_models_lists_the_server_catalog(server):
     assert catalog["models"][0]["id"] == "gemini-test"
 
 
-def test_chat_stream_wraps_the_pipeline_in_an_orchestrator_turn(
-    monkeypatch, server
-):
+def test_chat_stream_wraps_the_pipeline_in_an_orchestrator_turn(monkeypatch, server):
     import service.app as app
 
     previous_catalog = Handler.__dict__["model_catalog_factory"]

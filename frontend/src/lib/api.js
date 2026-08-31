@@ -4,6 +4,7 @@
 
 import { logError, logEvent, logWarn } from './log.js'
 import { parseNdjson } from './stream.js'
+import { normalizeConstraintManifest } from './constraints.js'
 
 const ENDPOINT = '/generate'
 const STREAM_ENDPOINT = '/generate/stream'
@@ -43,7 +44,7 @@ export function normalizeRequest(request) {
     const u = String(url).trim()
     if (p && u) datasheets[p] = u
   }
-  return {
+  const normalized = {
     intent: String(request.intent ?? '').trim(),
     datasheets,
     time_limit_s: clampTimeLimit(request.time_limit_s),
@@ -56,6 +57,10 @@ export function normalizeRequest(request) {
     // is the service's default, so a stray `ground: false` would say nothing.
     ...(request.ground === true ? { ground: true } : {}),
   }
+  if (request.constraints && typeof request.constraints === 'object') {
+    normalized.constraints = normalizeConstraintManifest(request.constraints)
+  }
+  return normalized
 }
 
 export function normalizePlacementRequest(request = {}) {

@@ -27,6 +27,20 @@ __all__ = [
     "repair",
 ]
 
+MAX_BOARD_DIMENSION_MM = 2000.0
+MAX_COORDINATE_ABS_MM = 10000.0
+MAX_GEOMETRY_DIMENSION_MM = 2000.0
+MAX_PROFILE_DISTANCE_MM = 2000.0
+MAX_PROFILE_WEIGHT = 1_000_000.0
+MAX_COMPONENTS = 512
+MAX_KEEPOUTS = 256
+MAX_PROFILE_REFS = 512
+MAX_PROFILE_GROUPS = 128
+MAX_REFS_PER_GROUP = 64
+MAX_THERMAL_PAIRS = 128
+MAX_CANDIDATE_POSITIONS = 50_000
+MIN_DIMENSION_MM = 0.01
+
 
 def _require_finite(owner: str, **values: float) -> None:
     for name, value in values.items():
@@ -34,6 +48,13 @@ def _require_finite(owner: str, **values: float) -> None:
             raise ValueError(f"{owner} {name} must be a finite number")
         if not math.isfinite(float(value)):
             raise ValueError(f"{owner} {name} must be a finite number")
+
+
+def _require_range(
+    owner: str, name: str, value: float, low: float, high: float
+) -> None:
+    if value < low or value > high:
+        raise ValueError(f"{owner} {name} must be between {low:g} and {high:g}")
 
 
 @dataclass(frozen=True)
@@ -57,8 +78,28 @@ class Component:
             width=self.width,
             height=self.height,
         )
-        if self.width <= 0 or self.height <= 0:
-            raise ValueError(f"component {self.ref!r} has a non-positive size")
+        _require_range(
+            f"component {self.ref!r}",
+            "x",
+            self.x,
+            -MAX_COORDINATE_ABS_MM,
+            MAX_COORDINATE_ABS_MM,
+        )
+        _require_range(
+            f"component {self.ref!r}",
+            "y",
+            self.y,
+            -MAX_COORDINATE_ABS_MM,
+            MAX_COORDINATE_ABS_MM,
+        )
+        for name, value in (("width", self.width), ("height", self.height)):
+            _require_range(
+                f"component {self.ref!r}",
+                name,
+                value,
+                MIN_DIMENSION_MM,
+                MAX_GEOMETRY_DIMENSION_MM,
+            )
         if self.angle not in (0, 90, 180, 270):
             raise ValueError("component angle must be 0, 90, 180, or 270")
 
@@ -99,8 +140,22 @@ class Keepout:
             width=self.width,
             height=self.height,
         )
-        if self.width <= 0 or self.height <= 0:
-            raise ValueError(f"keepout {self.name!r} has a non-positive size")
+        for name, value in (("x", self.x), ("y", self.y)):
+            _require_range(
+                f"keepout {self.name!r}",
+                name,
+                value,
+                -MAX_COORDINATE_ABS_MM,
+                MAX_COORDINATE_ABS_MM,
+            )
+        for name, value in (("width", self.width), ("height", self.height)):
+            _require_range(
+                f"keepout {self.name!r}",
+                name,
+                value,
+                MIN_DIMENSION_MM,
+                MAX_GEOMETRY_DIMENSION_MM,
+            )
 
     @property
     def rect(self) -> tuple[float, float, float, float]:
@@ -122,31 +177,9 @@ class CompanyProfile:
     thermal_weight: float = 1.0
 
     def __post_init__(self) -> None:
-        _require_finite(
-            "profile",
-            clearance=self.clearance,
-            edge_margin=self.edge_margin,
-            compactness_weight=self.compactness_weight,
-            grouping_weight=self.grouping_weight,
-            connector_edge_weight=self.connector_edge_weight,
-            thermal_weight=self.thermal_weight,
-        )
-        if self.clearance < 0 or self.edge_margin < 0:
-            raise ValueError("profile clearance and edge margin cannot be negative")
-        for weight in (
-            self.compactness_weight,
-            self.grouping_weight,
-            self.connector_edge_weight,
-            self.thermal_weight,
-        ):
-            if weight < 0:
-                raise ValueError("profile weights cannot be negative")
-        for left, right, minimum in self.thermal_pairs:
-            _require_finite(
-                f"thermal pair {left!r}/{right!r}", minimum=minimum
-            )
-            if minimum <= 0:
-                raise ValueError("thermal pair distance must be positive")
+        _validate_profile_numbers(self)
+        _validate_profile_size(self)
+        _validate_thermal_pairs(self.thermal_pairs)
 
     @classmethod
     def from_dict(cls, value: dict[str, Any]) -> CompanyProfile:
@@ -170,6 +203,62 @@ class CompanyProfile:
         )
 
 
+def _validate_profile_numbers(profile: CompanyProfile) -> None:
+    _require_finite(
+        "profile",
+        clearance=profile.clearance,
+        edge_margin=profile.edge_margin,
+        compactness_weight=profile.compactness_weight,
+        grouping_weight=profile.grouping_weight,
+        connector_edge_weight=profile.connector_edge_weight,
+        thermal_weight=profile.thermal_weight,
+    )
+    for name, value in (
+        ("clearance", profile.clearance),
+        ("edge_margin", profile.edge_margin),
+    ):
+        _require_range("profile", name, value, 0.0, MAX_PROFILE_DISTANCE_MM)
+    weights = (
+        profile.compactness_weight,
+        profile.grouping_weight,
+        profile.connector_edge_weight,
+        profile.thermal_weight,
+    )
+    if any(weight < 0 for weight in weights):
+        raise ValueError("profile weights cannot be negative")
+    if any(weight > MAX_PROFILE_WEIGHT for weight in weights):
+        raise ValueError(f"profile weights cannot exceed {MAX_PROFILE_WEIGHT:g}")
+
+
+def _validate_profile_size(profile: CompanyProfile) -> None:
+    if len(profile.fixed_refs) + len(profile.edge_refs) > MAX_PROFILE_REFS:
+        raise ValueError(f"profile cannot contain more than {MAX_PROFILE_REFS} refs")
+    if len(profile.groups) > MAX_PROFILE_GROUPS:
+        raise ValueError(
+            f"profile cannot contain more than {MAX_PROFILE_GROUPS} groups"
+        )
+    if any(len(group) > MAX_REFS_PER_GROUP for group in profile.groups):
+        raise ValueError(
+            f"profile groups cannot contain more than {MAX_REFS_PER_GROUP} refs"
+        )
+    if len(profile.thermal_pairs) > MAX_THERMAL_PAIRS:
+        raise ValueError(
+            f"profile cannot contain more than {MAX_THERMAL_PAIRS} thermal pairs"
+        )
+
+
+def _validate_thermal_pairs(pairs: tuple[tuple[str, str, float], ...]) -> None:
+    for left, right, minimum in pairs:
+        _require_finite(f"thermal pair {left!r}/{right!r}", minimum=minimum)
+        _require_range(
+            "thermal pair",
+            "distance",
+            minimum,
+            MIN_DIMENSION_MM,
+            MAX_PROFILE_DISTANCE_MM,
+        )
+
+
 @dataclass(frozen=True)
 class Board:
     width: float
@@ -179,8 +268,16 @@ class Board:
 
     def __post_init__(self) -> None:
         _require_finite("board", width=self.width, height=self.height)
-        if self.width <= 0 or self.height <= 0:
-            raise ValueError("board dimensions must be positive")
+        for name, value in (("width", self.width), ("height", self.height)):
+            _require_range(
+                "board", name, value, MIN_DIMENSION_MM, MAX_BOARD_DIMENSION_MM
+            )
+        if len(self.components) > MAX_COMPONENTS:
+            raise ValueError(
+                f"board cannot contain more than {MAX_COMPONENTS} components"
+            )
+        if len(self.keepouts) > MAX_KEEPOUTS:
+            raise ValueError(f"board cannot contain more than {MAX_KEEPOUTS} keepouts")
         refs = [component.ref for component in self.components]
         if len(refs) != len(set(refs)):
             raise ValueError("component refs must be unique")
@@ -219,6 +316,14 @@ class PlacementAction:
 
     def __post_init__(self) -> None:
         _require_finite("placement action", x=self.x, y=self.y)
+        for name, value in (("x", self.x), ("y", self.y)):
+            _require_range(
+                "placement action",
+                name,
+                value,
+                -MAX_COORDINATE_ABS_MM,
+                MAX_COORDINATE_ABS_MM,
+            )
         if self.angle is not None and self.angle not in (0, 90, 180, 270):
             raise ValueError("placement action angle must be 0, 90, 180, or 270")
 
@@ -381,10 +486,14 @@ def evaluate(board: Board, profile: CompanyProfile) -> Evaluation:
     hard = sum(violation.depth for violation in violations)
     terms = _soft_terms(board, profile)
     soft = sum(terms.values())
+    total = hard * 1000 + soft
+    values = {"hard": hard, "soft": soft, "total": total, **terms}
+    if any(not math.isfinite(value) for value in values.values()):
+        raise ValueError("placement score overflowed the supported numeric range")
     return Evaluation(
         hard=round(hard, 6),
         soft=round(soft, 6),
-        total=round(hard * 1000 + soft, 6),
+        total=round(total, 6),
         violations=violations,
         terms={name: round(value, 6) for name, value in terms.items()},
     )
@@ -444,6 +553,16 @@ def _candidate_positions(
     width, height = component.size
     max_x = board.width - profile.edge_margin - width
     max_y = board.height - profile.edge_margin - height
+    if max_x < profile.edge_margin or max_y < profile.edge_margin:
+        return
+    x_steps = math.floor((max_x - profile.edge_margin) / grid) + 1
+    y_steps = math.floor((max_y - profile.edge_margin) / grid) + 1
+    candidates = x_steps * y_steps
+    if candidates > MAX_CANDIDATE_POSITIONS:
+        raise ValueError(
+            "placement candidate grid exceeds the supported budget; "
+            "reduce the board dimensions or increase the grid"
+        )
     x = profile.edge_margin
     while x <= max_x + 1e-9:
         y = profile.edge_margin
@@ -537,6 +656,7 @@ def repair(
         raise ValueError(
             "repair budgets must be non-negative and grid must be positive"
         )
+    _require_range("repair", "grid", grid, 0.1, MAX_BOARD_DIMENSION_MM)
     actions: list[PlacementAction] = []
     current = _repair_violations(
         board, profile, actions, max_steps=max_steps, grid=grid

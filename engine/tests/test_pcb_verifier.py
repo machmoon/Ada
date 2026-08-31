@@ -132,9 +132,7 @@ def test_non_finite_board_geometry_is_rejected(value: float) -> None:
 @pytest.mark.parametrize("value", [math.nan, math.inf, -math.inf])
 def test_non_finite_profile_values_are_rejected(value: float) -> None:
     with pytest.raises(ValueError, match="finite"):
-        repair_request(
-            {"profile": {"name": "unsafe", "clearance": value}}
-        )
+        repair_request({"profile": {"name": "unsafe", "clearance": value}})
 
 
 def test_non_finite_feedback_values_are_rejected() -> None:
@@ -145,6 +143,41 @@ def test_non_finite_feedback_values_are_rejected() -> None:
                 "feedback": {"weights": {"thermal_weight": math.nan}},
             }
         )
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [("x", 1e308), ("width", 1e308)],
+)
+def test_extreme_finite_component_geometry_is_rejected(
+    field: str, value: float
+) -> None:
+    board = board_to_dict(demo_board())
+    board["components"][0][field] = value
+
+    with pytest.raises(ValueError, match="must be between"):
+        board_from_dict(board)
+
+
+def test_extreme_finite_profile_weight_is_rejected() -> None:
+    with pytest.raises(ValueError, match="cannot exceed"):
+        repair_request({"profile": {"name": "unsafe", "thermal_weight": 1e308}})
+
+
+def test_candidate_grid_has_a_hard_work_budget() -> None:
+    board = Board(
+        2000,
+        2000,
+        (Component("U1", 1, 1, 10, 10), Component("U2", 2, 2, 10, 10)),
+    )
+
+    with pytest.raises(ValueError, match="candidate grid exceeds"):
+        repair(board, CompanyProfile("bounded"), grid=1.0)
+
+
+def test_agent_turn_budget_is_bounded() -> None:
+    with pytest.raises(ValueError, match="between 1 and 16"):
+        PlacementAgent(max_turns=1_000_000)
 
 
 def test_scripted_agent_accepts_improving_move_and_ignores_hallucination() -> None:
@@ -188,9 +221,9 @@ def test_hybrid_policy_uses_gemini_only_after_fast_policy_stalls() -> None:
     fast = QueueModel(responses=["PLACE C1 3 3"])
     recovery = QueueModel(responses=["PLACE C1 12 3"])
 
-    run = PlacementAgent(
-        fast, fallback_model=recovery, max_turns=1
-    ).run(board, profile, policy="hybrid")
+    run = PlacementAgent(fast, fallback_model=recovery, max_turns=1).run(
+        board, profile, policy="hybrid"
+    )
 
     assert run.completed
     assert [step.proposer for step in run.steps] == ["tinker", "gemini-recovery"]
@@ -207,9 +240,9 @@ def test_failed_policy_step_becomes_recovery_training_pair(tmp_path) -> None:
     )
     fast = QueueModel(responses=["PLACE C1 3 3"])
     recovery = QueueModel(responses=["PLACE C1 12 3"])
-    run = PlacementAgent(
-        fast, fallback_model=recovery, max_turns=1
-    ).run(board, profile, policy="hybrid")
+    run = PlacementAgent(fast, fallback_model=recovery, max_turns=1).run(
+        board, profile, policy="hybrid"
+    )
 
     traces = build_failure_traces(
         run_to_dict(run),
@@ -249,9 +282,7 @@ def test_turn_limit_failure_uses_deterministic_oracle_target() -> None:
         ),
     )
     model = QueueModel(responses=["PLACE C1 12 3"])
-    run = PlacementAgent(model, max_turns=1).run(
-        board, profile, policy="tinker"
-    )
+    run = PlacementAgent(model, max_turns=1).run(board, profile, policy="tinker")
     assert not run.completed
 
     traces = build_failure_traces(
@@ -304,9 +335,7 @@ def test_tinker_adapter_samples_checkpoint_with_chat_rendering() -> None:
 
     class Future:
         def result(self):
-            return SimpleNamespace(
-                sequences=[SimpleNamespace(tokens=[8, 9])]
-            )
+            return SimpleNamespace(sequences=[SimpleNamespace(tokens=[8, 9])])
 
     class Sampling:
         def get_tokenizer(self):
@@ -360,9 +389,7 @@ def test_ollama_adapter_uses_private_chat_endpoint() -> None:
             return None
 
         def read(self):
-            return json.dumps(
-                {"message": {"content": "PLACE C1 12 3"}}
-            ).encode()
+            return json.dumps({"message": {"content": "PLACE C1 12 3"}}).encode()
 
     def open_request(request, *, timeout):
         calls.append(

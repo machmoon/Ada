@@ -1,6 +1,7 @@
 <script>
   import MicButton from './MicButton.svelte'
   import { MAX_REQUEST_BYTES, MAX_TIME_LIMIT_S, MIN_TIME_LIMIT_S, normalizeRequest, requestBytes } from '../lib/api.js'
+  import { constraintKinds, constraintManifestReady, suggestConstraintManifest } from '../lib/constraints.js'
   import { DATASHEET_PRESETS } from '../lib/datasheets.js'
 
   let {
@@ -32,6 +33,8 @@
   const seedSheets = Object.entries(seed.datasheets || {})
 
   let intent = $state(seed.intent ?? '')
+  let constraints = $state(seed.constraints || suggestConstraintManifest(seed.intent ?? ''))
+  let constraintKey = $state(constraintKinds(seed.intent ?? '').join(','))
   let timeLimit = $state(seed.time_limit_s ?? 20)
   let noSolverBudget = $state(seed.no_solver_budget !== false)
   let review = $state(seed.review !== false)
@@ -58,6 +61,7 @@
 
   const request = $derived({
     intent,
+    constraints,
     datasheets: Object.fromEntries(rows.map((r) => [r.part, r.url])),
     time_limit_s: timeLimit,
     no_solver_budget: noSolverBudget,
@@ -70,10 +74,25 @@
   const bytes = $derived(requestBytes(normalizeRequest(request)))
   const tooLarge = $derived(bytes > MAX_REQUEST_BYTES)
   const advertisedModels = $derived(new Set(models.map((model) => String(model?.id ?? ''))))
+  const constraintsReady = $derived(constraintManifestReady(constraints))
   const selectedUnavailable = $derived(
     advertisedModels.size > 0 && !advertisedModels.has(orchestratorModel),
   )
-  const canSubmit = $derived(intent.trim().length > 0 && !tooLarge && !selectedUnavailable)
+  const canSubmit = $derived(
+    intent.trim().length > 0
+      && constraints.approved === true
+      && constraintsReady
+      && !tooLarge
+      && !selectedUnavailable,
+  )
+
+  $effect(() => {
+    const nextKey = constraintKinds(intent).join(',')
+    if (nextKey !== constraintKey) {
+      constraints = suggestConstraintManifest(intent)
+      constraintKey = nextKey
+    }
+  })
 
   function grow() {
     if (!textarea) return
@@ -131,6 +150,70 @@
       {intent.length.toLocaleString()} characters
     {/if}
   </div>
+
+  <section class="constraints" data-testid="intent-form-constraints" data-material="panel">
+    <div class="constraint-heading">
+      <div>
+        <span class="lbl">nets and routing contract</span>
+        <p>Confirm this before build. The manifest travels with the board, and every stage reports what it did or did not verify.</p>
+      </div>
+      <label class="layers">
+        <span>Board layers</span>
+        <input type="number" min="1" max="32" bind:value={constraints.board_layers} />
+      </label>
+    </div>
+
+    {#each constraints.net_classes as netClass (netClass.name)}
+      <article class="net-class">
+        <div class="net-title">
+          <strong>{netClass.name}</strong>
+          <span>{netClass.concerns.join(' · ')}</span>
+        </div>
+        <label class="wide">
+          <span>Exact net names</span>
+          <input
+            value={netClass.nets.join(', ')}
+            oninput={(event) => (netClass.nets = event.currentTarget.value.split(',').map((value) => value.trim()).filter(Boolean))}
+          />
+        </label>
+        <label>
+          <span>Allowed copper</span>
+          <input
+            value={netClass.allowed_layers.join(', ')}
+            oninput={(event) => (netClass.allowed_layers = event.currentTarget.value.split(',').map((value) => value.trim()).filter(Boolean))}
+          />
+        </label>
+        <label>
+          <span>Max layer shifts</span>
+          <input type="number" min="0" max="32" bind:value={netClass.max_layer_transitions} />
+        </label>
+        <label>
+          <span>Max vias per net</span>
+          <input type="number" min="0" max="64" bind:value={netClass.max_vias_per_net} />
+        </label>
+        {#if netClass.pullups_required}
+          <label>
+            <span>Pull-up rail (V)</span>
+            <input type="number" min="0.1" step="0.1" bind:value={netClass.pullup_voltage_v} />
+          </label>
+        {/if}
+        {#if netClass.controlled_impedance}
+          <label>
+            <span>Target impedance (Ω)</span>
+            <input type="number" min="1" step="1" bind:value={netClass.impedance_ohms} />
+          </label>
+        {/if}
+      </article>
+    {/each}
+
+    <label class="approval">
+      <input type="checkbox" bind:checked={constraints.approved} data-testid="intent-form-constraints-approved" />
+      <span>I approve these net names and limits. Unknown high-risk values must stay unresolved, not guessed.</span>
+    </label>
+    {#if !constraintsReady}
+      <p class="constraint-warning">Enter the exact critical net names before approving the build.</p>
+    {/if}
+  </section>
 
   <details class="sheets" bind:open={showDatasheets} data-testid="intent-form-datasheets">
     <summary class="lbl" data-testid="intent-form-datasheets-summary">with datasheets</summary>
@@ -295,6 +378,38 @@
   }
   .counter.over { color: var(--sev-blocker-fg); }
 
+  .constraints {
+    margin-top: 18px;
+    padding: 14px;
+    border: 1px solid var(--rule);
+    background: var(--well);
+  }
+  .constraint-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; }
+  .constraint-heading p { margin: 5px 0 0; color: var(--ink-soft); font-size: var(--fs-ui); line-height: 1.45; }
+  .layers { width: 92px; flex: 0 0 auto; }
+  .net-class {
+    display: grid;
+    grid-template-columns: 1.4fr repeat(3, minmax(96px, .7fr));
+    gap: 10px;
+    margin-top: 12px;
+    padding-top: 12px;
+    border-top: 1px solid var(--rule-soft);
+  }
+  .net-title { grid-column: 1 / -1; display: flex; align-items: baseline; gap: 10px; }
+  .net-title span { color: var(--ink-faint); font-size: var(--fs-ui); }
+  .constraints label { display: flex; flex-direction: column; gap: 5px; color: var(--ink-mid); font-size: var(--fs-ui); }
+  .constraints input[type='number'], .constraints label > input:not([type]) {
+    width: 100%;
+    min-width: 0;
+    padding: 7px 9px;
+    border: 1px solid var(--rule-soft);
+    background: var(--surface);
+    color: var(--ink);
+    font-family: var(--font-mono);
+  }
+  .approval { flex-direction: row !important; align-items: flex-start; margin-top: 14px; color: var(--ink) !important; }
+  .constraint-warning { margin: 8px 0 0; color: var(--sev-marginal-fg); font-size: var(--fs-ui); }
+
   .sheets { margin-top: 18px; border-top: 1px solid var(--rule-soft); padding-top: 14px; }
   summary { cursor: pointer; }
   .presets { margin-top: 12px; }
@@ -410,5 +525,10 @@
     border-radius: var(--radius);
   }
   .run:disabled { background: var(--accent-off); color: var(--accent-off-ink); }
-  @media (max-width: 680px) { .orchestrator-controls { grid-template-columns: 1fr; } }
+  @media (max-width: 680px) {
+    .constraint-heading { flex-direction: column; }
+    .net-class { grid-template-columns: 1fr; }
+    .net-title { grid-column: 1; flex-direction: column; gap: 4px; }
+    .orchestrator-controls { grid-template-columns: 1fr; }
+  }
 </style>
