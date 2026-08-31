@@ -8,15 +8,15 @@
 > **Pin `gemini-3.5-flash` for every live run** (CLI: `--model gemini-3.5-flash`;
 > Ada/web: pick it in the model selector). Do not demo on the default tier.
 >
-> **The 2-pin trap (upgraded today):** any 2-pin semiconductor or connector
-> crashes board emission — there is no package rule for 2-pin parts
-> (`No package rule for 'J_IN' with 2 pins`, observed live on the cloud
-> instance today). This is NOT just "don't ad-lib LED intents": the model
-> **nondeterministically adds 2-pin connectors (J_IN) even to the golden
-> AMS1117 intent**. Until the fix on `fix/two-pin-package-rule` merges, every
-> live intent must end with an explicit exclusion — "use only the regulator
-> and capacitors; no connectors, headers, LEDs, diodes, or test points." Stick
-> to the scripted intents verbatim.
+> **The 2-pin trap (fixed 2026-08-31):** a 2-pin part the model declares as a
+> device (an LED, a `J_IN` connector — it nondeterministically added one even
+> to the golden AMS1117 intent) used to crash board emission with
+> `No package rule for 'J_IN' with 2 pins`. That rule now exists: a 2-pin
+> device lands on a 1206 two-pad pattern instead of crashing, covered by
+> `engine/tests/test_two_pin_device.py`. The exclusion clause in the golden
+> intent is therefore belt-and-braces rather than load-bearing — keep saying
+> it (a 1206 "connector" is solderable but ugly), and confirm the deployed
+> instance carries this commit before dropping the caution.
 
 The judge-facing live demo, timed. Every click here exists in shipped code;
 every line you say is backed by a file. The disaster plan for each step is at
@@ -79,10 +79,10 @@ it stays inside the footprint generator's supported set):
 > the ceramic output-capacitor choice so the adversarial review can check it
 > against the selected AMS1117 datasheet.
 
-The "no connectors" clause is load-bearing, not politeness: even with the old
-"only the regulator and passives" wording, the model has nondeterministically
-added a 2-pin `J_IN` connector, which crashes board emission (see the warning
-block). Say the exclusion; do not trim it.
+The "no connectors" clause is belt-and-braces since the 2-pin package rule
+landed: a stray 2-pin `J_IN` no longer crashes emission, it just lands on a
+generic 1206 two-pad pattern (see the warning block). Still say the exclusion
+— a chip-pad "connector" on screen invites a question you don't have time for.
 
 Add the AMS1117-3.3 datasheet URL in the datasheets field and switch grounding
 on (both the SPA form and Ada's run form take part-to-URL rows; grounding only
