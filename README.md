@@ -106,6 +106,10 @@ where a design went wrong instead of only seeing the last artifact.
 **Next:** [full install guide and troubleshooting](docs/install.md) ·
 [contributing](CONTRIBUTING.md) · [how it works](#prompt-to-pcb)
 
+**Download:** [tagged releases](https://github.com/machmoon/silkscreen/releases) carry the
+Python wheel, the built web UI, and the **Kaleo** desktop app (macOS `.dmg`,
+Apple Silicon, ad-hoc signed — right-click → Open on first launch).
+
 ---
 
 ## Which interface
