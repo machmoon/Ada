@@ -96,3 +96,6 @@ artifacts/
 # Seeded design canvas — generated from design/*.dc.html, 2MB of bundled editor
 design/silkscreen-ui.html
 .gstack/
+
+# Slack bot run artifacts (boards, previews, order drafts).
+slack-runs/
