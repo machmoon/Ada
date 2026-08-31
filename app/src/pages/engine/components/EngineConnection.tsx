@@ -44,15 +44,29 @@ export function validateEngineBaseUrl(raw: string): BaseUrlCheck {
     };
   }
 
-  if (parsed.protocol !== "http:") {
+  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
     return {
       ok: false,
       url: "",
-      reason:
-        parsed.protocol === "https:"
-          ? "The engine speaks plain HTTP on loopback, not HTTPS."
-          : `Only http:// is supported, not ${parsed.protocol}//`,
+      reason: `Only http:// (loopback) or https:// (deployed) is supported, not ${parsed.protocol}//`,
     };
+  }
+
+  // A remote engine is allowed only over TLS: the deployed service sits behind
+  // the SILKSCREEN_ACCESS_TOKEN bearer gate, and https is what keeps that
+  // token from crossing the network in the clear. Plain-http remote is still
+  // refused below -- an http URL that is not loopback is either a typo or a
+  // token leak waiting to happen.
+  if (parsed.protocol === "https:") {
+    if (parsed.search || parsed.hash) {
+      return {
+        ok: false,
+        url: "",
+        reason: "Give the origin only — no query string or fragment.",
+      };
+    }
+    const path = parsed.pathname.replace(/\/+$/, "");
+    return { ok: true, url: `${parsed.origin}${path}`, reason: "" };
   }
 
   const host = parsed.hostname.toLowerCase();
@@ -74,7 +88,7 @@ export function validateEngineBaseUrl(raw: string): BaseUrlCheck {
     return {
       ok: false,
       url: "",
-      reason: `"${parsed.hostname}" is not this machine. The engine has no authentication and sends no CORS headers, so pointing Kaleo at a remote address exposes an open /generate endpoint that spends your Gemini quota to anything that can reach it. Use 127.0.0.1 or localhost.`,
+      reason: `"${parsed.hostname}" is not this machine. Over plain http the bearer token and your intents cross the network unencrypted. Use 127.0.0.1 for a local engine, or https:// for a deployed one.`,
     };
   }
 
@@ -106,6 +120,24 @@ export function saveEngineBaseUrl(url: string): void {
   safeLocalStorage.setItem(KALEO_STORAGE_KEYS.ENGINE_BASE_URL, url);
 }
 
+/**
+ * The optional bearer token, for an engine deployed behind a token gate.
+ * Empty string means "no token" — the client then sends no Authorization
+ * header at all, which is the correct shape for a local, ungated engine.
+ */
+export function loadEngineToken(): string {
+  return (safeLocalStorage.getItem(KALEO_STORAGE_KEYS.ENGINE_TOKEN) ?? "").trim();
+}
+
+export function saveEngineToken(token: string): void {
+  const trimmed = token.trim();
+  if (trimmed) {
+    safeLocalStorage.setItem(KALEO_STORAGE_KEYS.ENGINE_TOKEN, trimmed);
+  } else {
+    safeLocalStorage.removeItem(KALEO_STORAGE_KEYS.ENGINE_TOKEN);
+  }
+}
+
 type TestResult =
   | { state: "idle" }
   | { state: "testing" }
@@ -117,6 +149,10 @@ export interface EngineConnectionProps {
   baseUrl: string;
   /** Called with a validated, normalised URL once the user saves. */
   onBaseUrlChange: (url: string) => void;
+  /** The bearer token currently in effect; empty string when none. */
+  token?: string;
+  /** Called with the trimmed token (possibly empty) once the user saves. */
+  onTokenChange?: (token: string) => void;
   className?: string;
 }
 
@@ -129,9 +165,12 @@ export interface EngineConnectionProps {
 export const EngineConnection = ({
   baseUrl,
   onBaseUrlChange,
+  token = "",
+  onTokenChange,
   className,
 }: EngineConnectionProps) => {
   const [draft, setDraft] = useState(baseUrl);
+  const [tokenDraft, setTokenDraft] = useState(token);
   const [test, setTest] = useState<TestResult>({ state: "idle" });
 
   const check = validateEngineBaseUrl(draft);
@@ -145,13 +184,22 @@ export const EngineConnection = ({
     return check.url;
   };
 
+  const commitToken = () => {
+    const trimmed = tokenDraft.trim();
+    saveEngineToken(trimmed);
+    setTokenDraft(trimmed);
+    if (trimmed !== token) onTokenChange?.(trimmed);
+    return trimmed;
+  };
+
   const runTest = async () => {
     if (!check.ok) return;
     // Test what the user is about to use: saving first means the result and
     // the stored address can never disagree.
     const url = commit();
+    const savedToken = commitToken();
     setTest({ state: "testing" });
-    const result = await health(url);
+    const result = await health(url, savedToken);
     setTest(
       result.ok
         ? { state: "ok", url }
@@ -229,6 +277,36 @@ export const EngineConnection = ({
             Not saved yet — testing the connection saves it.
           </p>
         )}
+      </div>
+
+      <div className="flex flex-col gap-2">
+        <Label htmlFor="engine-token" className="text-sm font-medium">
+          Access token <span className="font-normal text-muted-foreground">(optional)</span>
+        </Label>
+        <Input
+          id="engine-token"
+          data-testid="engine-token"
+          type="password"
+          autoComplete="off"
+          value={tokenDraft}
+          placeholder="Leave empty for a local engine"
+          aria-describedby="engine-token-help"
+          onChange={(event) => {
+            setTokenDraft(event.target.value);
+            setTest({ state: "idle" });
+          }}
+          onBlur={commitToken}
+          onKeyDown={(event) => {
+            if (event.key === "Enter") void runTest();
+          }}
+          className="max-w-96"
+        />
+        <p id="engine-token-help" className="text-xs text-muted-foreground">
+          Only needed when the engine was started with a token gate; requests
+          then carry it as <code className="font-mono">Authorization: Bearer</code>.
+          A local engine with no token configured has no gate — leave this
+          empty and nothing is sent.
+        </p>
       </div>
 
       {!check.ok && (

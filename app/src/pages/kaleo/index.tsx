@@ -5,7 +5,9 @@ import { LayoutDashboardIcon } from "lucide-react";
 import { Button, Card, DragButton } from "@/components";
 import { ErrorLayout } from "@/layouts";
 import { useApp } from "@/hooks";
+import { useRunVoice } from "@/hooks/useRunVoice";
 import { useSilkscreenRun } from "@/contexts";
+import { VoiceToggle } from "./components/VoiceToggle";
 import {
   ActivityFeed,
   PromptBar,
@@ -33,6 +35,8 @@ const SETTLED: string[] = ["idle", "done", "error", "cancelled"];
 const Kaleo = () => {
   const { isHidden } = useApp();
   const run = useSilkscreenRun();
+  // Speaks the digest once when the live run completes; see useRunVoice.
+  useRunVoice(run);
 
   const busy = !SETTLED.includes(run.status);
 
@@ -95,7 +99,9 @@ const Kaleo = () => {
           ) : null}
 
           {run.status === "done" && run.result ? (
-            <div className="border-t border-input/40 pt-2">
+            <div className="relative border-t border-input/40 pt-2">
+              {/* The mute control lives with the result it would narrate. */}
+              <VoiceToggle className="absolute right-0 top-1" />
               <RunSummary
                 result={run.result}
                 // What this run was actually asked for, not what the form says

@@ -16,6 +16,7 @@ import {
   MAX_TIME_LIMIT_S,
   MIN_TIME_LIMIT_S,
   SilkscreenError,
+  authHeaders,
   generate,
   generateStream,
   health,
@@ -510,5 +511,81 @@ describe("parseFrame", () => {
     expect(parseFrame("[1,2]")).toBeNull();
     expect(parseFrame('{"t_s":1}')).toBeNull();
     expect(parseFrame('{"event":7}')).toBeNull();
+  });
+});
+
+/* -------------------------------------------------------------------- auth */
+
+describe("bearer token", () => {
+  it("authHeaders sends nothing for an absent, empty, or whitespace token", () => {
+    expect(authHeaders()).toEqual({});
+    expect(authHeaders("")).toEqual({});
+    expect(authHeaders("   ")).toEqual({});
+  });
+
+  it("authHeaders builds the trimmed Authorization header", () => {
+    expect(authHeaders(" tok-1 ")).toEqual({ Authorization: "Bearer tok-1" });
+  });
+
+  it("generate carries the token; a 401 is kind auth", async () => {
+    mockFetch.mockResolvedValueOnce(jsonResponse(401, { error: "unauthorized" }));
+    const error = await failure(
+      generate("http://x", { intent: "a board" }, undefined, "tok-1")
+    );
+    expect(error.kind).toBe("auth");
+    expect(error.status).toBe(401);
+    const init = mockFetch.mock.calls[0][1] as RequestInit;
+    expect((init.headers as Record<string, string>).Authorization).toBe(
+      "Bearer tok-1"
+    );
+  });
+
+  it("no token configured means no Authorization header at all", async () => {
+    mockFetch.mockResolvedValueOnce(jsonResponse(200, { status: "feasible" }));
+    await generate("http://x", { intent: "a board" });
+    const init = mockFetch.mock.calls[0][1] as RequestInit;
+    expect(init.headers as Record<string, string>).not.toHaveProperty(
+      "Authorization"
+    );
+  });
+
+  it("the stream carries the token, and the 404 fallback re-sends it", async () => {
+    mockFetch
+      .mockResolvedValueOnce(jsonResponse(404, { error: "not found" }))
+      .mockResolvedValueOnce(jsonResponse(200, { status: "feasible" }));
+    const frames: StreamFrame[] = [];
+    const result = await generateStream(
+      "http://x",
+      { intent: "a board" },
+      (frame) => frames.push(frame),
+      undefined,
+      "tok-2"
+    );
+    expect(result.status).toBe("feasible");
+    expect(mockFetch).toHaveBeenCalledTimes(2);
+    for (const call of mockFetch.mock.calls) {
+      const init = call[1] as RequestInit;
+      expect((init.headers as Record<string, string>).Authorization).toBe(
+        "Bearer tok-2"
+      );
+    }
+  });
+
+  it("a 401 on the stream route is kind auth and starts nothing else", async () => {
+    mockFetch.mockResolvedValueOnce(jsonResponse(401, { error: "unauthorized" }));
+    const error = await failure(
+      generateStream("http://x", { intent: "a board" }, () => {}, undefined, "bad")
+    );
+    expect(error.kind).toBe("auth");
+    expect(mockFetch).toHaveBeenCalledTimes(1);
+  });
+
+  it("health passes the token through", async () => {
+    mockFetch.mockResolvedValueOnce(jsonResponse(200, { ok: true }));
+    await health("http://x", "tok-3");
+    const init = mockFetch.mock.calls[0][1] as RequestInit;
+    expect((init.headers as Record<string, string>).Authorization).toBe(
+      "Bearer tok-3"
+    );
   });
 });

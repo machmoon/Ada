@@ -18,7 +18,10 @@ import {
 } from "@/pages";
 import { DashboardLayout } from "@/layouts";
 import { RunProvider } from "@/contexts";
-import { loadEngineBaseUrl } from "@/pages/engine/components/EngineConnection";
+import {
+  loadEngineBaseUrl,
+  loadEngineToken,
+} from "@/pages/engine/components/EngineConnection";
 
 export default function AppRoutes() {
   return (
@@ -30,7 +33,7 @@ export default function AppRoutes() {
           (known gap, see the PR notes). */}
       {/* Seed from the persisted (and re-validated on read) engine address,
           so runs target what the Engine page says they target. */}
-      <RunProvider baseUrl={loadEngineBaseUrl()}>
+      <RunProvider baseUrl={loadEngineBaseUrl()} token={loadEngineToken()}>
       <Routes>
         <Route path="/" element={<Kaleo />} />
         {/* Pluely's chat bar, kept until the removal pass: */}

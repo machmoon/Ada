@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">
+  <!-- Kaleo mark: two stepped traces, the dark one leading, the copper one
+       following — a routed pair climbing a layer. -->
+  <g fill="none" stroke-linecap="round" stroke-linejoin="round" stroke-width="150">
+    <path d="M 150 640 L 265 640 L 640 390 L 880 390" stroke="#161616"/>
+    <path d="M 150 850 L 265 850 L 640 600 L 880 600" stroke="#C4712F"/>
+  </g>
+</svg>

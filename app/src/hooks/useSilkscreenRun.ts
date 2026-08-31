@@ -75,6 +75,9 @@ export interface SilkscreenRun {
   /** Where the engine lives, and the poll behind the status dot. */
   baseUrl: string;
   setBaseUrl: (url: string) => void;
+  /** The optional bearer token, empty when none is configured. */
+  token: string;
+  setToken: (token: string) => void;
   engine: EngineHealth;
 
   /** The editable request. */
@@ -125,6 +128,8 @@ export interface SilkscreenRun {
 
 export interface UseSilkscreenRunOptions {
   baseUrl?: string;
+  /** Bearer token for a token-gated engine; empty or absent means no gate. */
+  token?: string;
   /** How many finished runs stay in memory. Boards are large; keep it small. */
   historyLimit?: number;
   healthIntervalMs?: number;
@@ -224,7 +229,8 @@ export function useSilkscreenRunState(
   const historyLimit = options.historyLimit ?? DEFAULT_HISTORY_LIMIT;
 
   const [baseUrl, setBaseUrl] = useState(options.baseUrl ?? DEFAULT_BASE_URL);
-  const engine = useEngineHealth(baseUrl, options.healthIntervalMs);
+  const [token, setToken] = useState(options.token ?? "");
+  const engine = useEngineHealth(baseUrl, options.healthIntervalMs, token);
 
   const [request, setRequest] = useState<RunRequestDraft>(EMPTY_REQUEST);
   const [submitted, setSubmitted] = useState<RunRequestDraft | null>(null);
@@ -388,7 +394,8 @@ export function useSilkscreenRunState(
             ...(draft.debug ? { debug: true } : {}),
           },
           onFrame,
-          controller.signal
+          controller.signal,
+          token
         );
         if (!mountedRef.current) return;
         if (controller.signal.aborted) return; // cancel() already set the state
@@ -451,7 +458,7 @@ export function useSilkscreenRunState(
       }
     })();
     },
-    [baseUrl, historyLimit, request]
+    [baseUrl, token, historyLimit, request]
   );
 
   const cancel = useCallback(() => {
@@ -505,6 +512,8 @@ export function useSilkscreenRunState(
   return {
     baseUrl,
     setBaseUrl,
+    token,
+    setToken,
     engine,
 
     request,

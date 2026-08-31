@@ -8,7 +8,9 @@ import { ENGINE_START_STEPS, type EngineStartStep } from "@/config/kaleo.constan
 import {
   EngineConnection,
   EngineStatus,
+  VoiceSettings,
   loadEngineBaseUrl,
+  loadEngineToken,
 } from "./components";
 
 /** One quoted command with a copy button. Its own component for the hook. */
@@ -64,14 +66,19 @@ const Engine = () => {
   // Read once: a rerender must not reach back into storage and stomp a value
   // the user just changed.
   const [baseUrl, setBaseUrl] = useState(loadEngineBaseUrl);
+  const [token, setToken] = useState(loadEngineToken);
   // The poll restarts on its own when `baseUrl` changes — the hook keys on it.
-  const health = useEngineHealth(baseUrl);
+  const health = useEngineHealth(baseUrl, undefined, token);
   // Saving here must reach the run layer too, or the address on this page and
   // the address runs actually target quietly diverge until the next launch.
   const run = useSilkscreenRun();
   const applyBaseUrl = (url: string) => {
     setBaseUrl(url);
     run.setBaseUrl(url);
+  };
+  const applyToken = (value: string) => {
+    setToken(value);
+    run.setToken(value);
   };
 
   return (
@@ -92,7 +99,14 @@ const Engine = () => {
         </div>
       }
     >
-      <EngineConnection baseUrl={baseUrl} onBaseUrlChange={applyBaseUrl} />
+      <EngineConnection
+        baseUrl={baseUrl}
+        onBaseUrlChange={applyBaseUrl}
+        token={token}
+        onTokenChange={applyToken}
+      />
+
+      <VoiceSettings />
 
       <div id="engine-start" className="space-y-3">
         <Header

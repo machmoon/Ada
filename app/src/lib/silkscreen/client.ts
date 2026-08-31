@@ -12,7 +12,7 @@
 // service ships no CORS headers on purpose and must not grow any, so the
 // request goes through Rust instead, where the same-origin policy does not
 // apply. That is also why `http:default` in `src-tauri/capabilities` allows
-// `http://**`.
+// the loopback origins the engine may live on.
 
 import { fetch as tauriFetch } from "@tauri-apps/plugin-http";
 import type { GenerateRequest, RunError, RunResult, StreamFrame } from "./types";
@@ -34,6 +34,7 @@ export const MAX_TIME_LIMIT_S = 60;
 export type ErrorKind =
   | "offline" // nothing is listening; the engine was never reached
   | "setup" // reached it, but it has no GOOGLE_API_KEY
+  | "auth" // 401 — the engine has a token gate and ours is missing or wrong
   | "request" // 400/413 — the prompt or its options were rejected
   | "upstream" // 502/503 — the model provider failed
   | "server" // 500 — a bug on the engine side, carries an error_id
@@ -113,6 +114,7 @@ function kindForStatus(status: number, body: Partial<RunError>): ErrorKind {
   if (status === 502 || status === 503) {
     return /GOOGLE_API_KEY|api key/i.test(text) ? "setup" : "upstream";
   }
+  if (status === 401) return "auth";
   if (status === 400 || status === 413) return "request";
   if (status >= 500) return "server";
   return "server";
@@ -124,6 +126,18 @@ function errorFromBody(status: number, body: Partial<RunError>): SilkscreenError
     body.error || `The engine answered ${status}.`,
     { status, errorId: body.error_id ?? "", detail: body.detail ?? "" }
   );
+}
+
+/**
+ * The `Authorization` header, when a token is configured.
+ *
+ * A deployed engine can sit behind a bearer-token gate; locally with no token
+ * there is no gate. An empty or whitespace token sends nothing at all — a
+ * bare `Bearer ` header would turn "no token configured" into a 401.
+ */
+export function authHeaders(token?: string): Record<string, string> {
+  const trimmed = (token ?? "").trim();
+  return trimmed ? { Authorization: `Bearer ${trimmed}` } : {};
 }
 
 async function readJson(response: Response): Promise<Record<string, unknown>> {
@@ -142,11 +156,13 @@ async function readJson(response: Response): Promise<Record<string, unknown>> {
  * be in, not an exception.
  */
 export async function health(
-  baseUrl: string
+  baseUrl: string,
+  token?: string
 ): Promise<{ ok: boolean; detail: string }> {
   try {
     const response = await tauriFetch(`${baseUrl}/healthz`, {
       method: "GET",
+      headers: authHeaders(token),
       signal: AbortSignal.timeout(4000),
     });
     if (!response.ok) return { ok: false, detail: `answered ${response.status}` };
@@ -163,11 +179,12 @@ export async function health(
 export async function generate(
   baseUrl: string,
   request: GenerateRequest,
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  token?: string
 ): Promise<RunResult> {
   const response = await tauriFetch(`${baseUrl}/generate`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json", ...authHeaders(token) },
     body: JSON.stringify(normalizeRequest(request)),
     signal: withTimeout(signal),
   });
@@ -191,14 +208,15 @@ export async function generateStream(
   baseUrl: string,
   request: GenerateRequest,
   onFrame: (frame: StreamFrame) => void,
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  token?: string
 ): Promise<RunResult> {
   const payload = normalizeRequest(request);
   let response: Response;
   try {
     response = await tauriFetch(`${baseUrl}/generate/stream`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: { "Content-Type": "application/json", ...authHeaders(token) },
       body: JSON.stringify(payload),
       signal: withTimeout(signal),
     });
@@ -211,7 +229,7 @@ export async function generateStream(
   }
 
   // The one safe fallback: the route does not exist, so no run has started.
-  if (response.status === 404) return generate(baseUrl, request, signal);
+  if (response.status === 404) return generate(baseUrl, request, signal, token);
 
   if (!response.ok) {
     // Pre-stream validation (400/413) still answers plain JSON.

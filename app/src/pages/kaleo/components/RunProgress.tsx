@@ -331,6 +331,11 @@ function explain(
         body: "It is running, but GOOGLE_API_KEY is not in its environment, so it cannot call the model. That is a setup step, not an outage.",
         hint: "export GOOGLE_API_KEY=… && PORT=8081 python -m service.app",
       };
+    case "auth":
+      return {
+        title: "The engine refused the token.",
+        body: "It answered 401 unauthorized. This engine is running behind a token gate, and the access token on the Engine page is missing or wrong.",
+      };
     case "request":
       return {
         title: "The engine refused the request.",

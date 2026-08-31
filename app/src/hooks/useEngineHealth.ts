@@ -33,7 +33,8 @@ export interface EngineHealth {
  */
 export function useEngineHealth(
   baseUrl: string = DEFAULT_BASE_URL,
-  intervalMs: number = HEALTH_POLL_INTERVAL_MS
+  intervalMs: number = HEALTH_POLL_INTERVAL_MS,
+  token: string = ""
 ): EngineHealth {
   const [state, setState] = useState<{
     ok: boolean;
@@ -58,7 +59,7 @@ export function useEngineHealth(
     inFlightRef.current = true;
     if (mountedRef.current) setChecking(true);
     try {
-      const result = await health(baseUrl);
+      const result = await health(baseUrl, token);
       if (!mountedRef.current) return;
       setState({
         ok: result.ok,
@@ -78,7 +79,7 @@ export function useEngineHealth(
       inFlightRef.current = false;
       if (mountedRef.current) setChecking(false);
     }
-  }, [baseUrl]);
+  }, [baseUrl, token]);
 
   useEffect(() => {
     void probe();

@@ -8,6 +8,22 @@
  */
 export const KALEO_STORAGE_KEYS = {
   ENGINE_BASE_URL: "silkscreen_engine_base_url",
+  /**
+   * The optional bearer token for an engine deployed behind a token gate.
+   * localStorage on purpose: it is how this app already stores provider API
+   * keys (no JS in this build touches the keychain plugin), and the engine is
+   * loopback-only here anyway.
+   */
+  ENGINE_TOKEN: "silkscreen_engine_token",
+  /**
+   * The spoken-digest switch ("1"/"0", absent means on) and the optional
+   * ElevenLabs credentials. The key is localStorage for the same reason the
+   * engine token is; its value must never appear in a log or error string —
+   * see `src/lib/speech/`.
+   */
+  VOICE_ENABLED: "silkscreen_voice_enabled",
+  ELEVENLABS_KEY: "silkscreen_elevenlabs_key",
+  ELEVENLABS_VOICE_ID: "silkscreen_elevenlabs_voice_id",
 } as const;
 
 /**
