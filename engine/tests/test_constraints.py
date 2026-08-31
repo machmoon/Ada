@@ -33,6 +33,7 @@ from silkscreen.constraints import (
     verify_provenance,
 )
 from silkscreen.constraints.extract import (
+    WEAK_PROVENANCE,
     extract_design_requirements,
     extract_ratings,
 )
@@ -483,7 +484,10 @@ def test_check_decoupling_per_pin_counts_supply_pads():
     result = check_board(board, ConstraintSet(part_number="X",
                                               decoupling=[c]), ref="U1")
     assert len(result.findings) == 1
-    assert "1 found, 2 required" in result.findings[0].detail
+    # The uncovered pin is named: one capacitor covers one pin, so U1.2 is
+    # short even though the board carries a capacitor on VDD.
+    assert "U1.2" in result.findings[0].detail
+    assert "1 of 2 pin(s) covered" in result.findings[0].detail
 
 
 def test_check_decoupling_wrong_value_is_a_note():
@@ -897,3 +901,178 @@ def test_parse_farads_refuses_bare_numbers(text):
 
 def test_parse_farads_leading_dot():
     assert parse_farads(".1uF") == pytest.approx(100e-9)
+
+
+# --------------------------------------------------------------------------
+# regressions for the four defects found in review of this branch
+# --------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("field,value", [
+    ("count", 0),          # makes len(caps) < 0 -- unfalsifiable
+    ("count", -1),
+    ("max_distance_mm", 0.0),   # no cap is within 0 mm -- always fabricates
+    ("max_distance_mm", -2.0),
+    ("value", 0.0),
+    ("value", -100.0),
+])
+def test_non_positive_magnitudes_are_rejected(field, value):
+    """A zero or negative magnitude does not look odd downstream -- it
+    silently decides the check. ``count: 0`` can never fail and
+    ``max_distance_mm: 0`` can never pass, and both then read as a verdict.
+    Null stays legal: that is "the datasheet gives no number"."""
+    data = {
+        "part_number": "X",
+        "schema_version": SCHEMA_VERSION,
+        "decoupling": [{"id": "d", "rail": "VDD",
+                        "provenance": {"page": 1, "quote": "q"},
+                        field: value}],
+    }
+    with pytest.raises(ValueError, match="must be positive or null"):
+        ConstraintSet.from_dict(data)
+
+
+def test_null_magnitudes_still_load():
+    cset = ConstraintSet.from_dict({
+        "part_number": "X",
+        "schema_version": SCHEMA_VERSION,
+        "decoupling": [{"id": "d", "rail": "VDD", "count": None,
+                        "value": None, "max_distance_mm": None,
+                        "provenance": {"page": 1, "quote": "q"}}],
+    })
+    assert cset.decoupling[0].count is None
+
+
+def test_quote_stitched_from_unrelated_rows_does_not_verify_locally():
+    """The fabrication this gate exists to catch: every word and number is
+    on the page, but they belong to two different rows a page apart."""
+    page = (
+        "Supply voltage VDD 2.0 3.6 V\n"
+        + "\n".join(f"filler row {i} of the table" for i in range(60))
+        + "\nStorage temperature Tstg -65 150 C\n"
+    )
+    assert quote_on_page("Supply voltage VDD 2.0 3.6 V", page)
+    # invented: VDD's name against Tstg's numbers
+    assert not quote_on_page("Supply voltage VDD -65 150 V", page)
+    # ...and the page-wide test is exactly what could not tell the difference
+    assert quote_on_page("Supply voltage VDD -65 150 V", page, local=False)
+
+
+def test_page_wide_only_match_verifies_but_is_flagged():
+    """Provenance the strong reader cannot confirm is still provenance --
+    but it is a human's to confirm, never a checker's to trust."""
+    scattered = (
+        "Standard operating voltage VDD\n"
+        + "\n".join(f"unrelated line {i}" for i in range(60))
+        + "\n2.4 3.6\n"
+    )
+    c = Rating(id="r", provenance=Provenance(1, "T", "VDD operating voltage 2.4 3.6"),
+               confidence=0.99)
+    strong = verify_provenance(c, [scattered])
+    assert not strong.provenance.verified
+
+    weak = verify_provenance(c, [""], [scattered])
+    assert weak.provenance.verified
+    assert WEAK_PROVENANCE in weak.review_reason
+    assert gate(weak, [scattered]).needs_review is True
+
+
+def test_per_pin_decoupling_ignores_caps_serving_another_part():
+    """The false pass: U2's three capacitors sit on the same rail, so a
+    board-wide count says U1's two VDD pins are covered. They are not --
+    U1 has no decoupling at all."""
+    c = _trusted(Decoupling(id="d", rail="VDD", per_pin=True,
+                            provenance=_prov()))
+    board = _board([
+        _part("U1", "MCU", [
+            _pad("U1", "1", "VDD", 0.0, 0.0),
+            _pad("U1", "2", "VDD", 0.0, 2.0),
+            _pad("U1", "3", "GND", 0.0, 4.0),
+        ]),
+        _part("U2", "REG", [
+            _pad("U2", "1", "VDD", 50.0, 0.0),
+            _pad("U2", "2", "GND", 50.0, 2.0),
+        ]),
+        _part("C1", "100nF", [_pad("C1", "1", "VDD", 51.0, 0.0),
+                              _pad("C1", "2", "GND", 51.0, 1.0)]),
+        _part("C2", "100nF", [_pad("C2", "1", "VDD", 52.0, 0.0),
+                              _pad("C2", "2", "GND", 52.0, 1.0)]),
+        _part("C3", "100nF", [_pad("C3", "1", "VDD", 53.0, 0.0),
+                              _pad("C3", "2", "GND", 53.0, 1.0)]),
+    ])
+    result = check_board(board, ConstraintSet(part_number="X",
+                                              decoupling=[c]), ref="U1")
+    assert len(result.findings) == 1
+    assert "2 of 2" in result.findings[0].title
+    assert "0 of 2 pin(s) covered" in result.findings[0].detail
+
+
+def test_one_cap_does_not_cover_two_pins():
+    """A single capacitor counted once, not once per pin."""
+    c = _trusted(Decoupling(id="d", rail="VDD", per_pin=True,
+                            provenance=_prov()))
+    board = _board([
+        _part("U1", "MCU", [
+            _pad("U1", "1", "VDD", 0.0, 0.0),
+            _pad("U1", "2", "VDD", 0.0, 2.0),
+            _pad("U1", "3", "GND", 0.0, 4.0),
+        ]),
+        _part("C1", "100nF", [_pad("C1", "1", "VDD", 0.5, 0.0),
+                              _pad("C1", "2", "GND", 0.5, 1.0)]),
+    ])
+    result = check_board(board, ConstraintSet(part_number="X",
+                                              decoupling=[c]), ref="U1")
+    assert len(result.findings) == 1
+    assert "U1.2" in result.findings[0].detail
+
+
+def test_conditional_strap_on_a_driven_pin_is_unchecked_not_blocked():
+    """The false blocker: an NE555 whose RESET is driven by an MCU is a
+    correct design, and "connect RESET to VCC when not used" does not apply
+    to it. The checker cannot read the condition, so it must ask rather
+    than fail the board."""
+    c = _trusted(StrapPin(id="s", pin="RESET", required_state="high",
+                          condition="when not used", provenance=_prov()))
+    board = _board([
+        _part("U1", "NE555", [
+            _pad("U1", "4", "MCU_GPIO", 0.0, 0.0),
+            _pad("U1", "1", "GND", 0.0, 2.0),
+        ]),
+        _part("U2", "MCU", [_pad("U2", "7", "MCU_GPIO", 10.0, 0.0)]),
+    ])
+    result = check_board(board, ConstraintSet(part_number="X", strap_pins=[c]),
+                         ref="U1", pin_map={"RESET": "4"})
+    assert result.findings == []
+    assert any(cid == "s" and "when not used" in why
+               for cid, why in result.unchecked)
+
+
+def test_unconditional_strap_on_a_driven_pin_is_still_a_blocker():
+    """The condition is what buys the leniency; without one, nothing does."""
+    c = _trusted(StrapPin(id="s", pin="RESET", required_state="high",
+                          provenance=_prov()))
+    board = _board([
+        _part("U1", "NE555", [
+            _pad("U1", "4", "MCU_GPIO", 0.0, 0.0),
+            _pad("U1", "1", "GND", 0.0, 2.0),
+        ]),
+        _part("U2", "MCU", [_pad("U2", "7", "MCU_GPIO", 10.0, 0.0)]),
+    ])
+    result = check_board(board, ConstraintSet(part_number="X", strap_pins=[c]),
+                         ref="U1", pin_map={"RESET": "4"})
+    assert [f.severity for f in result.findings] == [Severity.BLOCKER]
+
+
+def test_floating_strap_is_a_blocker_even_under_a_condition():
+    """No configuration wants a floating strap pin."""
+    c = _trusted(StrapPin(id="s", pin="RESET", required_state="high",
+                          condition="when not used", provenance=_prov()))
+    board = _board([
+        _part("U1", "NE555", [
+            _pad("U1", "4", "", 0.0, 0.0),
+            _pad("U1", "1", "GND", 0.0, 2.0),
+        ]),
+    ])
+    result = check_board(board, ConstraintSet(part_number="X", strap_pins=[c]),
+                         ref="U1", pin_map={"RESET": "4"})
+    assert [f.severity for f in result.findings] == [Severity.BLOCKER]

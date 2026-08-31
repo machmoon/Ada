@@ -25,6 +25,7 @@ from .extract import (
     extract_design_requirements,
     extract_ratings,
     gate,
+    verification_pages,
     verify_provenance,
 )
 from .schema import SCHEMA_VERSION, ConstraintSet, DocumentInfo
@@ -56,12 +57,22 @@ def extract_constraints(
         if on_event is not None:
             on_event(evt)
 
-    # Page text for the provenance check. Failure degrades, loudly.
-    pages: list[str] = []
+    # Page text for the provenance check, read independently of the model's
+    # own view of the PDF (see verification_pages). Two readers, because
+    # neither is reliably better: layout mode reassembles table rows, the
+    # default mode reads rotated pages layout mode drops. A quote that only
+    # matches under the weaker reader still verifies, but is flagged for a
+    # human. Both failing does not abort the run -- it means no quote can
+    # verify, so every constraint gates to needs_review, which is degraded
+    # and saying so rather than refusing to extract.
+    pages: list[str] = verification_pages(pdf_bytes)
+    weak_pages: list[str] = []
     try:
-        pages = extract_pages(pdf_bytes)
+        weak_pages = extract_pages(pdf_bytes)
     except GroundingError as exc:
         emit(event="constraints.pages_failed", error=str(exc)[:160])
+    if not any(p.strip() for p in pages):
+        pages = weak_pages
 
     doc = Document(data=pdf_bytes)
 
@@ -73,7 +84,8 @@ def extract_constraints(
     )
 
     def settle(items: list) -> list:
-        return [gate(verify_provenance(c, pages), pages) for c in items]
+        return [gate(verify_provenance(c, pages, weak_pages), pages or weak_pages)
+                for c in items]
 
     cset = ConstraintSet(
         part_number=part_number,
@@ -84,7 +96,7 @@ def extract_constraints(
             sha256=hashlib.sha256(pdf_bytes).hexdigest(),
             # Pages of *extracted text*: 0 means text extraction failed, not
             # that the pinned document is empty.
-            page_count=len(pages),
+            page_count=len(pages or weak_pages),
         ),
         ratings=settle(ratings),
         decoupling=settle(decoupling),

@@ -181,6 +181,86 @@ def _supply_pads(board: AuditBoard, ref: str, net: str) -> list[AuditPad]:
     return [p for p in part.pads if p.net == net]
 
 
+def _consumers(board: AuditBoard, net: str,
+               caps: list[tuple[AuditPart, AuditPad]]) -> list[AuditPart]:
+    """Parts drawing off ``net`` -- everything on it that is not one of the
+    decoupling capacitors themselves."""
+    cap_refs = {part.ref for part, _pad in caps}
+    return [
+        part for part in board.parts
+        if part.ref not in cap_refs and any(p.net == net for p in part.pads)
+    ]
+
+
+def _attributed_caps(
+    board: AuditBoard, net: str, ref: str,
+    caps: list[tuple[AuditPart, AuditPad]],
+) -> list[tuple[AuditPart, AuditPad]]:
+    """The caps on ``net`` that belong to ``ref`` rather than to another part.
+
+    A capacitor is attributed to whichever consumer of the rail it sits
+    nearest. Without this the count is board-wide, and a board-wide count
+    against one part's pin requirement is the checker's worst failure mode:
+    three capacitors clustered around a second regulator satisfy "one 100 nF
+    per VDD pin" for an MCU that has none, and the board is reported
+    compliant. Distance is the right discriminator because proximity is what
+    the requirement is actually about -- a bypass capacitor two inches away
+    is not decoupling this part whatever the netlist says.
+
+    With one consumer on the rail this returns every cap, which is the same
+    answer the board-wide count gave.
+    """
+    consumers = _consumers(board, net, caps)
+    if len(consumers) <= 1:
+        return list(caps)
+    mine = []
+    for cap_part, cap_pad in caps:
+        nearest = min(
+            consumers,
+            key=lambda part: min(
+                (math.hypot(pad.centre[0] - cap_pad.centre[0],
+                            pad.centre[1] - cap_pad.centre[1])
+                 for pad in part.pads if pad.net == net),
+                default=float("inf"),
+            ),
+        )
+        if nearest.ref == ref:
+            mine.append((cap_part, cap_pad))
+    return mine
+
+
+def _uncovered_pins(
+    supply_pads: list[AuditPad],
+    caps: list[tuple[AuditPart, AuditPad]],
+    limit_nm: int | None,
+) -> list[AuditPad]:
+    """Supply pads left with no capacitor of their own.
+
+    One capacitor covers one pin: a part is matched to at most one pad, so
+    a single 100 nF cannot satisfy four VDD pins by being counted four
+    times. Pads are served nearest-first, and when the constraint carries a
+    distance, a capacitor beyond it does not cover the pad at all.
+    """
+    pairs = sorted(
+        (
+            (math.hypot(cap_pad.centre[0] - pad.centre[0],
+                        cap_pad.centre[1] - pad.centre[1]), i, j)
+            for i, pad in enumerate(supply_pads)
+            for j, (_cp, cap_pad) in enumerate(caps)
+        ),
+    )
+    taken_pads: set[int] = set()
+    taken_caps: set[int] = set()
+    for dist, i, j in pairs:
+        if i in taken_pads or j in taken_caps:
+            continue
+        if limit_nm is not None and dist > limit_nm:
+            continue
+        taken_pads.add(i)
+        taken_caps.add(j)
+    return [pad for i, pad in enumerate(supply_pads) if i not in taken_pads]
+
+
 def _check_decoupling(
     board: AuditBoard, c: Decoupling, ref: str, result: CheckResult
 ) -> None:
@@ -189,35 +269,73 @@ def _check_decoupling(
         result.unchecked.append((c.id, why))
         return
 
-    caps = _decoupling_caps(board, net)
+    all_caps = _decoupling_caps(board, net)
     part = board.part_by_ref(ref)
     supply_pads = _supply_pads(board, ref, net)
+    # Only the capacitors that serve *this* part. See _attributed_caps: a
+    # board-wide count is how a part with no decoupling at all passes.
+    caps = _attributed_caps(board, net, ref, all_caps)
+    limit_nm = mm(c.max_distance_mm) if c.max_distance_mm is not None else None
 
-    required = c.count if c.count is not None else 1
     if c.per_pin and supply_pads:
-        required = max(required, len(supply_pads))
-
-    if len(caps) < required:
-        result.findings.append(
-            _finding(
-                c,
-                severity=Severity.MARGINAL,
-                title=(
-                    f"{c.rail} has {len(caps)} decoupling capacitor(s); the "
-                    f"datasheet requires {required}"
-                ),
-                detail=(
-                    f"{len(caps)} capacitor(s) bridge {net} to ground on this "
-                    f"board, against a required {required}"
-                    + (" (one per supply pin)." if c.per_pin else ".")
-                ),
-                refs=(ref,) if part else (),
-                nets=(net,),
-                extent=part.extent if part else None,
-                evidence=f"{len(caps)} found, {required} required",
-                fix=f"Add decoupling on {net} next to {ref}.",
+        # Per-pin is a coverage question, not a counting one.
+        uncovered = _uncovered_pins(supply_pads, caps, limit_nm)
+        if uncovered:
+            names = ", ".join(pad.name for pad in uncovered)
+            near = (f" within {c.max_distance_mm:g} mm"
+                    if limit_nm is not None else "")
+            result.findings.append(
+                _finding(
+                    c,
+                    severity=Severity.MARGINAL,
+                    title=(
+                        f"{len(uncovered)} of {len(supply_pads)} {c.rail} pin(s) "
+                        f"on {ref} have no decoupling capacitor of their own"
+                    ),
+                    detail=(
+                        f"The datasheet requires one capacitor per {c.rail} "
+                        f"pin. {names} {'has' if len(uncovered) == 1 else 'have'} "
+                        f"none{near}; {len(caps)} capacitor(s) on {net} are "
+                        f"placed nearest {ref}"
+                        + (f" (of {len(all_caps)} on the rail board-wide)"
+                           if len(all_caps) != len(caps) else "") + "."
+                    ),
+                    refs=(ref,),
+                    nets=(net,),
+                    extent=part.extent if part else None,
+                    point=uncovered[0].centre,
+                    evidence=(
+                        f"{len(supply_pads) - len(uncovered)} of "
+                        f"{len(supply_pads)} pin(s) covered"
+                    ),
+                    fix=f"Add decoupling beside {names} on {ref}.",
+                )
             )
-        )
+    else:
+        required = c.count if c.count is not None else 1
+        if len(caps) < required:
+            result.findings.append(
+                _finding(
+                    c,
+                    severity=Severity.MARGINAL,
+                    title=(
+                        f"{c.rail} has {len(caps)} decoupling capacitor(s) "
+                        f"serving {ref}; the datasheet requires {required}"
+                    ),
+                    detail=(
+                        f"{len(caps)} capacitor(s) bridging {net} to ground "
+                        f"are placed nearest {ref}"
+                        + (f", of {len(all_caps)} on the rail board-wide"
+                           if len(all_caps) != len(caps) else "")
+                        + f", against a required {required}."
+                    ),
+                    refs=(ref,) if part else (),
+                    nets=(net,),
+                    extent=part.extent if part else None,
+                    evidence=f"{len(caps)} found, {required} required",
+                    fix=f"Add decoupling on {net} next to {ref}.",
+                )
+            )
 
     # Value: the datasheet naming 100 nF is satisfied when SOME cap on the
     # rail carries it. Other caps on the same rail (a bulk 4.7 uF beside the
@@ -289,7 +407,6 @@ def _check_decoupling(
              f"distance: {ref!r} has no pads on {net}")
         )
     if c.max_distance_mm is not None and supply_pads and caps:
-        limit_nm = mm(c.max_distance_mm)
         for pad in supply_pads:
             nearest_nm, cap_part = min(
                 (
@@ -388,6 +505,26 @@ def _check_strap(
     floating = not pad.net or len(peers) < 2
     level = "" if floating else _tied_level(board, pad)
 
+    # A strap requirement that carries a condition ("when unused", "to boot
+    # from flash") applies to *some* configurations. The condition is prose
+    # this checker cannot evaluate, so enforcing it on every board turns a
+    # legitimate design into a blocker -- an NE555 whose RESET is driven by
+    # an MCU is correct, and the datasheet's "connect RESET to VCC when not
+    # used" does not apply to it. A false blocker costs more than a missed
+    # finding here: it is the finding that teaches an engineer to stop
+    # reading the checker. So a conditional requirement on a pin that *is*
+    # driven to some defined state goes to unchecked, naming the condition
+    # for a human. Floating is still a blocker whatever the condition says,
+    # because no configuration wants a floating strap pin.
+    if c.condition and not floating and not level:
+        result.unchecked.append(
+            (c.id,
+             f"{ref} {c.pin} is driven by net {pad.net}, and this requirement "
+             f"applies only {c.condition}; confirm which configuration this "
+             f"board uses")
+        )
+        return
+
     if floating or not level:
         state = "is not connected" if floating else (
             f"is on net {pad.net}, which ties it to no defined level"
@@ -426,13 +563,17 @@ def _check_strap(
     tied_high = level in ("high", "pulled-high")
     if want in ("high", "pull-up") and tied_low or \
        want in ("low", "pull-down") and tied_high:
+        # Tied the other way is a real contradiction, but under a condition
+        # this checker cannot evaluate it may be a deliberate alternative
+        # configuration -- reported, and not as a blocker.
         result.findings.append(
             _finding(
                 c,
-                severity=Severity.BLOCKER,
+                severity=Severity.MARGINAL if c.condition else Severity.BLOCKER,
                 title=(
                     f"{ref} {c.pin} is tied {level}; the datasheet requires "
                     f"{c.required_state}"
+                    + (f" {c.condition}" if c.condition else "")
                 ),
                 detail=(
                     f"Pad {number} is tied {level.replace('-', ' ')} via net "

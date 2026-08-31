@@ -356,13 +356,26 @@ def _load_constraint(cls: type, data: Any) -> Any:
                    and all(isinstance(v, str) for v in kwargs[name]),
                    f"{name} must be a list of strings, got {kwargs[name]!r}")
             kwargs[name] = tuple(kwargs[name])
+    # These four are *physical magnitudes*, and the checker divides, compares
+    # and counts with them. A non-positive one does not merely look odd: it
+    # silently changes what the checker decides. ``count: 0`` makes the
+    # decoupling count unfalsifiable (``len(caps) < 0`` is never true), and
+    # ``max_distance_mm: 0`` fabricates a distance finding on every board
+    # ever checked, because no capacitor is within 0 mm of a pad. Both read
+    # afterwards as a confident verdict. Rejecting them here is the only
+    # place that can tell the difference between "the datasheet says none"
+    # (null, which stays legal) and "something produced a zero".
     for name in ("value", "max_distance_mm", "resistor_value"):
         if name in kwargs:
             _valid_real(kwargs[name], name)
+            _check(kwargs[name] is None or kwargs[name] > 0,
+                   f"{name} must be positive or null, got {kwargs[name]!r}")
     if kwargs.get("count") is not None and "count" in kwargs:
         _check(isinstance(kwargs["count"], int)
                and not isinstance(kwargs["count"], bool),
                f"count must be an integer or null, got {kwargs['count']!r}")
+        _check(kwargs["count"] > 0,
+               f"count must be positive or null, got {kwargs['count']!r}")
     if "limit" in kwargs:
         kwargs["limit"] = _load(Limit, kwargs["limit"])
         for name in ("min", "typ", "max"):

@@ -20,6 +20,7 @@ until a human sets it.
 
 from __future__ import annotations
 
+import io
 import math
 import re
 from dataclasses import replace
@@ -352,51 +353,160 @@ def _tokens(text: str) -> tuple[list[str], list[str]]:
     return words, numbers
 
 
-def quote_on_page(quote: str, page_text: str) -> bool:
-    """Is the quote plausibly on this page?
+def verification_pages(pdf_bytes: bytes) -> list[str]:
+    """Page text for the provenance check, read layout-preserving.
 
-    Two tests, both required. Every *number* in the quote must appear on the
-    page exactly (after shared normalisation), sign included -- ratings rows
-    share nearly all their vocabulary, so a wrong or invented number is the
-    one thing word overlap cannot catch, and it is also the payload. The
-    *words* then need 0.6 overlap, which tolerates pypdf's column soup while
-    still rejecting a row whose subject ("VBAT", "backup") is not on the page.
-    A quote too short to carry evidence (under three informative tokens)
-    never verifies -- unverifiable is the honest answer for it.
+    A second, independent read of the PDF rather than a call to
+    :func:`~..agents.grounding.extract_pages` -- the same discipline
+    ``audit/geometry.py`` follows in re-reading a board instead of calling
+    ``kicad.py``: a check written in terms of the reader that fed the model
+    shares its blind spots.
+
+    The substantive difference is pypdf's *layout* mode. The default mode
+    emits a table's labels and then its values, so the two halves of one row
+    land at opposite ends of the page -- measured on the STM32F030F4
+    datasheet, "VDD Standard operating voltage" sits at token 21 and its
+    "2.4 3.6" at token 393. Under that text no locality requirement can tell
+    a genuine row from a quote stitched out of two unrelated ones. Layout
+    mode puts the row back together (those same tokens land adjacent), which
+    is what makes :func:`quote_on_page`'s window meaningful.
+
+    Falls back to the shared reader, then to no pages at all; both degrade
+    into "nothing verifies", which the gate reports rather than hides.
     """
-    words, numbers = _tokens(quote)
-    if len(words) + len(numbers) < 3 or not words:
-        return False
-    page_words, page_numbers = _tokens(page_text)
-    have_numbers = set(page_numbers)
-    if any(n not in have_numbers for n in numbers):
-        return False
-    have_words = set(page_words)
-    found = sum(1 for t in words if t in have_words)
-    return found / len(words) >= _MATCH_THRESHOLD
+    try:
+        from pypdf import PdfReader
+    except ImportError:
+        return []
+    try:
+        reader = PdfReader(io.BytesIO(pdf_bytes))
+        if getattr(reader, "is_encrypted", False) and not reader.decrypt(""):
+            return []
+        out = []
+        for page in reader.pages:
+            try:
+                out.append(page.extract_text(extraction_mode="layout") or "")
+            except Exception:
+                # One unreadable page must not lose the other ninety-two.
+                out.append("")
+        return out
+    except Exception:
+        return []
 
 
-def verify_provenance(constraint: Any, pages: list[str]) -> Any:
+def _seq(text: str) -> list[tuple[str, str]]:
+    """Tokens in page order, tagged ``"w"``/``"n"``.
+
+    :func:`_tokens` throws position away, which is what let a quote assembled
+    from two unrelated rows verify: every token existed *somewhere* on the
+    page. Keeping the order lets the match be required to be local.
+    """
+    text = _normalise(text)
+    items: list[tuple[int, str, str]] = [
+        (m.start(), "n", m.group()) for m in _NUMBER_RE.finditer(text)
+    ]
+    items += [
+        (m.start(), "w", m.group())
+        for m in _WORD_RE.finditer(text)
+        if len(m.group()) >= 2 and not re.fullmatch(r"[\d.]+", m.group())
+    ]
+    items.sort()
+    return [(kind, tok) for _pos, kind, tok in items]
+
+
+def quote_on_page(quote: str, page_text: str, *, local: bool = True) -> bool:
+    """Is the quote plausibly on this page, as one passage?
+
+    Three tests, all required. Every *number* in the quote must appear
+    exactly, sign included -- ratings rows share nearly all their vocabulary,
+    so a wrong or invented number is the one thing word overlap cannot catch,
+    and it is also the payload. The *words* then need 0.6 overlap, which
+    tolerates pypdf's column soup while still rejecting a row whose subject
+    ("VBAT", "backup") is not on the page. A quote too short to carry
+    evidence (under three informative tokens) never verifies -- unverifiable
+    is the honest answer for it.
+
+    The third test is **locality**, and it is why this is not a set
+    intersection. A ratings page holds dozens of rows drawn from the same
+    vocabulary, so a quote stitched together from two unrelated rows -- one
+    row's parameter name against another row's number -- satisfies both of
+    the other tests and verifies as provenance for a limit the datasheet
+    never states. That is a fabrication wearing a page number, which is the
+    single worst output this module can produce. So both tests must pass
+    inside one window of the page rather than across the whole of it. The
+    window is generous (three times the quote, minimum forty tokens) because
+    pypdf interleaves columns and the goal is only to rule out matches
+    assembled from opposite ends of a page.
+    """
+    q = _seq(quote)
+    q_words = [t for kind, t in q if kind == "w"]
+    q_numbers = [t for kind, t in q if kind == "n"]
+    if len(q) < 3 or not q_words:
+        return False
+
+    page = _seq(page_text)
+    span = len(page) if not local else max(len(q) * 3, len(q) + 40)
+    step = max(1, span // 4)
+    starts = [0] if len(page) <= span else range(0, len(page) - span + 1, step)
+    need = set(q_numbers)
+    for start in starts:
+        window = page[start:start + span]
+        have_numbers = {t for kind, t in window if kind == "n"}
+        if any(n not in have_numbers for n in need):
+            continue
+        have_words = {t for kind, t in window if kind == "w"}
+        found = sum(1 for t in q_words if t in have_words)
+        if found / len(q_words) >= _MATCH_THRESHOLD:
+            return True
+    return False
+
+
+#: Why a page-wide-only match still costs a human glance.
+WEAK_PROVENANCE = (
+    "quote verified only page-wide: its words and numbers are not adjacent "
+    "in the layout text, so it may be assembled from separate rows"
+)
+
+
+def verify_provenance(
+    constraint: Any, pages: list[str], weak_pages: list[str] | None = None
+) -> Any:
     """Return a copy with ``provenance.verified`` set from the page text.
 
-    ``pages`` is 0-indexed extracted text (``grounding.extract_pages``);
-    provenance pages are 1-based. A quote found on the claimed page verifies;
-    found elsewhere or nowhere does not, and :func:`gate` will say why.
+    ``pages`` is 0-indexed layout-mode text (:func:`verification_pages`);
+    provenance pages are 1-based. A quote found *as one passage* on its
+    claimed page verifies cleanly.
+
+    ``weak_pages`` is the same document under the default reader, and exists
+    because neither reader is reliably better: layout mode reassembles table
+    rows but drops rotated text, while the default mode reads those pages and
+    scatters the rows. A quote that only matches page-wide in ``weak_pages``
+    still verifies -- refusing it would throw away real provenance on pages
+    layout mode cannot read -- but it carries :data:`WEAK_PROVENANCE` into
+    the gate, so it is a constraint a human is asked to confirm rather than
+    one a checker silently trusts. That is the whole distinction: the weak
+    match is the one that cannot rule out a quote stitched from two rows.
     """
     prov = constraint.provenance
-    if not prov.quote or not (1 <= prov.page <= len(pages)):
+    if not prov.quote or prov.page < 1:
         return constraint
-    if quote_on_page(prov.quote, pages[prov.page - 1]):
-        return replace(
-            constraint,
-            provenance=Provenance(prov.page, prov.section, prov.quote, True),
-        )
+    idx = prov.page - 1
+    verified = Provenance(prov.page, prov.section, prov.quote, True)
+    if idx < len(pages) and quote_on_page(prov.quote, pages[idx]):
+        return replace(constraint, provenance=verified)
+    if (weak_pages and idx < len(weak_pages)
+            and quote_on_page(prov.quote, weak_pages[idx], local=False)):
+        existing = [r for r in constraint.review_reason.split("; ") if r]
+        merged = list(dict.fromkeys(existing + [WEAK_PROVENANCE]))
+        return replace(constraint, provenance=verified,
+                       review_reason="; ".join(merged))
     return constraint
 
 
 def _where_else(quote: str, pages: list[str]) -> int | None:
+    # A hint only ("found on page 13?"), so the looser test is the useful one.
     for i, text in enumerate(pages):
-        if quote_on_page(quote, text):
+        if quote_on_page(quote, text, local=False):
             return i + 1
     return None
 

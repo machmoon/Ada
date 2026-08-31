@@ -49,6 +49,7 @@ from silkscreen.constraints import (  # noqa: E402
     StrapPin,
     quote_on_page,
 )
+from silkscreen.constraints.extract import verification_pages  # noqa: E402
 
 EVAL = ROOT / "eval"
 
@@ -67,17 +68,27 @@ def _load_reference(stem: str) -> ConstraintSet | None:
     return ConstraintSet.from_dict(json.loads(path.read_text(encoding="utf-8")))
 
 
-def _pdf_pages(stem: str) -> tuple[bytes, list[str]] | None:
+def _pdf_pages(stem: str) -> tuple[bytes, list[str], list[str]] | None:
+    """``(bytes, layout_pages, default_pages)`` -- the same two readers the
+    pipeline verifies against. Checking the references against different page
+    text than the extractor sees would measure the reader, not the
+    extraction."""
     path = EVAL / "datasheets" / PARTS[stem][0]
     if not path.exists():
         print(f"  (no PDF at {path.relative_to(ROOT)}; skipping)")
         return None
     data = path.read_bytes()
+    layout = verification_pages(data)
     try:
-        return data, extract_pages(data)
+        plain = extract_pages(data)
     except GroundingError as exc:
         print(f"  cannot extract page text: {exc}")
+        plain = []
+    if not any(t.strip() for t in layout):
+        layout = plain
+    if not any(t.strip() for t in layout) and not plain:
         return None
+    return data, layout, plain
 
 
 def self_check(stem: str) -> bool | None:
@@ -96,25 +107,38 @@ def self_check(stem: str) -> bool | None:
         print(f"  {stem}: PDF not on disk; quotes UNVERIFIED this run "
               f"(fetch via the reference's document.url)")
         return None
-    data, pages = loaded
+    data, pages, plain = loaded
 
     ok = True
     if ref.document.sha256 and ref.document.sha256 != _sha256(data):
         print(f"  FAIL {stem}: PDF sha256 does not match the reference's "
               f"document.sha256 -- different document revision?")
         ok = False
+    weak = 0
     for c in ref.all_constraints():
         prov = c.provenance
         if not (1 <= prov.page <= len(pages)):
             print(f"  FAIL {c.id}: page {prov.page} out of range")
             ok = False
-        elif not quote_on_page(prov.quote, pages[prov.page - 1]):
+        elif quote_on_page(prov.quote, pages[prov.page - 1]):
+            pass
+        elif (prov.page <= len(plain)
+              and quote_on_page(prov.quote, plain[prov.page - 1], local=False)):
+            # Real provenance, but only under the reader that cannot rule out
+            # a quote assembled from two rows. Named, not hidden, and it
+            # gates to needs_review in the pipeline.
+            weak += 1
+            print(f"  WEAK {c.id}: page {prov.page} verifies only page-wide: "
+                  f"{prov.quote[:60]!r}")
+        else:
             print(f"  FAIL {c.id}: quote not found on page {prov.page}: "
                   f"{prov.quote[:60]!r}")
             ok = False
     total = len(ref.all_constraints())
     print(f"  {stem}: {total} reference constraints, "
-          f"{'all quotes verify' if ok else 'CHECK FAILED'}")
+          + ("CHECK FAILED" if not ok
+             else f"all quotes verify ({total - weak} as one passage, "
+                  f"{weak} page-wide only)"))
     return ok
 
 
@@ -227,7 +251,7 @@ def compare(ref: ConstraintSet, ext: ConstraintSet) -> dict:
             "missed": missed, "extra": extra}
 
 
-def run_live(stem: str) -> None:
+def run_live(stem: str, model_name: str | None = None) -> None:
     from silkscreen.agents.model import DEFAULT_MODEL, GeminiModel
     from silkscreen.constraints import extract_constraints
 
@@ -236,11 +260,12 @@ def run_live(stem: str) -> None:
     if ref is None or loaded is None:
         print(f"  {stem}: needs both a reference and a PDF; skipping live run")
         return
-    data, _pages = loaded
+    data, _pages, _plain = loaded
 
-    print(f"  extracting {PARTS[stem][1]} with {DEFAULT_MODEL}...")
+    name = model_name or DEFAULT_MODEL
+    print(f"  extracting {PARTS[stem][1]} with {name}...")
     cset = extract_constraints(
-        GeminiModel(), PARTS[stem][1], pdf_bytes=data,
+        GeminiModel(model=name), PARTS[stem][1], pdf_bytes=data,
         on_event=lambda e: print(f"    {e.get('event')}: "
                                  f"{ {k: v for k, v in e.items() if k != 'event'} }"),
     )
@@ -278,6 +303,11 @@ def main(argv: list[str] | None = None) -> int:
                         help="run real extraction (needs GOOGLE_API_KEY)")
     parser.add_argument("--part", choices=sorted(PARTS),
                         help="limit to one part")
+    parser.add_argument("--model", default=None,
+                        help="model id for --live (default: DEFAULT_MODEL). "
+                             "Whichever is used is recorded in the result's "
+                             "extractor field -- accuracy numbers are only "
+                             "meaningful beside the model that produced them")
     args = parser.parse_args(argv)
 
     # The CLI convention: .env is read here, never by library code.
@@ -300,7 +330,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.live:
         print("\nlive extraction:")
         for stem in stems:
-            run_live(stem)
+            run_live(stem, args.model)
     return 0
 
 
