@@ -1,0 +1,77 @@
+# Kaleo
+
+Kaleo is [silkscreen](../README.md)'s desktop app — an AI hardware engineer
+on your desktop, and a completely reimagined UI for the board-generation
+engine, built as a floating always-on-top overlay plus a review workbench.
+You describe a board in a sentence; the engine designs the PCB — schematic,
+placement, routing — and Kaleo walks it through review toward ordering,
+the way a colleague would slide a board across the bench.
+
+About the name: it is deliberately a human-feeling name rather than a product
+name. The author hopes he is human too. The real point is that any name would
+have done — the app is supposed to feel like a colleague at the bench, not a
+tool, and a tool name would have worked against that from the first menu
+entry.
+
+## Lineage and licence
+
+Kaleo is a hard fork of [Pluely](https://github.com/iamsrikanthnani/pluely)
+by Srikanth Nani (Tauri 2 + React 19 + TypeScript + Tailwind v4 + shadcn/ui),
+forked at v1.0.0. Full attribution, the fork point, and a dated log of every
+change from upstream live in [NOTICE.md](./NOTICE.md); upstream's own README
+is preserved unmodified as [UPSTREAM-README.md](./UPSTREAM-README.md).
+
+The licence boundary matters more than usual here. Pluely is GPL-3.0, so this
+directory — and any binary built from it — is GPL-3.0, inside a repository
+that is otherwise MIT. What keeps the Python engine MIT is process
+separation: Kaleo talks to the engine only over HTTP (`/healthz`,
+`/generate`, `/generate/stream`), exactly as the web UI does — two programs
+that communicate, not one program in two languages. Never copy code across
+the boundary in either direction; if the app needs something the API does not
+expose, extend the API. NOTICE.md states the full rules and is the authority
+if this paragraph and it ever disagree.
+
+## Running it
+
+Kaleo is a client. Start the engine first, from the repository root:
+
+```bash
+# one-time setup
+python -m venv .venv && ./.venv/bin/pip install -e ".[dev,agents,cloud,adk]"
+
+# easiest: loads .env, starts the service, opens a browser
+./.venv/bin/silkscreen serve --port 8081
+
+# or run the service module directly — it does NOT read .env, so export the key
+set -a && . ./.env && set +a
+PORT=8081 python -m service.app
+```
+
+`GOOGLE_API_KEY` must be in the process environment for the module form:
+`service/app.py` deliberately has no dotenv loader (only the CLIs do), and a
+keyless service answers every `/generate` with a 502 naming the variable.
+
+Then, in this directory:
+
+```bash
+npm install
+npm run tauri dev
+```
+
+`npm run tauri dev` needs a Rust toolchain (rustup, plus the platform's Tauri
+prerequisites). The machine this port was written on does not have one, so
+**nothing here has been compiled yet** — the TypeScript surfaces typecheck,
+but no Tauri binary has been built or run. Treat the first successful
+`tauri dev` as an open task, not a formality.
+
+## State of the port
+
+Honestly: this is a fork mid-surgery. The silkscreen surfaces — the engine
+client under `src/lib/silkscreen/`, the review workbench, the identity in
+`src/config/` — are new. Underneath them, Pluely's original chat, STT/voice,
+and screenshot surfaces are still present in the tree and still wired into
+parts of the app. They are slated for removal, not integration; until that
+pass lands, expect Pluely-branded strings and dead provider-configuration UI
+in corners the new surfaces have not replaced. Upstream's updater endpoint
+and analytics have been disabled in config (see NOTICE.md), and the app still
+ships Pluely's icons — replacing them is an open task.
