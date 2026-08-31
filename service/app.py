@@ -521,17 +521,21 @@ def build_embedder() -> BatchingEmbedder:
 
 
 def build_model():
-    """Primary Gemini model with a cheaper tier behind it.
+    """Primary Gemini model with a cheaper tier and open-weights Gemma behind it.
 
-    Two tiers, not one: a rate limit or a transient 5xx on the primary should
-    degrade the answer, not lose the request.
+    Three tiers, not one: a rate limit or a transient 5xx on the primary should
+    degrade the answer, not lose the request. Gemma is a different model family
+    behind the same API, so an outage or quota exhaustion shared by both Gemini
+    tiers still leaves one rung standing. One attempt only on that last rung:
+    by then the caller has already waited through four Gemini attempts.
     """
-    from silkscreen.agents.model import CHEAP_MODEL, DEFAULT_MODEL
+    from silkscreen.agents.model import CHEAP_MODEL, DEFAULT_MODEL, GEMMA_MODEL
 
     return FallbackModel(
         providers=[
             Provider("gemini-primary", GeminiModel(DEFAULT_MODEL), attempts=2),
             Provider("gemini-cheap", GeminiModel(CHEAP_MODEL), attempts=2),
+            Provider("gemma-open", GeminiModel(GEMMA_MODEL), attempts=1),
         ]
     )
 
@@ -1175,8 +1179,11 @@ class Handler(BaseHTTPRequestHandler):
 
         # The probe is answered before the bundle is consulted, so a build
         # output file named "healthz" can never shadow the check Cloud Run
-        # uses to decide whether this revision is alive.
-        if route == "/healthz":
+        # uses to decide whether this revision is alive. /readyz exists because
+        # Google's frontend intercepts /healthz on run.app domains at the edge
+        # (404, request never reaches the container), so an external smoke
+        # check needs a name the frontend leaves alone.
+        if route in ("/healthz", "/readyz"):
             self._send(200, {"ok": True, "service": "silkscreen"})
             return
 
