@@ -29,7 +29,7 @@ Every stage is a real KiCad file you can open and inspect on its own, so you can
 where a design went wrong instead of only seeing the last artifact.
 
 ```
-706 tests collected — no network, no API key, no KiCad install
+754 tests collected — no network, no API key, no KiCad install
 ```
 
 ---
@@ -95,6 +95,7 @@ that consumes the file. Install it if you are a person who wants to see a board.
 | `order.py` — order options, manufacturability preflight | **Working** · blocks an unrouted board |
 | `mcp/` — MCP server over stdio | **Working** · 43 tests |
 | `audit/` — optional visual design review | **Working** · 52 tests |
+| `constraints/` — datasheet PDF → checkable, provenance-carrying constraints | **Working** · 48 tests |
 | `service/` — Cloud Run + Firestore cache | **Working** · 108 tests |
 | `frontend/` — Svelte review UI, served by the service | **Working** · persistent orchestrator chat, expandable model/tool traces, session JSON, review, schematic and board tabs |
 | Overlay UI, guided cursor | Not built (mockups only) |
@@ -317,7 +318,7 @@ treats the board file as the interface.
 | Requires KiCad running | Yes | **No** |
 | Headless / CI | Hard | **Native** |
 | Platform lock | KiCad's plugin loader | **None — pure Python** |
-| Testable without KiCad | No | **Yes, all 706 tests** |
+| Testable without KiCad | No | **Yes, all 754 tests** |
 
 ### What it reads
 
@@ -554,6 +555,39 @@ mistaken for a clean board when it only means a rule never ran.
 
 ---
 
+## Datasheet constraints
+
+Most of the requirements that decide whether a board works — decoupling,
+strap-pin states, maximum ratings, power sequencing — have exactly one right
+answer, and that answer is locked in a PDF. `silkscreen-constraints` converts
+a datasheet into a versioned, machine-readable constraint file that the board
+checker can enforce:
+
+```bash
+silkscreen-constraints stm32f030f4.pdf --part STM32F030F4 -o stm32f030f4.constraints.json
+silkscreen-constraints stm32f030f4.pdf --part STM32F030F4 --report   # human-review worksheet
+```
+
+Extraction is a model transcribing tables, so the pipeline distrusts it by
+construction. Every constraint carries provenance — page, section, and the
+verbatim source text — and each quote is mechanically searched for on its
+claimed page in the PDF's extracted text. A constraint whose quote cannot be
+found, or whose extraction confidence is low, is marked `needs_review` with
+the reason spelled out; it is never silently presented as fact. A separate
+`confirmed` flag records that a human checked the constraint against the PDF,
+and only humans set it.
+
+`silkscreen.constraints.check_board()` then turns a constraint set into
+review findings against a real board, in the same shape `silkscreen-review`
+renders: decoupling count, per-pin coverage, capacitor value and placement
+distance; strap pins tied to defined levels. Findings from constraints a
+human has confirmed are **proven**; the rest stay **suggested**. Constraints
+the checker cannot enforce on a board file (operating voltages, temperatures)
+are reported as unchecked rather than dropped, so the file always says more
+than the checker — never less than it claims.
+
+---
+
 ## The placer
 
 CP-SAT. Variables are each part's bottom-left corner on an integer grid;
@@ -656,7 +690,8 @@ engine/
       pipeline.py   prompt -> PCB
       adk/          ADK dynamic workflow over the same stage bodies
     audit/        optional visual review of a finished board
-  tests/          706 tests — no network, no API keys, no KiCad
+    constraints/  datasheet PDF -> versioned, provenance-carrying constraints
+  tests/          754 tests — no network, no API keys, no KiCad
     fixtures/     ref.kicad_pcb -- 11-footprint board fixture
 scripts/
   demo.py         end-to-end: read -> place -> write -> verify
@@ -737,7 +772,7 @@ docker build .                                      # the `docker` job
 
 ### Expected output
 
-**1. Test suite** — 706 tests (live-model and local-simulator cases skip when
+**1. Test suite** — 754 tests (live-model and local-simulator cases skip when
 their optional dependency is unavailable):
 
 ```
