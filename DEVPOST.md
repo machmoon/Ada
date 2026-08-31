@@ -156,6 +156,15 @@ before it is shown. **[not yet built]** The approval gate that would let you acc
 suggested fix and have it applied: the fix buttons in the review UI are deliberately
 inert until that exists.
 
+**6½. Deliver it where the team already lives. [built, untested against live Google APIs]**
+A finished run can leave the terminal on its own: `python -m googleapps` posts a
+run card into a Google Chat space, emails the summary with the `.kicad_pcb`
+attached via Gmail, and — only when the adversarial review found blockers —
+schedules a design-review Calendar event with a Meet link. Stdlib OAuth with
+PKCE, one `auth` command, and the same honesty contract as every other surface:
+unrouted nets are named verbatim on the card, never papered over. Written
+offline against the documented REST APIs; it has not yet made a live call.
+
 **7. Show, don't tell. [not yet built]**
 Professional EDA tools are dense — KiCad has dozens of panels, and knowing *where to
 click* is a real barrier that no chatbot removes. Silkscreen drives an animated cursor

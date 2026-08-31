@@ -145,7 +145,7 @@ work you do in KiCad. Install it unless you have a specific reason not to.
 |---|---|---|
 | Generate a schematic and a routed board from a prompt | ✅ | ✅ |
 | Run the test suite | ✅ | ✅ |
-| Deploy the service, use the MCP server or the Slack bot | ✅ | ✅ |
+| Deploy the service, use the MCP server, the Slack bot or the Google Workspace CLI | ✅ | ✅ |
 | **See the schematic and the board** | ❌ | ✅ |
 | **Finish the nets the router left unrouted** | ❌ | ✅ |
 | **Run DRC and electrical rules check** | ❌ | ✅ |
@@ -177,6 +177,7 @@ Platform-by-platform commands are in [docs/install.md](docs/install.md#kicad-opt
 | `audit/` — optional visual design review | **Working** · 52 tests |
 | `service/` — Cloud Run + Firestore cache | **Working** · 146 tests · live at <https://silkscreen-vqdj4x5qbq-uc.a.run.app> |
 | `slackbot/` — Slack bot over the pipeline | **Working** · untested against a live workspace |
+| `googleapps/` — Chat, Gmail and Calendar delivery over the pipeline | **Working** · untested against live Google APIs |
 | `frontend/` — Svelte review UI, served by the service | **Working** · persistent orchestrator chat, expandable traces, session JSON, review, schematic, placement and board tabs |
 | `engine/silkscreen/placement/` — verifier-grounded repair and company profiles | **Working** · deterministic and Gemini policies; experimental providers are opt-in |
 | `constraints.py` — approved build contract and post-route receipt | **Working** · opt-in, fail-closed, and deterministically tested |
@@ -629,6 +630,41 @@ Runs are remembered per thread **in memory**, so `review` and `order` work on th
 run above them and a restart forgets them; the bot says so rather than acting on the
 wrong board. Artifacts are also written under `SILKSCREEN_SLACK_WORKDIR`
 (default `slack-runs/`).
+
+### In Google Workspace
+
+`googleapps/` delivers a finished run to the places a hardware team already
+looks: a **Google Chat** space gets a run card, **Gmail** gets the summary with
+the emitted `.kicad_pcb` attached, and — only when the adversarial review found
+blockers — **Calendar** gets a design-review event with a Meet link:
+
+```bash
+python -m googleapps auth        # one command, one browser click-through
+python -m googleapps check      # what is configured, is the token valid — no network
+python -m googleapps run "a 3.3V LDO board" -o out/board.kicad_pcb \
+    --chat \
+    --email lead@example.com \
+    --schedule --attendee lead@example.com
+```
+
+`--schedule` creates the event **only** when the review produced blockers, and
+says which way that went either way — a clean review schedules nothing. The
+card and the email follow the same honesty rule as every other surface here:
+every net the router left unrouted is named, verbatim, with the router's
+reason; nothing ever says "board ready" over a ratsnest.
+
+Auth is a stdlib OAuth 2.0 installed-app flow with PKCE — no Google client
+libraries. The token lands at `~/.config/silkscreen/google-token.json` with
+mode 0600 and refreshes transparently; the Chat webhook URL is itself the
+credential and is validated (https, `chat.googleapis.com`, a `/v1/spaces/…`
+path) before anything is sent to it. Nothing in the package will address a
+non-Google host.
+
+Setup — Cloud project, enabling the Gmail and Calendar APIs, creating the
+Desktop-app OAuth client and the Chat webhook — is walked through in
+[docs/googleapps.md](docs/googleapps.md). **It has not been run against live
+Google APIs yet**; the offline tests cover request construction against a
+recorded transport, and the first live run should be treated as the real test.
 
 ### Running the web UI
 

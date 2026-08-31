@@ -318,6 +318,29 @@ feature is tracked under feature 12.
                                                                      the organiser enabled it. The run says so rather
                                                                      than reporting an empty meeting
 
+ 19  Google Workspace integration                      [DONE, unverified live]
+ ----- OAuth installed-app flow with PKCE (stdlib)     [DONE]        googleapps/auth.py; S256, loopback redirect,
+                                                                     token stored 0600 with transparent refresh, the
+                                                                     code_verifier never written anywhere
+ ----- Chat run card via incoming webhook              [DONE]        googleapps/chat.py; cardsV2, unrouted nets named
+                                                                     verbatim — the card can never claim "routed"
+                                                                     while route.unrouted is non-empty
+ ----- Gmail send with the .kicad_pcb attached         [DONE]        googleapps/gmail.py; stdlib MIME, base64url raw,
+                                                                     local 20 MB guard under Gmail's 25 MB cap
+ ----- Calendar review event with a Meet link          [DONE]        googleapps/calendar.py; created ONLY when the
+                                                                     adversarial review found blockers, and the CLI
+                                                                     says which way that went either way
+ ----- Host allowlist on every request                 [DONE]        googleapps/transport.py; exact-match Google
+                                                                     hosts, checked before any transport runs, so a
+                                                                     bearer token cannot leave toward a foreign host
+ ----- Test against live Google APIs                   [OPEN]        Built against the documented REST surface and
+                                                                     never run live: no OAuth client was created and
+                                                                     no request has left this code toward
+                                                                     googleapis.com. Request construction is pinned
+                                                                     by offline tests against a recorded transport,
+                                                                     but a scope or payload detail could still be
+                                                                     wrong on the first real run.
+
 OPEN WORK, SUMMARISED
 ---------------------
 Everything actionable reduces to: feature 2 in full (parallel reads, now the
@@ -325,8 +348,9 @@ R11 rung under 12), finding-level hallucination filtering under 4, the request
 timeout under 5, feature 6 in full (confirmation gates), the deploy and smoke
 check under 7, the ops polish under 8, voice under 9, the error taxonomy under
 10 (from PR #5 review), and the stream-fallback tightening under 11 (from PR #9
-review), and the three open rows under 18 (Slack: live-workspace test,
-serializer promotion, run persistence). The board well shipped, so voice is
+review), the three open rows under 18 (Slack: live-workspace test,
+serializer promotion, run persistence), and the live-API test under 19
+(Google Workspace). The board well shipped, so voice is
 all that is left of 9 and stays last. Feature 16 still needs a trusted IC
 model registry and its place in the agent repair loop. The [IDEA] rows under
 4 and 5 are ideas, not commitments.
