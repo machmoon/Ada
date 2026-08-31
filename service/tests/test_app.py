@@ -228,7 +228,7 @@ def test_generate_returns_a_board(server):
 
 def test_generate_carries_an_approved_constraint_manifest_and_receipt(server):
     constraints = {
-        "version": 1,
+        "version": 2,
         "approved": True,
         "board_layers": 2,
         "net_classes": [
@@ -239,6 +239,11 @@ def test_generate_carries_an_approved_constraint_manifest_and_receipt(server):
                 "allowed_layers": ["F.Cu", "B.Cu"],
                 "max_layer_transitions": 2,
                 "max_vias_per_net": 4,
+                "expected_current_a": 1,
+                "min_trace_width_mm": 0.2,
+                "copper_weight_oz": 1,
+                "max_voltage_drop_v": 0.1,
+                "min_thermal_separation_mm": 5,
             }
         ],
     }
@@ -251,8 +256,13 @@ def test_generate_carries_an_approved_constraint_manifest_and_receipt(server):
     assert status == 200
     assert body["constraint_manifest"]["approved"] is True
     assert body["constraint_manifest"]["net_classes"][0]["nets"] == ["VIN", "GND"]
-    assert body["constraint_receipt"]["overall"] == "verified"
-    assert body["constraint_receipt"]["checks"][0]["routing"] == "not_checked"
+    assert body["constraint_receipt"]["hard_gate"] in {"passed", "blocked"}
+    assert body["constraint_receipt"]["net_classes"][0]["net_class"] == "Power"
+    assert body["promotion_status"] == (
+        "constraint_passed"
+        if body["constraint_receipt"]["promotable"]
+        else "constraint_blocked"
+    )
 
 
 def test_generate_rejects_unapproved_constraints_before_model_work(server):

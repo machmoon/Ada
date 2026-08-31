@@ -62,7 +62,10 @@ from silkscreen.agents.resilience import (  # noqa: E402
 )
 from silkscreen.agents.retrieval import GeminiEmbedder  # noqa: E402
 from silkscreen.board import emit_kicad_pcb  # noqa: E402
-from silkscreen.constraints import parse_constraint_manifest  # noqa: E402
+from silkscreen.constraints import (  # noqa: E402
+    parse_constraint_manifest,
+    verify_constraint_manifest,
+)
 from silkscreen.fab import fab_files  # noqa: E402
 from silkscreen.order import (  # noqa: E402
     OrderOptions,
@@ -877,7 +880,20 @@ def generate(
 
     if constraint_manifest is not None:
         response["constraint_manifest"] = constraint_manifest.to_dict()
-        response["constraint_receipt"] = constraint_manifest.receipt(list(board.nets))
+        receipt = verify_constraint_manifest(
+            constraint_manifest,
+            result.spec,
+            board,
+            result.route,
+        )
+        response["constraint_receipt"] = receipt
+        response["promotion_status"] = (
+            "constraint_passed" if receipt["promotable"] else "constraint_blocked"
+        )
+        response["blockers"].extend(
+            f"constraint {item['scope']}/{item['name']}: {item['detail']}"
+            for item in receipt["blockers"]
+        )
 
     if result.route is not None:
         response["routing"] = {

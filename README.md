@@ -100,7 +100,7 @@ Every stage is a real KiCad file you can open and inspect on its own, so you can
 where a design went wrong instead of only seeing the last artifact.
 
 ```
-795 tests collected — no network, no API key, no KiCad install
+807 tests collected — no network, no API key, no KiCad install
 ```
 
 **Next:** [full install guide and troubleshooting](docs/install.md) ·
@@ -206,6 +206,16 @@ caller-selected server memory IDs. The repaired placement downloads as JSON.
 
 See [the placement-agent architecture](docs/placement-agent.md) for the precise
 agent, supervised fine-tuning, reinforcement learning, and verifier boundary.
+
+Before generation, the main board flow now proposes a versioned net and routing
+contract from the prompt. The engineer must confirm exact nets, electrical limits,
+allowed layers, via budgets, and mechanical constraints before build. The receipt
+then marks every hard check as verified, violated, unresolved, or not required.
+Violations and unresolved high-risk checks block promotion. Soft preferences such
+as shorter traces, fewer vias, compact grouping, thermal separation, and connector
+access only rank boards that already pass the hard gate. Impedance, continuous
+reference planes, routed stubs, guards, and component height stay unresolved until
+the project has the required stackup, zone, topology, or package-height evidence.
 
 ---
 
@@ -439,7 +449,7 @@ treats the board file as the interface.
 | Requires KiCad running | Yes | **No** |
 | Headless / CI | Hard | **Native** |
 | Platform lock | KiCad's plugin loader | **None — pure Python** |
-| Testable without KiCad | No | **Yes, all 795 tests** |
+| Testable without KiCad | No | **Yes, all 807 tests** |
 
 ### What it reads
 
@@ -786,7 +796,7 @@ engine/
       pipeline.py   prompt -> PCB
       adk/          ADK dynamic workflow over the same stage bodies
     audit/        optional visual review of a finished board
-  tests/          795 tests — no network, no API keys, no KiCad
+  tests/          807 tests — no network, no API keys, no KiCad
     fixtures/     ref.kicad_pcb -- 11-footprint board fixture
 scripts/
   demo.py         end-to-end: read -> place -> write -> verify
@@ -874,7 +884,7 @@ docker build .                                      # the `docker` job
 
 ### Expected output
 
-**1. Test suite** — 795 tests (live-model and local-simulator cases skip when
+**1. Test suite** — 807 tests (live-model and local-simulator cases skip when
 their optional dependency is unavailable):
 
 ```

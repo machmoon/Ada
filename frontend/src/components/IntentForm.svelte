@@ -109,6 +109,20 @@
     rows = [...rows, { part: '', url: '' }]
   }
 
+  function addKeepout() {
+    constraints.mechanical.keepouts = [
+      ...constraints.mechanical.keepouts,
+      { name: `Keepout ${constraints.mechanical.keepouts.length + 1}`, x_mm: 0, y_mm: 0, width_mm: 5, height_mm: 5 },
+    ]
+  }
+
+  function addFixedPlacement() {
+    constraints.mechanical.fixed_placements = [
+      ...constraints.mechanical.fixed_placements,
+      { ref: '', x_mm: 0, y_mm: 0, tolerance_mm: 0.25 },
+    ]
+  }
+
   function useDatasheet(preset) {
     const next = rows.map((row) => ({ ...row }))
     const existing = next.findIndex((row) => String(row.part ?? '').trim() === preset.part)
@@ -163,10 +177,15 @@
       </label>
     </div>
 
+    <div class="constraint-legend">
+      <span><strong>Hard</strong> rejects promotion when violated or unresolved.</span>
+      <span><strong>Soft</strong> ranks only layouts that already pass every hard rule.</span>
+    </div>
+
     {#each constraints.net_classes as netClass (netClass.name)}
       <article class="net-class">
         <div class="net-title">
-          <strong>{netClass.name}</strong>
+          <strong>{netClass.name}</strong><em>Hard</em>
           <span>{netClass.concerns.join(' · ')}</span>
         </div>
         <label class="wide">
@@ -191,10 +210,63 @@
           <span>Max vias per net</span>
           <input type="number" min="0" max="64" bind:value={netClass.max_vias_per_net} />
         </label>
+        {#if netClass.min_trace_width_mm !== null}
+          <label>
+            <span>Minimum width (mm)</span>
+            <input type="number" min="0.001" step="0.05" bind:value={netClass.min_trace_width_mm} />
+          </label>
+        {/if}
+        {#if netClass.max_length_mm !== null}
+          <label>
+            <span>Maximum length (mm)</span>
+            <input type="number" min="0.001" step="0.5" bind:value={netClass.max_length_mm} />
+          </label>
+        {/if}
+        {#if netClass.max_skew_mm !== null}
+          <label>
+            <span>Maximum skew (mm)</span>
+            <input type="number" min="0" step="0.1" bind:value={netClass.max_skew_mm} />
+          </label>
+        {/if}
+        {#if netClass.max_stub_length_mm !== null}
+          <label>
+            <span>Maximum stub (mm)</span>
+            <input type="number" min="0" step="0.1" bind:value={netClass.max_stub_length_mm} />
+          </label>
+        {/if}
+        {#if netClass.kind === 'spi' || netClass.kind === 'clock'}
+          <label>
+            <span>Maximum frequency (Hz)</span>
+            <input type="number" min="1" step="1000" bind:value={netClass.max_frequency_hz} />
+          </label>
+        {/if}
         {#if netClass.pullups_required}
           <label>
-            <span>Pull-up rail (V)</span>
-            <input type="number" min="0.1" step="0.1" bind:value={netClass.pullup_voltage_v} />
+            <span>Signal voltage (V)</span>
+            <input type="number" min="0.01" step="0.1" bind:value={netClass.signal_voltage_v} />
+          </label>
+          <label>
+            <span>Bus speed (Hz)</span>
+            <input type="number" min="1" step="1000" bind:value={netClass.max_frequency_hz} />
+          </label>
+          <label>
+            <span>Pull-up rail net</span>
+            <input bind:value={netClass.pullup_rail} />
+          </label>
+          <label>
+            <span>Pull-up range (Ω)</span>
+            <div class="pair-inputs">
+              <input type="number" min="0.1" step="100" bind:value={netClass.pullup_min_ohms} aria-label="Minimum pull-up resistance" />
+              <input type="number" min="0.1" step="100" bind:value={netClass.pullup_max_ohms} aria-label="Maximum pull-up resistance" />
+            </div>
+          </label>
+          <label>
+            <span>Bus capacitance (pF)</span>
+            <input type="number" min="0.01" step="1" bind:value={netClass.bus_capacitance_pf} />
+          </label>
+          <label>
+            <span>Rise-time limit (ns)</span>
+            <input type="number" min="0.01" step="10" bind:value={netClass.max_rise_time_ns} />
           </label>
         {/if}
         {#if netClass.controlled_impedance}
@@ -202,9 +274,92 @@
             <span>Target impedance (Ω)</span>
             <input type="number" min="1" step="1" bind:value={netClass.impedance_ohms} />
           </label>
+          <label>
+            <span>Impedance tolerance (%)</span>
+            <input type="number" min="0.01" max="100" step="1" bind:value={netClass.impedance_tolerance_percent} />
+          </label>
+          <label>
+            <span>Pair spacing (mm)</span>
+            <input type="number" min="0.001" step="0.05" bind:value={netClass.pair_spacing_mm} />
+          </label>
+        {/if}
+        {#if netClass.reference_plane}
+          <label>
+            <span>Reference plane</span>
+            <input bind:value={netClass.reference_plane} />
+          </label>
+        {/if}
+        {#if netClass.kind === 'power'}
+          <label>
+            <span>Expected current (A)</span>
+            <input type="number" min="0" step="0.1" bind:value={netClass.expected_current_a} />
+          </label>
+          <label>
+            <span>Copper weight (oz)</span>
+            <input type="number" min="0.01" step="0.5" bind:value={netClass.copper_weight_oz} />
+          </label>
+          <label>
+            <span>Maximum voltage drop (V)</span>
+            <input type="number" min="0" step="0.01" bind:value={netClass.max_voltage_drop_v} />
+          </label>
+          <label>
+            <span>Thermal separation (mm)</span>
+            <input type="number" min="0" step="0.5" bind:value={netClass.min_thermal_separation_mm} />
+          </label>
+        {/if}
+        {#if netClass.kind === 'analog' || netClass.kind === 'rf'}
+          <label>
+            <span>Sensitive-net separation (mm)</span>
+            <input type="number" min="0" step="0.1" bind:value={netClass.min_separation_mm} />
+          </label>
+          <label class="inline-check">
+            <input type="checkbox" bind:checked={netClass.guard_required} />
+            <span>Guard region required</span>
+          </label>
         {/if}
       </article>
     {/each}
+
+    <details class="constraint-detail">
+      <summary>Mechanical hard constraints</summary>
+      <div class="mechanical-grid">
+        <label><span>Maximum board width (mm)</span><input type="number" min="0.01" bind:value={constraints.mechanical.max_board_width_mm} /></label>
+        <label><span>Maximum board height (mm)</span><input type="number" min="0.01" bind:value={constraints.mechanical.max_board_height_mm} /></label>
+        <label><span>Maximum component height (mm)</span><input type="number" min="0.01" bind:value={constraints.mechanical.max_component_height_mm} /></label>
+        <label><span>Mounting-hole refs</span><input value={constraints.mechanical.mounting_hole_refs.join(', ')} oninput={(event) => (constraints.mechanical.mounting_hole_refs = event.currentTarget.value.split(',').map((value) => value.trim()).filter(Boolean))} /></label>
+      </div>
+      {#each constraints.mechanical.keepouts as keepout (keepout.name)}
+        <div class="mechanical-row">
+          <input bind:value={keepout.name} aria-label="Keepout name" />
+          <input type="number" bind:value={keepout.x_mm} aria-label="Keepout X" />
+          <input type="number" bind:value={keepout.y_mm} aria-label="Keepout Y" />
+          <input type="number" min="0" bind:value={keepout.width_mm} aria-label="Keepout width" />
+          <input type="number" min="0" bind:value={keepout.height_mm} aria-label="Keepout height" />
+        </div>
+      {/each}
+      {#each constraints.mechanical.fixed_placements as fixed, i (i)}
+        <div class="mechanical-row">
+          <input bind:value={fixed.ref} placeholder="U1" aria-label="Fixed reference" />
+          <input type="number" bind:value={fixed.x_mm} aria-label="Fixed X" />
+          <input type="number" bind:value={fixed.y_mm} aria-label="Fixed Y" />
+          <input type="number" min="0" step="0.05" bind:value={fixed.tolerance_mm} aria-label="Placement tolerance" />
+        </div>
+      {/each}
+      <div class="detail-actions">
+        <button type="button" onclick={addKeepout}>Add keepout</button>
+        <button type="button" onclick={addFixedPlacement}>Add fixed part</button>
+      </div>
+    </details>
+
+    <details class="constraint-detail">
+      <summary>Soft placement preferences</summary>
+      <p>Weights rank valid alternatives. They never make a hard violation acceptable.</p>
+      <div class="soft-grid">
+        {#each Object.entries(constraints.soft_preferences) as [name, value] (name)}
+          <label><span>{name.replaceAll('_', ' ')}</span><input type="number" min="0" step="0.1" value={value} oninput={(event) => (constraints.soft_preferences[name] = Number(event.currentTarget.value))} /></label>
+        {/each}
+      </div>
+    </details>
 
     <label class="approval">
       <input type="checkbox" bind:checked={constraints.approved} data-testid="intent-form-constraints-approved" />
@@ -386,6 +541,7 @@
   }
   .constraint-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; }
   .constraint-heading p { margin: 5px 0 0; color: var(--ink-soft); font-size: var(--fs-ui); line-height: 1.45; }
+  .constraint-legend { display: flex; gap: 18px; margin-top: 12px; color: var(--ink-soft); font-size: var(--fs-ui); }
   .layers { width: 92px; flex: 0 0 auto; }
   .net-class {
     display: grid;
@@ -397,6 +553,7 @@
   }
   .net-title { grid-column: 1 / -1; display: flex; align-items: baseline; gap: 10px; }
   .net-title span { color: var(--ink-faint); font-size: var(--fs-ui); }
+  .net-title em { padding: 2px 6px; border: 1px solid var(--rule); color: var(--ink-mid); font-size: 10px; font-style: normal; text-transform: uppercase; }
   .constraints label { display: flex; flex-direction: column; gap: 5px; color: var(--ink-mid); font-size: var(--fs-ui); }
   .constraints input[type='number'], .constraints label > input:not([type]) {
     width: 100%;
@@ -408,6 +565,15 @@
     font-family: var(--font-mono);
   }
   .approval { flex-direction: row !important; align-items: flex-start; margin-top: 14px; color: var(--ink) !important; }
+  .inline-check { flex-direction: row !important; align-items: center; }
+  .pair-inputs { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+  .constraint-detail { margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--rule-soft); }
+  .constraint-detail summary { color: var(--ink); font-weight: 600; }
+  .constraint-detail p { color: var(--ink-soft); font-size: var(--fs-ui); }
+  .mechanical-grid, .soft-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; margin-top: 10px; }
+  .mechanical-row { display: grid; grid-template-columns: 1.3fr repeat(4, .7fr); gap: 8px; margin-top: 8px; }
+  .detail-actions { display: flex; gap: 8px; margin-top: 10px; }
+  .detail-actions button { padding: 6px 10px; border: 1px solid var(--rule); background: transparent; color: var(--ink-mid); }
   .constraint-warning { margin: 8px 0 0; color: var(--sev-marginal-fg); font-size: var(--fs-ui); }
 
   .sheets { margin-top: 18px; border-top: 1px solid var(--rule-soft); padding-top: 14px; }
@@ -527,8 +693,10 @@
   .run:disabled { background: var(--accent-off); color: var(--accent-off-ink); }
   @media (max-width: 680px) {
     .constraint-heading { flex-direction: column; }
+    .constraint-legend { flex-direction: column; gap: 6px; }
     .net-class { grid-template-columns: 1fr; }
     .net-title { grid-column: 1; flex-direction: column; gap: 4px; }
+    .mechanical-grid, .soft-grid, .mechanical-row { grid-template-columns: 1fr; }
     .orchestrator-controls { grid-template-columns: 1fr; }
   }
 </style>

@@ -55,22 +55,30 @@
   {#if constraintReceipt}
     <section
       class="constraint-receipt"
-      class:violated={constraintReceipt.overall === 'violated'}
+      class:violated={!constraintReceipt.promotable}
       data-testid="constraint-receipt"
       data-material="panel"
     >
       <div class="receipt-head">
         <strong>Constraint receipt</strong>
-        <span>{constraintReceipt.overall === 'violated' ? 'approved nets missing' : 'approved nets present'}</span>
+        <span>{constraintReceipt.promotable ? 'hard gate passed' : 'hard gate blocked'}</span>
       </div>
-      {#each constraintReceipt.checks as check (check.net_class)}
-        <div class="receipt-row">
-          <span>{check.net_class}</span>
-          <span>connectivity {check.net_presence}</span>
-          <span>routing {check.routing.replace('_', ' ')}</span>
+      {#each constraintReceipt.net_classes as group (group.net_class)}
+        <div class="receipt-group">
+          <span>{group.net_class}</span>
+          <div class="receipt-checks">
+            {#each group.checks as check (check.name)}
+              <span class:failed={check.status === 'violated'} class:unresolved={check.status === 'unresolved'}>
+                {check.name.replaceAll('_', ' ')}: {check.status.replaceAll('_', ' ')}
+              </span>
+            {/each}
+          </div>
         </div>
       {/each}
-      <p>Layer changes, vias, impedance, and pull-ups stay “not checked” until routed copper and KiCad DRC can measure them.</p>
+      <p>
+        Hard violations and unresolved hard checks block promotion. Soft preference cost:
+        {Number(constraintReceipt.soft_preferences?.cost || 0).toFixed(3)}.
+      </p>
     </section>
   {/if}
 
@@ -181,10 +189,13 @@
     background: var(--surface);
   }
   .constraint-receipt.violated { border-left-color: var(--sev-blocker-rule); }
-  .receipt-head, .receipt-row { display: flex; align-items: baseline; gap: 14px; }
+  .receipt-head, .receipt-group { display: flex; align-items: baseline; gap: 14px; }
   .receipt-head { justify-content: space-between; margin-bottom: 9px; }
-  .receipt-head span, .receipt-row { color: var(--ink-soft); font-size: var(--fs-ui); }
-  .receipt-row span:first-child { color: var(--ink); margin-right: auto; }
+  .receipt-head span, .receipt-group { color: var(--ink-soft); font-size: var(--fs-ui); }
+  .receipt-group > span { min-width: 140px; color: var(--ink); }
+  .receipt-checks { display: flex; flex-wrap: wrap; gap: 5px 10px; }
+  .receipt-checks .failed { color: var(--sev-blocker-fg); }
+  .receipt-checks .unresolved { color: var(--sev-marginal-fg); }
   .constraint-receipt p { margin: 10px 0 0; color: var(--ink-faint); font-size: var(--fs-ui); line-height: 1.45; }
 
   .head { display: flex; align-items: baseline; gap: 14px; margin-bottom: 4px; }
