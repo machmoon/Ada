@@ -8,6 +8,7 @@
     ['propose', 'propose circuit'],
     ['validate', 'validate and repair'],
     ['place', 'place'],
+    ['placement_repair', 'verify placement'],
     ['route', 'route copper'],
     ['review', 'review'],
   ]

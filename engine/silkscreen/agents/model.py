@@ -168,7 +168,11 @@ class GeminiModel:
                 "google-genai is not installed. pip install google-genai"
             ) from exc
 
-        key = api_key or os.getenv("GOOGLE_API_KEY")
+        key = (
+            api_key
+            or os.getenv("GOOGLE_API_KEY")
+            or os.getenv("GEMINI_API_KEY")
+        )
         if not key:
             raise ModelError(
                 "GOOGLE_API_KEY is not set. Copy .env.example to .env and fill it in."

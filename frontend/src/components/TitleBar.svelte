@@ -59,6 +59,7 @@
   {#if intent}<span class="intent" data-testid="title-bar-intent">{intent}</span>{/if}
   <div class="spacer"></div>
   {#if meta}<span class="mono meta" data-testid="title-bar-meta">{meta}</span>{/if}
+  <a class="lbl placement" href="/?mode=placement" data-testid="title-bar-placement">Verifier lab</a>
   <button
     type="button"
     class="lbl chip"
@@ -111,6 +112,8 @@
 
   .spacer { flex-grow: 1; }
   .meta { font-size: var(--fs-mono-sm); color: var(--ink-soft); padding: 0 16px; }
+  .placement { display: flex; align-items: center; height: 100%; padding: 0 16px; border-left: 1px solid var(--rule-soft); color: var(--ink-soft); text-decoration: none; }
+  .placement:hover { color: var(--ink); }
 
   /* The brand rule, hung off the other edge of the bar. Two of them now:
      the material, then the light it is read under. */

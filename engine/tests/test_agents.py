@@ -266,10 +266,63 @@ def test_full_pipeline_prompt_to_board(tmp_path):
     assert len(result.facts) == 1
     assert len(result.blockers) == 1
     assert result.repair_rounds == 0
+    assert result.placement is None
     assert "parts" in result.summary()
 
     from kiutils.board import Board
     assert len(Board.from_file(str(out)).footprints) == 6
+
+
+def test_integrated_placement_runs_before_artifacts_and_copper(tmp_path):
+    """Placement policy calls are visible and finish before later board stages."""
+    worker = ScriptedModel(responses=[json.dumps(GOOD_CIRCUIT)])
+    placement_model = ScriptedModel(responses=["NOOP"])
+    events = []
+
+    result = generate_pcb(
+        worker,
+        "a motor driver",
+        output=tmp_path / "board.kicad_pcb",
+        review=False,
+        time_limit_s=10.0,
+        placement_profile="compact-control",
+        placement_policy="gemini",
+        placement_feedback={"weights": {"compactness_weight": 1.25}},
+        placement_model=placement_model,
+        placement_max_turns=1,
+        on_event=events.append,
+        include_responses=True,
+    )
+
+    assert result.placement is not None
+    assert result.placement.applied is result.placement.run.completed
+    assert result.placement.requested_policy == "gemini"
+    assert result.placement.run.profile.compactness_weight == 1.25
+    assert result.route is not None
+    assert result.placed_board_path is not None
+
+    assert [e["stage"] for e in events if e["event"] == "stage.start"] == [
+        "propose",
+        "place",
+        "placement_repair",
+        "schematic",
+        "route",
+    ]
+    requests = [
+        e
+        for e in events
+        if e["event"] == "model.request" and e["stage"] == "placement_repair"
+    ]
+    responses = [
+        e
+        for e in events
+        if e["event"] == "model.response" and e["stage"] == "placement_repair"
+    ]
+    assert len(requests) == len(responses) == 1
+    assert requests[0]["call_id"].startswith("placement-")
+    assert requests[0]["call_id"] == responses[0]["call_id"]
+    assert "PCB PLACEMENT REPAIR" in requests[0]["prompt"]
+    assert responses[0]["text"] == "NOOP"
 
 
 def test_pipeline_reports_repair_rounds(tmp_path):

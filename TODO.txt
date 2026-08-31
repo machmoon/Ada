@@ -223,6 +223,18 @@ feature is tracked under feature 12.
                                                                      execute raw model programs supplied over MCP
  ----- Wire simulation into the agent loop            [OPEN]        future propose -> simulate -> repair feedback
 
+ 17  Verifiable placement repair                       [PARTIAL]
+ ----- Portable geometry and backend-neutral reward   [DONE]        silkscreen/placement/
+ ----- Company hard rules and soft preferences        [DONE]        compact-control + thermal-first
+ ----- Generated-board adapter                        [DONE]        verifier runs before routing; write-back remains
+                                                                     integer nanometres and may expand a tight outline
+ ----- Gemini and deterministic action policies       [DONE]        bounded verifier-gated loop
+ ----- Experimental Ollama/Tinker policies            [DONE]        explicit default-off UI + server environment gate
+ ----- Engineer correction memory                     [PARTIAL]     request/session-local lab only; tenant durability
+                                                                     still requires authentication and ownership
+ ----- Integrated placement view and JSON download    [DONE]        generated boards, receipts and session export
+ ----- Synthetic behavior-cloning trajectory export  [DONE]        no trained checkpoint claimed
+
 OPEN WORK, SUMMARISED
 ---------------------
 Everything actionable reduces to: feature 2 in full (parallel reads, now the
