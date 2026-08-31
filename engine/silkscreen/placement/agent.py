@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import time
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from typing import Protocol
 
@@ -22,6 +24,7 @@ __all__ = [
     "PlacementReceipt",
     "PlacementRun",
     "PlacementStep",
+    "SpeculativeCandidate",
     "TextModel",
     "placement_prompt",
 ]
@@ -55,6 +58,20 @@ class PlacementReceipt:
 
 
 @dataclass(frozen=True)
+class SpeculativeCandidate:
+    lane: int
+    prompt: str
+    response: str
+    proposed: tuple[PlacementAction, ...]
+    accepted: tuple[PlacementAction, ...]
+    receipts: tuple[PlacementReceipt, ...]
+    hard_after: float
+    soft_after: float
+    elapsed_ms: float
+    error: str = ""
+
+
+@dataclass(frozen=True)
 class PlacementStep:
     turn: int
     proposer: str
@@ -69,6 +86,9 @@ class PlacementStep:
     soft_before: float
     soft_after: float
     reason: str
+    candidates: tuple[SpeculativeCandidate, ...] = ()
+    winner_lane: int | None = None
+    speculative_wall_ms: float = 0.0
 
 
 @dataclass(frozen=True)
@@ -137,6 +157,7 @@ class PlacementAgent:
         *,
         fallback_model: TextModel | None = None,
         max_turns: int = 8,
+        speculative_width: int = 3,
     ):
         if isinstance(max_turns, bool) or not isinstance(max_turns, int):
             raise ValueError("max_turns must be an integer")
@@ -145,6 +166,13 @@ class PlacementAgent:
         self.model = model
         self.fallback_model = fallback_model
         self.max_turns = max_turns
+        if isinstance(speculative_width, bool) or not isinstance(
+            speculative_width, int
+        ):
+            raise ValueError("speculative_width must be an integer")
+        if speculative_width < 2 or speculative_width > 4:
+            raise ValueError("speculative_width must be between 2 and 4")
+        self.speculative_width = speculative_width
 
     def run(
         self,
@@ -177,6 +205,7 @@ class PlacementAgent:
             policy=policy,
             proposer=proposer,
             fallback_model=fallback,
+            speculative_width=self.speculative_width,
         )
 
 
@@ -294,6 +323,132 @@ def _model_step(
     return updated, step
 
 
+def _lane_prompt(prompt: str, lane: int, width: int) -> str:
+    return (
+        f"{prompt}\n\nSPECULATIVE LANE {lane}/{width}\n"
+        "Choose a distinct short prefix when several valid choices exist."
+    )
+
+
+def _candidate(
+    board: Board,
+    profile: CompanyProfile,
+    model: TextModel,
+    prompt: str,
+    lane: int,
+    width: int,
+) -> tuple[SpeculativeCandidate, Board]:
+    started = time.perf_counter()
+    lane_prompt = _lane_prompt(prompt, lane, width)
+    try:
+        response = model.generate(
+            lane_prompt,
+            system=(
+                "You are a PCB placement repair policy. Emit placement action "
+                "lines only. The geometry verifier is authoritative."
+            ),
+            temperature=0.2,
+            max_output_tokens=256,
+        )
+        if not isinstance(response, str):
+            raise TypeError("proposal was not text")
+        proposed = tuple(parse_actions(response))
+        updated, accepted, receipts = _verified_prefix(board, proposed, profile)
+        after = evaluate(updated, profile)
+        error = ""
+    except Exception as exc:
+        response = ""
+        proposed = ()
+        accepted = ()
+        receipts = ()
+        updated = board
+        after = evaluate(board, profile)
+        error = f"{type(exc).__name__}: proposal failed"
+    candidate = SpeculativeCandidate(
+        lane=lane,
+        prompt=lane_prompt,
+        response=response,
+        proposed=proposed,
+        accepted=accepted,
+        receipts=receipts,
+        hard_after=after.hard,
+        soft_after=after.soft,
+        elapsed_ms=round((time.perf_counter() - started) * 1000, 3),
+        error=error,
+    )
+    return candidate, updated
+
+
+def _candidate_rank(
+    evaluated: tuple[SpeculativeCandidate, Board],
+) -> tuple[float, float, int, int]:
+    candidate, _ = evaluated
+    return (
+        candidate.hard_after,
+        candidate.soft_after,
+        -len(candidate.accepted),
+        candidate.lane,
+    )
+
+
+def _speculative_step(
+    board: Board,
+    profile: CompanyProfile,
+    model: TextModel,
+    turn: int,
+    proposer: str,
+    width: int,
+) -> tuple[Board, PlacementStep]:
+    before = evaluate(board, profile)
+    prompt = placement_prompt(board, profile, turn)
+    started = time.perf_counter()
+    with ThreadPoolExecutor(
+        max_workers=width, thread_name_prefix="placement-lane"
+    ) as pool:
+        futures = [
+            pool.submit(_candidate, board, profile, model, prompt, lane, width)
+            for lane in range(1, width + 1)
+        ]
+        evaluated = tuple(future.result() for future in futures)
+    wall_ms = round((time.perf_counter() - started) * 1000, 3)
+    viable = tuple(item for item in evaluated if item[0].accepted)
+    winner = min(viable, key=_candidate_rank) if viable else None
+    representative = winner or min(
+        evaluated,
+        key=lambda item: (
+            not bool(item[0].proposed),
+            bool(item[0].error),
+            item[0].lane,
+        ),
+    )
+    chosen, updated = representative
+    after = evaluate(updated, profile)
+    reason = (
+        f"speculative lane {chosen.lane}/{width} committed "
+        f"{len(chosen.accepted)}/{len(chosen.proposed)} actions"
+        if winner
+        else f"all {width} speculative lanes stalled"
+    )
+    return updated, PlacementStep(
+        turn=turn,
+        proposer=proposer,
+        prompt=prompt,
+        response=chosen.response,
+        board_before=board,
+        proposed=chosen.proposed,
+        accepted=chosen.accepted,
+        receipts=chosen.receipts,
+        hard_before=before.hard,
+        hard_after=after.hard,
+        soft_before=before.soft,
+        soft_after=after.soft,
+        reason=reason,
+        candidates=tuple(item[0] for item in evaluated),
+        winner_lane=chosen.lane if winner else None,
+        speculative_wall_ms=wall_ms,
+    )
+
+
 def _verified_prefix(
     board: Board,
     proposed: tuple[PlacementAction, ...],
@@ -339,11 +494,22 @@ def _model_run(
     policy: str,
     proposer: str,
     fallback_model: TextModel | None,
+    speculative_width: int,
 ) -> PlacementRun:
     current = board
     steps: list[PlacementStep] = []
     for turn in range(1, max_turns + 1):
-        current, step = _model_step(current, profile, model, turn, proposer)
+        if policy == "hybrid":
+            current, step = _speculative_step(
+                current,
+                profile,
+                model,
+                turn,
+                proposer,
+                speculative_width,
+            )
+        else:
+            current, step = _model_step(current, profile, model, turn, proposer)
         steps.append(step)
         if not step.accepted and fallback_model is not None:
             current, fallback_step = _model_step(
