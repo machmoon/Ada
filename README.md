@@ -100,7 +100,7 @@ Every stage is a real KiCad file you can open and inspect on its own, so you can
 where a design went wrong instead of only seeing the last artifact.
 
 ```
-802 tests collected — no network, no API key, no KiCad install
+806 tests collected — no network, no API key, no KiCad install
 ```
 
 **Next:** [full install guide and troubleshooting](docs/install.md) ·
@@ -161,7 +161,7 @@ Platform-by-platform commands are in [docs/install.md](docs/install.md#kicad-opt
 | `netlist.py` — validated circuit IR | **Working** · 21 tests |
 | `schematic.py` — `.kicad_sch` + `.kicad_pro` emission | **Working** · 22 tests · KiCad ERC clean |
 | `routing.py` — two-layer grid autorouter | **Working, partial by design** · 20 tests — see below |
-| `footprints.py` + `board.py` — land patterns, board emission | **Working** · 20 tests |
+| `footprints.py` + `board.py` — land patterns, board emission | **Working** · 23 tests |
 | `agents/` — datasheet, propose, review, pipeline | **Working** · 34 tests |
 | `agents/adk/` — ADK dynamic-workflow driver for the pipeline | **Working** · 18 tests |
 | `agents/retrieval.py` — page-cited datasheet retrieval | **Working** · 15 tests |
@@ -371,7 +371,7 @@ treats the board file as the interface.
 | Requires KiCad running | Yes | **No** |
 | Headless / CI | Hard | **Native** |
 | Platform lock | KiCad's plugin loader | **None — pure Python** |
-| Testable without KiCad | No | **Yes, all 802 tests** |
+| Testable without KiCad | No | **Yes, all 806 tests** |
 
 ### What it reads
 
@@ -752,7 +752,7 @@ engine/
       adk/          ADK dynamic workflow over the same stage bodies
     audit/        optional visual review of a finished board
     constraints/  datasheet PDF -> versioned, provenance-carrying constraints
-  tests/          802 tests — no network, no API keys, no KiCad
+  tests/          806 tests — no network, no API keys, no KiCad
     fixtures/     ref.kicad_pcb -- 11-footprint board fixture
 scripts/
   demo.py         end-to-end: read -> place -> write -> verify
@@ -840,7 +840,7 @@ docker build .                                      # the `docker` job
 
 ### Expected output
 
-**1. Test suite** — 802 tests (live-model and local-simulator cases skip when
+**1. Test suite** — 806 tests (live-model and local-simulator cases skip when
 their optional dependency is unavailable):
 
 ```
