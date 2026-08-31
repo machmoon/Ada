@@ -2182,6 +2182,40 @@ def test_chat_stream_wraps_the_pipeline_in_an_orchestrator_turn(monkeypatch, ser
     assert orchestrator_calls[0]["before_model_call"] is not None
 
 
+def test_chat_orchestrator_runs_approved_request_through_opencode_fallback(
+    monkeypatch,
+):
+    import service.app as app
+
+    monkeypatch.delenv("GOOGLE_API_KEY", raising=False)
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    monkeypatch.setenv("OPENCODE_FALLBACK_MODEL", "opencode-go/glm-5.3-flash")
+    events = []
+    result = {"status": "FEASIBLE", "parts": [{"ref": "U1"}], "nets": ["GND"]}
+
+    outcome = app.run_chat_orchestrator(
+        message="approved regulator",
+        clarification="",
+        model="opencode-go/glm-5.3-flash",
+        thinking_level=None,
+        session_id="fallback-test",
+        generate=lambda: result,
+        emit=events.append,
+        debug=False,
+        before_model_call=lambda: None,
+    )
+
+    assert outcome.result is result
+    assert outcome.needs_clarification is False
+    assert [event["event"] for event in events] == [
+        "tool.start",
+        "tool.done",
+        "assistant.message",
+    ]
+    assert events[1]["result"]["parts"] == 1
+    assert "OpenCode fallback" in outcome.assistant
+
+
 def test_chat_stream_rejects_an_invalid_reasoning_effort_before_streaming(server):
     previous_catalog = Handler.__dict__["model_catalog_factory"]
     Handler.model_catalog_factory = staticmethod(

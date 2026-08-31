@@ -27,7 +27,7 @@ import traceback
 import urllib.parse
 import uuid
 from collections.abc import Callable
-from dataclasses import fields, replace
+from dataclasses import dataclass, fields, replace
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
@@ -532,7 +532,16 @@ def build_model():
 
 
 def run_chat_orchestrator(**kwargs):
-    """Load ADK only for the route that needs its LLM agent."""
+    """Use Gemini ADK, or an honest direct fallback around the same pipeline."""
+    configured_fallback = os.getenv("OPENCODE_FALLBACK_MODEL", "").strip()
+    google_key = os.getenv("GOOGLE_API_KEY") or os.getenv("GEMINI_API_KEY")
+    use_direct_fallback = (
+        configured_fallback
+        and not google_key
+        and kwargs["model"] == configured_fallback
+    )
+    if use_direct_fallback:
+        return _run_direct_fallback(**kwargs)
     try:
         from silkscreen.agents.adk.orchestrator import run_orchestrator
     except ImportError as exc:
@@ -540,6 +549,79 @@ def run_chat_orchestrator(**kwargs):
             "the chat orchestrator needs the adk extra: pip install 'silkscreen[adk]'"
         ) from exc
     return run_orchestrator(**kwargs)
+
+
+@dataclass(frozen=True)
+class _DirectOrchestratorResult:
+    assistant: str
+    result: dict[str, Any]
+    needs_clarification: bool
+    model: str
+
+
+def _run_direct_fallback(
+    *,
+    model: str,
+    generate: Callable[[], dict[str, Any]],
+    emit: Callable[[dict[str, Any]], None],
+    **_: Any,
+) -> _DirectOrchestratorResult:
+    """Run an approved manifest without pretending OpenCode is Gemini ADK."""
+    tool_call_id = "tool-1"
+    emit(
+        {
+            "event": "tool.start",
+            "layer": "orchestrator",
+            "tool_call_id": tool_call_id,
+            "tool": "generate_board",
+            "args": {"mode": "approved-manifest-direct-fallback"},
+        }
+    )
+    try:
+        result = generate()
+    except Exception as exc:
+        emit(
+            {
+                "event": "tool.error",
+                "layer": "orchestrator",
+                "tool_call_id": tool_call_id,
+                "tool": "generate_board",
+                "error": f"{type(exc).__name__}: {exc}",
+            }
+        )
+        raise
+
+    summary = {
+        "status": result.get("status"),
+        "parts": len(result.get("parts") or []),
+        "nets": len(result.get("nets") or []),
+        "blockers": len(result.get("blockers") or []),
+        "served_by": result.get("served_by"),
+    }
+    emit(
+        {
+            "event": "tool.done",
+            "layer": "orchestrator",
+            "tool_call_id": tool_call_id,
+            "tool": "generate_board",
+            "result": summary,
+        }
+    )
+    assistant = (
+        "The OpenCode fallback ran the approved request through Silkscreen's "
+        f"validated pipeline: {summary['parts']} parts, {summary['nets']} nets, "
+        f"and {summary['blockers']} blockers."
+    )
+    emit(
+        {
+            "event": "assistant.message",
+            "layer": "orchestrator",
+            "model": model,
+            "text": assistant,
+            "needs_clarification": False,
+        }
+    )
+    return _DirectOrchestratorResult(assistant, result, False, model)
 
 
 class _PacedModel:

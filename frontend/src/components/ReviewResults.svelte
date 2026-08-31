@@ -20,6 +20,8 @@
   const skipped = $derived(request ? request.review === false : false)
   const findings = $derived(result.findings)
   const constraintReceipt = $derived(result.constraint_receipt || null)
+  const hasDatasheets = $derived((result.datasheets || []).length > 0)
+  const hardGateBlocked = $derived(constraintReceipt && !constraintReceipt.promotable)
 
   const summary = $derived(
     joinDot([
@@ -93,6 +95,9 @@
     {#if skipped}
       Nothing was checked against the datasheets on this run. The board below was placed from
       the netlist alone.
+    {:else if !hasDatasheets}
+      The model reviewer checked the generated circuit structure without datasheet evidence.
+      No page-grounded component claims were made on this run.
     {:else}
       Every connection was checked against the pin definitions in the manufacturer's datasheet,
       not just against the netlist. Each finding cites the page it came from.
@@ -111,14 +116,27 @@
         checked it against the datasheets. Run it again with the review on to get findings.
       </p>
     </div>
+  {:else if findings.length === 0 && hardGateBlocked}
+    <div class="state" data-testid="review-results-state" data-state="blocked" data-material="panel">
+      <div class="state-title" data-testid="review-results-state-title">No additional model findings</div>
+      <p class="state-body" data-testid="review-results-state-body">
+        The model reviewer returned no findings, but the deterministic hard-constraint gate is
+        blocked above. This board is not promotable until every violated or unresolved hard check
+        is cleared.
+      </p>
+    </div>
   {:else if findings.length === 0}
     <div class="state" data-testid="review-results-state" data-state="clean" data-material="panel">
-      <div class="state-title" data-testid="review-results-state-title">Nothing to flag</div>
+      <div class="state-title" data-testid="review-results-state-title">No model findings</div>
       <p class="state-body" data-testid="review-results-state-body">
-        The reviewer found no blockers, marginal choices, or notes worth raising against the
-        datasheets it read. That covers pin function and passive values in context — not signal
-        integrity, EMC, thermal margins, or manufacturability at your fab. A clean review here
-        is not a substitute for a human sign-off before you order boards.
+        {#if hasDatasheets}
+          The reviewer found no additional issues against the datasheets it read. That covers pin
+          function and passive values in context, not signal integrity, EMC, thermal margins, or
+          manufacturability at your fab.
+        {:else}
+          The reviewer returned no structural findings. Without datasheets, this is not evidence
+          that pin functions or component requirements are correct.
+        {/if}
       </p>
     </div>
   {:else}

@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest'
+import { readFileSync } from 'node:fs'
 
 import {
   constraintKinds,
@@ -8,6 +9,24 @@ import {
 } from './constraints.js'
 
 describe('constraint manifest', () => {
+  it('does not describe a blocked zero-datasheet review as clean or grounded', () => {
+    const review = readFileSync(new URL('../components/ReviewResults.svelte', import.meta.url), 'utf8')
+
+    expect(review).toContain('without datasheet evidence')
+    expect(review).toContain('No additional model findings')
+    expect(review).toContain('This board is not promotable')
+  })
+
+  it('lets approved decimal defaults pass native number-input validation', () => {
+    const form = readFileSync(new URL('../components/IntentForm.svelte', import.meta.url), 'utf8')
+    const physicalInputs = form.match(/<input type="number"[^>]+bind:value=\{(?:netClass|fixed|keepout|constraints\.mechanical)[^}]+\}[^>]*>/g) || []
+    const integerFields = ['board_layers', 'max_layer_transitions', 'max_vias_per_net']
+    const decimalInputs = physicalInputs.filter((input) => !integerFields.some((name) => input.includes(name)))
+
+    expect(decimalInputs.length).toBeGreaterThan(10)
+    expect(decimalInputs.every((input) => input.includes('step="any"'))).toBe(true)
+  })
+
   it('recognizes critical buses in the requested board', () => {
     expect(constraintKinds('MCU with I2C sensor and USB-C')).toEqual(['i2c', 'usb'])
   })
