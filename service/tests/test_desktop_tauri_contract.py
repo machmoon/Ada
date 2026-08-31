@@ -16,6 +16,8 @@ def test_tauri_shell_embeds_the_existing_svelte_bundle_with_a_real_csp():
     assert config["build"]["beforeBuildCommand"] == (
         "npm --prefix ../../frontend run build"
     )
+    assert "devUrl" not in config["build"]
+    assert "beforeDevCommand" not in config["build"]
     assert config["app"]["windows"] == []
     assert config["app"]["security"]["csp"]
     assert config["bundle"]["active"] is False

@@ -40,9 +40,7 @@ API base URL baked in, so Tauri loads it directly:
 {
   "build": {
     "frontendDist": "../../frontend/dist",
-    "beforeBuildCommand": "npm --prefix ../../frontend run build",
-    "beforeDevCommand": "npm --prefix ../../frontend run dev",
-    "devUrl": "http://localhost:5173"
+    "beforeBuildCommand": "npm --prefix ../../frontend run build"
   }
 }
 ```
@@ -50,9 +48,10 @@ API base URL baked in, so Tauri loads it directly:
 - `frontendDist` — "The path to the application assets (usually the `dist`
   folder of your javascript bundler)". In a release build Tauri embeds those
   files in the binary and serves them over the `tauri://` custom protocol.
-- `devUrl` + `beforeDevCommand` keep Vite HMR in `tauri dev`; omit both and
-  `tauri dev` serves `frontendDist` from its own dev server instead, which is
-  the simpler option if you do not want a Node process in the loop.
+- `devUrl` and `beforeDevCommand` are intentionally omitted. The documented
+  `cargo run` path does not invoke Tauri CLI hooks, so configuring a Vite URL
+  there would open a blank webview unless somebody separately started Vite.
+  Development and debug builds load the already-built `frontendDist` instead.
 <https://v2.tauri.app/reference/config/>
 
 **The consequence that matters:** in a built shell the page origin is
