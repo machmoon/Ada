@@ -4,6 +4,7 @@
     schematicEnabled = false,
     placementEnabled = false,
     boardEnabled = false,
+    reviewed = true,
     onopen = null,
   } = $props()
 
@@ -29,7 +30,9 @@
   </button>
   <button type="button" onclick={() => onopen?.('review')} data-material="panel">
     <span class="lbl">Review</span>
-    <strong>{findings} findings</strong>
+    <!-- A skipped review is "not run", never "0 findings" — an absent check
+         and a clean one are different claims. -->
+    <strong>{reviewed ? `${findings} findings` : 'not run'}</strong>
     <span>Open details →</span>
   </button>
 </div>

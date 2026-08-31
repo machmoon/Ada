@@ -268,6 +268,7 @@
           {schematicEnabled}
           {placementEnabled}
           {boardEnabled}
+          {reviewed}
         />
       {/if}
     </main>
