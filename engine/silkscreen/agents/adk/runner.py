@@ -73,6 +73,7 @@ class _RunContext:
     placement_feedback: dict[str, Any] | None
     placement_model: Model | None
     placement_fallback_model: Model | None
+    placement_lane_model_factory: Callable[[], Model] | None
     placement_max_turns: int
     facts: list[PartFacts] = field(default_factory=list)
     spec: CircuitSpec | None = None
@@ -227,6 +228,7 @@ def generate_pcb_adk(
     placement_feedback: dict[str, Any] | None = None,
     placement_model: Model | None = None,
     placement_fallback_model: Model | None = None,
+    placement_lane_model_factory: Callable[[], Model] | None = None,
     placement_max_turns: int = 8,
 ) -> PipelineResult:
     """Run the stages as an ADK workflow. See :func:`silkscreen.agents.generate_pcb`.
@@ -263,6 +265,7 @@ def generate_pcb_adk(
         placement_feedback=placement_feedback,
         placement_model=placement_model,
         placement_fallback_model=placement_fallback_model,
+        placement_lane_model_factory=placement_lane_model_factory,
         placement_max_turns=placement_max_turns,
     )
     token = secrets.token_hex(8)

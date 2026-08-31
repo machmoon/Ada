@@ -4,6 +4,7 @@ import json
 import math
 import re
 import threading
+import time
 from dataclasses import dataclass, field
 from types import SimpleNamespace
 
@@ -478,6 +479,124 @@ def test_hybrid_policy_runs_parallel_lanes_and_commits_best_candidate() -> None:
     assert traces[0]["chosen_source"] == "speculative-winner"
     assert traces[0]["rejected_response"] == "PLACE C1 3 3"
     assert traces[0]["chosen_response"] == "PLACE C1 9 3"
+
+
+def test_speculative_lanes_use_isolated_model_instances() -> None:
+    profile = CompanyProfile("simple", clearance=0.5, edge_margin=0.5)
+    board = Board(
+        20,
+        12,
+        (Component("U1", 2, 2, 5, 5), Component("C1", 4, 3, 3, 3)),
+    )
+    barrier = threading.Barrier(3)
+    instance_ids = []
+    created = 0
+
+    class IsolatedModel:
+        def __init__(self, instance_id: int) -> None:
+            self.instance_id = instance_id
+
+        def generate(self, prompt: str, **kwargs) -> str:
+            del prompt, kwargs
+            instance_ids.append(self.instance_id)
+            barrier.wait(timeout=2)
+            return "PLACE C1 12 3"
+
+    def factory() -> IsolatedModel:
+        nonlocal created
+        created += 1
+        return IsolatedModel(created)
+
+    run = PlacementAgent(
+        QueueModel(responses=[]),
+        lane_model_factory=factory,
+        max_turns=1,
+        speculative_early_commit=False,
+    ).run(board, profile, policy="hybrid")
+
+    assert run.completed
+    assert sorted(instance_ids) == [1, 2, 3]
+    assert created == 3
+
+
+def test_speculative_deadline_returns_and_marks_slow_lanes() -> None:
+    profile = CompanyProfile("simple", clearance=0.5, edge_margin=0.5)
+    board = Board(
+        20,
+        12,
+        (Component("U1", 2, 2, 5, 5), Component("C1", 4, 3, 3, 3)),
+    )
+
+    class SlowModel:
+        def generate(self, prompt: str, **kwargs) -> str:
+            del prompt, kwargs
+            time.sleep(0.3)
+            return "PLACE C1 12 3"
+
+    recovery = QueueModel(responses=["PLACE C1 12 3"])
+    started = time.perf_counter()
+    run = PlacementAgent(
+        SlowModel(),
+        fallback_model=recovery,
+        lane_model_factory=SlowModel,
+        max_turns=1,
+        speculative_timeout_s=0.1,
+    ).run(board, profile, policy="hybrid")
+    elapsed = time.perf_counter() - started
+
+    assert elapsed < 0.25
+    assert run.completed
+    assert recovery.calls
+    assert {candidate.status for candidate in run.steps[0].candidates} == {
+        "deadline"
+    }
+
+
+def test_speculative_early_commit_cancels_remaining_lanes() -> None:
+    profile = CompanyProfile(
+        "legality-only",
+        clearance=0.5,
+        edge_margin=0.5,
+        compactness_weight=0,
+        grouping_weight=0,
+        connector_edge_weight=0,
+        thermal_weight=0,
+    )
+    board = Board(
+        20,
+        12,
+        (Component("U1", 2, 2, 5, 5), Component("C1", 4, 3, 3, 3)),
+    )
+
+    class EarlyModel:
+        def generate(self, prompt: str, **kwargs) -> str:
+            del kwargs
+            lane = int(re.search(r"SPECULATIVE LANE (\d+)/", prompt).group(1))
+            if lane != 1:
+                time.sleep(0.3)
+            return "PLACE C1 12 3"
+
+    started = time.perf_counter()
+    run = PlacementAgent(
+        EarlyModel(),
+        lane_model_factory=EarlyModel,
+        max_turns=1,
+        speculative_timeout_s=1,
+    ).run(board, profile, policy="hybrid")
+    elapsed = time.perf_counter() - started
+    speculation = run_to_dict(run)["steps"][0]["speculation"]
+
+    assert elapsed < 0.25
+    assert run.completed
+    assert speculation["early_commit"] is True
+    assert speculation["winner_lane"] == 1
+    assert speculation["timed_out_lanes"] == []
+    assert speculation["cancelled_lanes"] == [2, 3]
+    objectives = {
+        candidate["prompt"].split("LANE OBJECTIVE: ", 1)[1].splitlines()[0]
+        for candidate in speculation["candidates"]
+    }
+    assert len(objectives) == 3
 
 
 def test_failed_policy_step_becomes_recovery_training_pair(tmp_path) -> None:

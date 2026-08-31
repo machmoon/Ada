@@ -149,17 +149,74 @@ def _candidate_dict(candidate: Any) -> dict[str, Any]:
         "soft_after": candidate.soft_after,
         "elapsed_ms": candidate.elapsed_ms,
         "error": candidate.error,
+        "status": candidate.status,
+        "duplicate_of_lane": candidate.duplicate_of_lane,
+        "input_tokens": candidate.input_tokens,
+        "output_tokens": candidate.output_tokens,
+        "cost_usd": candidate.cost_usd,
     }
 
 
 def _speculation_dict(step: Any) -> dict[str, Any] | None:
     if not step.candidates:
         return None
+    input_tokens = [
+        item.input_tokens
+        for item in step.candidates
+        if item.input_tokens is not None
+    ]
+    output_tokens = [
+        item.output_tokens
+        for item in step.candidates
+        if item.output_tokens is not None
+    ]
+    costs = [item.cost_usd for item in step.candidates if item.cost_usd is not None]
     return {
         "width": len(step.candidates),
         "winner_lane": step.winner_lane,
         "wall_ms": step.speculative_wall_ms,
+        "early_commit": step.early_commit,
+        "timed_out_lanes": [
+            item.lane
+            for item in step.candidates
+            if item.status in {"deadline", "backend-timeout"}
+        ],
+        "cancelled_lanes": [
+            item.lane
+            for item in step.candidates
+            if item.status == "cancelled-after-early-commit"
+        ],
+        "duplicate_lanes": [
+            item.lane for item in step.candidates if item.duplicate_of_lane is not None
+        ],
+        "error_lanes": [
+            item.lane for item in step.candidates if item.status == "error"
+        ],
+        "input_tokens": sum(input_tokens) if input_tokens else None,
+        "output_tokens": sum(output_tokens) if output_tokens else None,
+        "cost_usd": round(sum(costs), 9) if costs else None,
         "candidates": [_candidate_dict(item) for item in step.candidates],
+    }
+
+
+def _proposal_metrics(run: PlacementRun) -> dict[str, Any]:
+    model_steps = [step for step in run.steps if step.proposer != "deterministic"]
+    input_tokens = [
+        step.input_tokens for step in model_steps if step.input_tokens is not None
+    ]
+    output_tokens = [
+        step.output_tokens for step in model_steps if step.output_tokens is not None
+    ]
+    costs = [step.cost_usd for step in model_steps if step.cost_usd is not None]
+    return {
+        "wall_ms": round(sum(step.elapsed_ms for step in model_steps), 3),
+        "backend_calls": sum(len(step.candidates) or 1 for step in model_steps),
+        "input_tokens": sum(input_tokens) if input_tokens else None,
+        "output_tokens": sum(output_tokens) if output_tokens else None,
+        "cost_usd": round(sum(costs), 9) if costs else None,
+        "gemini_recovery_used": any(
+            step.proposer == "gemini-recovery" for step in model_steps
+        ),
     }
 
 
@@ -186,6 +243,7 @@ def run_to_dict(
             "progress": progress_reward(run.start, run.board, run.profile),
             "preference": quality_reward(run.start, run.board, run.profile),
         },
+        "proposal_metrics": _proposal_metrics(run),
         "steps": [
             {
                 "turn": step.turn,
@@ -201,6 +259,10 @@ def run_to_dict(
                 "soft_before": step.soft_before,
                 "soft_after": step.soft_after,
                 "reason": step.reason,
+                "elapsed_ms": step.elapsed_ms,
+                "input_tokens": step.input_tokens,
+                "output_tokens": step.output_tokens,
+                "cost_usd": step.cost_usd,
                 "speculation": _speculation_dict(step),
             }
             for step in run.steps
@@ -220,6 +282,7 @@ def repair_request(
     *,
     model=None,
     fallback_model=None,
+    lane_model_factory=None,
 ) -> dict[str, Any]:
     if not isinstance(payload, dict):
         raise ValueError("body must be a JSON object")
@@ -238,8 +301,11 @@ def repair_request(
     run = PlacementAgent(
         model,
         fallback_model=fallback_model,
+        lane_model_factory=lane_model_factory,
         max_turns=payload.get("max_turns", 8),
         speculative_width=payload.get("speculative_width", 3),
+        speculative_timeout_s=payload.get("speculative_timeout_s", 8.0),
+        speculative_early_commit=payload.get("speculative_early_commit", True),
     ).run(board, profile, policy=policy)
     result = run_to_dict(run, supplied)
     result["profile_memory"] = "request-only" if supplied else "none"

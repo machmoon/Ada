@@ -223,6 +223,9 @@
               <div class="speculation">
                 {speculativeStep.width} move batches ran together ·
                 {speculativeStep.winner_lane ? `lane ${speculativeStep.winner_lane} committed` : 'all stalled'} ·
+                {Math.round(speculativeStep.wall_ms)} ms
+                {speculativeStep.cancelled_lanes?.length ? ` · ${speculativeStep.cancelled_lanes.length} cancelled` : ''}
+                {speculativeStep.timed_out_lanes?.length ? ` · ${speculativeStep.timed_out_lanes.length} timed out` : ''} ·
                 Gemini recovery {recoveryUsed ? 'used' : 'not needed'}
               </div>
             {/if}

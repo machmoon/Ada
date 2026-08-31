@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+from collections.abc import Callable
 from dataclasses import dataclass, replace
 from typing import Any
 
@@ -163,6 +164,7 @@ def repair_generated_board(
     feedback: dict[str, Any] | None = None,
     model: TextModel | None = None,
     fallback_model: TextModel | None = None,
+    lane_model_factory: Callable[[], TextModel] | None = None,
     max_turns: int = 8,
 ) -> GeneratedPlacement:
     """Repair a generated board, falling back to deterministic policy safely."""
@@ -175,6 +177,7 @@ def repair_generated_board(
         run = PlacementAgent(
             model,
             fallback_model=fallback_model,
+            lane_model_factory=lane_model_factory,
             max_turns=max_turns,
         ).run(placement_board, selected, policy=policy)
     except PlacementPolicyError:

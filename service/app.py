@@ -21,6 +21,7 @@ import hashlib
 import json
 import math
 import os
+import shutil
 import sys
 import time
 import traceback
@@ -90,6 +91,7 @@ __all__ = [
     "Handler",
     "build_embedder",
     "build_model",
+    "build_opencode_model",
     "build_ollama_model",
     "build_pages_store",
     "build_failure_trace_store",
@@ -563,18 +565,42 @@ def build_ollama_model():
     return OllamaPlacementModel(
         base_url=base_url,
         model=os.getenv("OLLAMA_PLACEMENT_MODEL", "gemma3:4b"),
+        timeout_s=float(os.getenv("PLACEMENT_BACKEND_TIMEOUT_S", "30")),
+    )
+
+
+def build_opencode_model():
+    model = os.getenv("OPENCODE_PLACEMENT_MODEL", "").strip()
+    if not model:
+        raise ValueError(
+            "OpenCode policy is not configured; set OPENCODE_PLACEMENT_MODEL"
+        )
+    from silkscreen.placement.opencode_policy import OpenCodePlacementModel
+
+    return OpenCodePlacementModel(
+        model=model,
+        binary=os.getenv("OPENCODE_BIN", "opencode"),
+        timeout_s=float(os.getenv("PLACEMENT_BACKEND_TIMEOUT_S", "30")),
     )
 
 
 def build_fast_placement_model():
     if _tinker_configured():
         return build_tinker_model()
-    return build_ollama_model()
+    if os.getenv("OLLAMA_PLACEMENT_URL"):
+        return build_ollama_model()
+    return build_opencode_model()
 
 
 def _tinker_configured() -> bool:
     checkpoint = os.getenv("TINKER_PLACEMENT_MODEL", "").strip()
     return bool(os.getenv("TINKER_API_KEY") and checkpoint.startswith("tinker://"))
+
+
+def _opencode_configured() -> bool:
+    model = os.getenv("OPENCODE_PLACEMENT_MODEL", "").strip()
+    binary = os.getenv("OPENCODE_BIN", "opencode")
+    return bool(model and shutil.which(binary))
 
 
 def _experimental_requested(payload: dict[str, Any]) -> bool:
@@ -588,12 +614,14 @@ def placement_policy_status(*, experimental: bool = False) -> dict[str, bool]:
     gemini = bool(os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY"))
     tinker = experimental and _tinker_configured()
     ollama = experimental and bool(os.getenv("OLLAMA_PLACEMENT_URL"))
+    opencode = experimental and _opencode_configured()
     return {
         "deterministic": True,
         "gemini": gemini,
         "tinker": tinker,
         "ollama": ollama,
-        "hybrid": gemini and (tinker or ollama),
+        "opencode": opencode,
+        "hybrid": gemini and (tinker or ollama or opencode),
     }
 
 
@@ -608,7 +636,7 @@ def resolve_placement_policy(
         if not status[requested]:
             raise ValueError(f"placement policy {requested!r} is not available")
         return requested
-    for candidate in ("hybrid", "tinker", "ollama"):
+    for candidate in ("hybrid", "tinker", "ollama", "opencode"):
         if status.get(candidate):
             return candidate
     return "deterministic"
@@ -619,10 +647,14 @@ def _placement_model_id(policy: str) -> str:
         return os.getenv("OLLAMA_PLACEMENT_MODEL", "gemma3:4b")
     if policy == "tinker":
         return os.getenv("TINKER_PLACEMENT_MODEL", "Qwen/Qwen3.5-4B")
+    if policy == "opencode":
+        return os.getenv("OPENCODE_PLACEMENT_MODEL", "opencode")
     if policy == "hybrid":
         if os.getenv("TINKER_PLACEMENT_MODEL"):
             return os.getenv("TINKER_PLACEMENT_MODEL", "Qwen/Qwen3.5-4B")
-        return os.getenv("OLLAMA_PLACEMENT_MODEL", "gemma3:4b")
+        if os.getenv("OLLAMA_PLACEMENT_URL"):
+            return os.getenv("OLLAMA_PLACEMENT_MODEL", "gemma3:4b")
+        return os.getenv("OPENCODE_PLACEMENT_MODEL", "opencode")
     return policy
 
 
@@ -654,16 +686,22 @@ def _store_failure_traces(
 def _placement_models(
     policy: str,
     gemini_factory: Callable[[], Any],
-) -> tuple[Any | None, Any | None]:
+) -> tuple[Any | None, Any | None, Callable[[], Any] | None]:
     if policy == "gemini":
-        return gemini_factory(), None
+        return gemini_factory(), None, None
     if policy == "tinker":
-        return build_tinker_model(), None
+        return build_tinker_model(), None, None
     if policy == "ollama":
-        return build_ollama_model(), None
+        return build_ollama_model(), None, None
+    if policy == "opencode":
+        return build_opencode_model(), None, None
     if policy == "hybrid":
-        return build_fast_placement_model(), gemini_factory()
-    return None, None
+        return (
+            build_fast_placement_model(),
+            gemini_factory(),
+            build_fast_placement_model,
+        )
+    return None, None, None
 
 
 def _run_placement_policy(
@@ -671,11 +709,14 @@ def _run_placement_policy(
     policy: str,
     gemini_factory: Callable[[], Any],
 ) -> dict[str, Any]:
-    model, fallback_model = _placement_models(policy, gemini_factory)
+    model, fallback_model, lane_model_factory = _placement_models(
+        policy, gemini_factory
+    )
     return repair_request(
         {**payload, "policy": policy},
         model=model,
         fallback_model=fallback_model,
+        lane_model_factory=lane_model_factory,
     )
 
 
@@ -754,6 +795,7 @@ def generate(
     placement_policy: str = "deterministic",
     placement_model=None,
     placement_fallback_model=None,
+    placement_lane_model_factory: Callable[[], Any] | None = None,
 ) -> dict[str, Any]:
     """Run the pipeline for one request body.
 
@@ -873,6 +915,7 @@ def generate(
         placement_feedback=placement_feedback,
         placement_model=placement_model,
         placement_fallback_model=placement_fallback_model,
+        placement_lane_model_factory=placement_lane_model_factory,
         placement_max_turns=placement_max_turns,
     )
 
@@ -1367,6 +1410,7 @@ class Handler(BaseHTTPRequestHandler):
         requested_placement_policy: str | None = None
         placement_model = None
         placement_fallback_model = None
+        placement_lane_model_factory = None
         if placement_profile is not None:
             requested_placement_policy = str(
                 payload.get("placement_policy", "deterministic")
@@ -1374,9 +1418,11 @@ class Handler(BaseHTTPRequestHandler):
             placement_policy = resolve_placement_policy(
                 requested_placement_policy, placement_status
             )
-            placement_model, placement_fallback_model = _placement_models(
-                placement_policy, lambda: model
-            )
+            (
+                placement_model,
+                placement_fallback_model,
+                placement_lane_model_factory,
+            ) = _placement_models(placement_policy, lambda: model)
         elif trace_consent:
             raise ValueError("record_trace requires placement_profile")
 
@@ -1390,6 +1436,7 @@ class Handler(BaseHTTPRequestHandler):
             placement_policy=placement_policy,
             placement_model=placement_model,
             placement_fallback_model=placement_fallback_model,
+            placement_lane_model_factory=placement_lane_model_factory,
         )
         placement = result.get("placement_repair")
         if isinstance(placement, dict):

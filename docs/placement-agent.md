@@ -15,10 +15,10 @@ surface underneath that flow.
 
 Deterministic repair is the default product path and needs no model call. Gemini
 is a stable comparison policy when the configured key advertises it. Ollama,
-Tinker, hybrid, automatic experimental selection, and trace capture appear only
-after the user turns on **Experimental features**. Provider-specific choices are
-selectable only when their server-side credentials or endpoint are configured.
-Backend names remain visible in the run receipt.
+Tinker, OpenCode, hybrid, automatic experimental selection, and trace capture
+appear only after the user turns on **Experimental features**. Provider-specific
+choices are selectable only when their server-side credentials or endpoint are
+configured. Backend names remain visible in the run receipt.
 
 Generated boards cross an explicit adapter boundary: canonical placement stays
 in integer nanometres, verifier geometry uses bounded millimetres, and accepted
@@ -28,12 +28,23 @@ grows and translates that frame so a legal repair is geometrically possible.
 If bounded repair still cannot prove `H = 0`, no verifier coordinates are
 written back and the response says `applied: false`.
 
-On the private-GPU stopgap, base Gemma 3 4B can run through a configured Ollama
-endpoint.
-Deterministic search produces a bounded candidate set and Gemma selects a short
-ordered batch. The geometry verifier evaluates each action and commits only the
-longest improving prefix. This is speculative placement execution, not
-token-level speculative decoding.
+On the private-GPU stopgap, Gemma or Qwen can run through a configured Ollama
+endpoint. If that GPU is unavailable, `OPENCODE_PLACEMENT_MODEL` enables a
+tool-disabled OpenCode CLI proposer using the operator's existing provider
+authentication. It runs in a temporary directory, gets one model step, and has
+all tools and permissions denied. A failed or incomplete model run still falls
+back to deterministic repair before the service returns a placement.
+
+For each repair turn, deterministic search produces one bounded action set.
+Three isolated policy clients then propose different ordered batches in
+parallel. Every lane has a hard deadline and cancellation hook. Lane-specific
+objectives encourage different prefixes. As results arrive, the verifier scores
+each proposed action and accepts only an improving prefix. A candidate may
+commit early only when it is already legal and at least as good as the
+deterministic oracle target. Otherwise Silkscreen waits until the lane deadline,
+then commits the best verified prefix. Gemini recovery runs only when every fast
+lane stalls. This is speculative placement execution, not token-level
+speculative decoding.
 
 The visible score has two axes. `H` is hard penetration in millimetres from
 overlap, clearance, boundary, and keepout faults. A legal placement has `H = 0`.
@@ -55,6 +66,13 @@ The **verifier** is authoritative. It recomputes `(H, P)` after each action and
 accepts an action only if that pair improves lexicographically. Hard geometry
 therefore always outranks preference. Neither Gemini nor the small policy can
 override it.
+
+Each response exposes proposal wall time, backend calls, token counts, reported
+cost, winning lane, duplicate lanes, deadlines, cancellations, early commit,
+and Gemini recovery. Use `scripts/benchmark_speculative_placement.py` for the
+paired sequential-versus-parallel benchmark. The frozen tune, holdout, and
+stress protocol plus current results are recorded in
+`docs/speculative-placement-eval.md`.
 
 **Supervised fine-tuning** teaches a small policy the action grammar and repair
 patterns from deterministic traces plus accepted engineer corrections. Tinker

@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import time
-from concurrent.futures import ThreadPoolExecutor
-from dataclasses import dataclass
+from collections.abc import Callable
+from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
+from dataclasses import dataclass, replace
+from math import isfinite
 from typing import Protocol
 
 from .grader import board_to_text
@@ -21,6 +23,7 @@ from .pcb_repair import (
 __all__ = [
     "PlacementAgent",
     "PlacementPolicyError",
+    "PlacementPolicyTimeout",
     "PlacementReceipt",
     "PlacementRun",
     "PlacementStep",
@@ -34,6 +37,10 @@ class PlacementPolicyError(RuntimeError):
     """A proposal backend failed or returned an unusable response."""
 
 
+class PlacementPolicyTimeout(PlacementPolicyError, TimeoutError):
+    """A proposal backend exceeded its configured hard deadline."""
+
+
 class TextModel(Protocol):
     def generate(
         self,
@@ -44,6 +51,9 @@ class TextModel(Protocol):
         temperature: float = 0.0,
         max_output_tokens: int = 8192,
     ) -> str: ...
+
+
+EvaluatedCandidate = tuple["SpeculativeCandidate", Board]
 
 
 @dataclass(frozen=True)
@@ -69,6 +79,11 @@ class SpeculativeCandidate:
     soft_after: float
     elapsed_ms: float
     error: str = ""
+    status: str = "completed"
+    duplicate_of_lane: int | None = None
+    input_tokens: int | None = None
+    output_tokens: int | None = None
+    cost_usd: float | None = None
 
 
 @dataclass(frozen=True)
@@ -89,6 +104,11 @@ class PlacementStep:
     candidates: tuple[SpeculativeCandidate, ...] = ()
     winner_lane: int | None = None
     speculative_wall_ms: float = 0.0
+    early_commit: bool = False
+    elapsed_ms: float = 0.0
+    input_tokens: int | None = None
+    output_tokens: int | None = None
+    cost_usd: float | None = None
 
 
 @dataclass(frozen=True)
@@ -120,10 +140,19 @@ def _profile_text(profile: CompanyProfile) -> str:
     )
 
 
-def placement_prompt(board: Board, profile: CompanyProfile, turn: int) -> str:
+def placement_prompt(
+    board: Board,
+    profile: CompanyProfile,
+    turn: int,
+    *,
+    suggested_actions: tuple[PlacementAction, ...] | None = None,
+) -> str:
     result = evaluate(board, profile)
     violations = "\n".join(f"- {item.message}" for item in result.violations)
-    _, suggested = repair(board, profile)
+    if suggested_actions is None:
+        _, suggested = repair(board, profile)
+    else:
+        suggested = suggested_actions
     candidates = "\n".join(action.as_text() for action in suggested[:8])
     return f"""PCB PLACEMENT REPAIR TURN {turn}
 
@@ -156,8 +185,12 @@ class PlacementAgent:
         model: TextModel | None = None,
         *,
         fallback_model: TextModel | None = None,
+        lane_model_factory: Callable[[], TextModel] | None = None,
         max_turns: int = 8,
         speculative_width: int = 3,
+        speculative_timeout_s: float = 8.0,
+        speculative_early_commit: bool = True,
+        speculative_parallel: bool = True,
     ):
         if isinstance(max_turns, bool) or not isinstance(max_turns, int):
             raise ValueError("max_turns must be an integer")
@@ -173,6 +206,22 @@ class PlacementAgent:
         if speculative_width < 2 or speculative_width > 4:
             raise ValueError("speculative_width must be between 2 and 4")
         self.speculative_width = speculative_width
+        if isinstance(speculative_timeout_s, bool) or not isinstance(
+            speculative_timeout_s, (int, float)
+        ):
+            raise ValueError("speculative_timeout_s must be a number")
+        if not isfinite(speculative_timeout_s) or not (
+            0.1 <= speculative_timeout_s <= 60
+        ):
+            raise ValueError("speculative_timeout_s must be between 0.1 and 60")
+        if not isinstance(speculative_early_commit, bool):
+            raise ValueError("speculative_early_commit must be a boolean")
+        if not isinstance(speculative_parallel, bool):
+            raise ValueError("speculative_parallel must be a boolean")
+        self.speculative_timeout_s = float(speculative_timeout_s)
+        self.speculative_early_commit = speculative_early_commit
+        self.speculative_parallel = speculative_parallel
+        self.lane_model_factory = lane_model_factory
 
     def run(
         self,
@@ -183,10 +232,10 @@ class PlacementAgent:
     ) -> PlacementRun:
         if policy == "deterministic":
             return _deterministic_run(board, profile)
-        if policy not in {"gemini", "tinker", "ollama", "hybrid"}:
+        if policy not in {"gemini", "tinker", "ollama", "opencode", "hybrid"}:
             raise ValueError(
                 "policy must be 'deterministic', 'gemini', 'tinker', "
-                "'ollama', or 'hybrid'"
+                "'ollama', 'opencode', or 'hybrid'"
             )
         if self.model is None:
             raise ValueError(f"{policy} policy requires a proposal model")
@@ -205,7 +254,11 @@ class PlacementAgent:
             policy=policy,
             proposer=proposer,
             fallback_model=fallback,
+            lane_model_factory=self.lane_model_factory or (lambda: self.model),
             speculative_width=self.speculative_width,
+            speculative_timeout_s=self.speculative_timeout_s,
+            speculative_early_commit=self.speculative_early_commit,
+            speculative_parallel=self.speculative_parallel,
         )
 
 
@@ -276,6 +329,7 @@ def _model_step(
 ) -> tuple[Board, PlacementStep]:
     before = evaluate(board, profile)
     prompt = placement_prompt(board, profile, turn)
+    started = time.perf_counter()
     try:
         response = model.generate(
             prompt,
@@ -298,6 +352,7 @@ def _model_step(
         ) from exc
     updated, accepted, receipts = _verified_prefix(board, proposed, profile)
     after = evaluate(updated, profile)
+    input_tokens, output_tokens, cost_usd = _usage(model)
     if not proposed:
         reason = "rejected: no valid placement actions"
     elif len(accepted) == len(proposed):
@@ -319,15 +374,33 @@ def _model_step(
         soft_before=before.soft,
         soft_after=after.soft,
         reason=reason,
+        elapsed_ms=round((time.perf_counter() - started) * 1000, 3),
+        input_tokens=input_tokens,
+        output_tokens=output_tokens,
+        cost_usd=cost_usd,
     )
     return updated, step
 
 
 def _lane_prompt(prompt: str, lane: int, width: int) -> str:
+    strategies = (
+        "Minimize hard penetration with the shortest valid prefix.",
+        "Start with a later listed candidate when it can repair legality.",
+        "Repair legality, then minimize the company preference cost.",
+        "Prefer a multi-component prefix using distinct component refs.",
+    )
     return (
         f"{prompt}\n\nSPECULATIVE LANE {lane}/{width}\n"
-        "Choose a distinct short prefix when several valid choices exist."
+        f"LANE OBJECTIVE: {strategies[lane - 1]}\n"
+        "Do not imitate another lane. Return only the bounded action lines."
     )
+
+
+def _usage(model: TextModel) -> tuple[int | None, int | None, float | None]:
+    value = getattr(model, "last_usage", None)
+    if not isinstance(value, dict):
+        return None, None, None
+    return value.get("input_tokens"), value.get("output_tokens"), value.get("cost_usd")
 
 
 def _candidate(
@@ -337,7 +410,7 @@ def _candidate(
     prompt: str,
     lane: int,
     width: int,
-) -> tuple[SpeculativeCandidate, Board]:
+) -> EvaluatedCandidate:
     started = time.perf_counter()
     lane_prompt = _lane_prompt(prompt, lane, width)
     try:
@@ -356,6 +429,8 @@ def _candidate(
         updated, accepted, receipts = _verified_prefix(board, proposed, profile)
         after = evaluate(updated, profile)
         error = ""
+        status = "viable" if accepted else "stalled"
+        input_tokens, output_tokens, cost_usd = _usage(model)
     except Exception as exc:
         response = ""
         proposed = ()
@@ -364,6 +439,8 @@ def _candidate(
         updated = board
         after = evaluate(board, profile)
         error = f"{type(exc).__name__}: proposal failed"
+        status = "backend-timeout" if isinstance(exc, TimeoutError) else "error"
+        input_tokens = output_tokens = cost_usd = None
     candidate = SpeculativeCandidate(
         lane=lane,
         prompt=lane_prompt,
@@ -375,12 +452,89 @@ def _candidate(
         soft_after=after.soft,
         elapsed_ms=round((time.perf_counter() - started) * 1000, 3),
         error=error,
+        status=status,
+        input_tokens=input_tokens,
+        output_tokens=output_tokens,
+        cost_usd=cost_usd,
     )
     return candidate, updated
 
 
+def _factory_failure_candidate(
+    board: Board,
+    profile: CompanyProfile,
+    prompt: str,
+    lane: int,
+    width: int,
+) -> EvaluatedCandidate:
+    score = evaluate(board, profile)
+    return SpeculativeCandidate(
+        lane=lane,
+        prompt=_lane_prompt(prompt, lane, width),
+        response="",
+        proposed=(),
+        accepted=(),
+        receipts=(),
+        hard_after=score.hard,
+        soft_after=score.soft,
+        elapsed_ms=0.0,
+        error="PlacementPolicyError: lane model factory failed",
+        status="error",
+    ), board
+
+
+def _deadline_candidate(
+    board: Board,
+    profile: CompanyProfile,
+    prompt: str,
+    lane: int,
+    width: int,
+    timeout_s: float,
+    *,
+    status: str,
+) -> EvaluatedCandidate:
+    score = evaluate(board, profile)
+    return SpeculativeCandidate(
+        lane=lane,
+        prompt=_lane_prompt(prompt, lane, width),
+        response="",
+        proposed=(),
+        accepted=(),
+        receipts=(),
+        hard_after=score.hard,
+        soft_after=score.soft,
+        elapsed_ms=round(timeout_s * 1000, 3),
+        error=f"TimeoutError: lane {status}",
+        status=status,
+    ), board
+
+
+def _mark_duplicates(
+    evaluated: list[EvaluatedCandidate],
+) -> tuple[EvaluatedCandidate, ...]:
+    first_lane: dict[tuple[PlacementAction, ...], int] = {}
+    marked = []
+    for candidate, board in sorted(evaluated, key=lambda item: item[0].lane):
+        duplicate = first_lane.get(candidate.proposed) if candidate.proposed else None
+        if candidate.proposed and duplicate is None:
+            first_lane[candidate.proposed] = candidate.lane
+        marked.append((replace(candidate, duplicate_of_lane=duplicate), board))
+    return tuple(marked)
+
+
+def _meets_early_target(
+    evaluated: EvaluatedCandidate,
+    target: tuple[float, float],
+) -> bool:
+    candidate, _ = evaluated
+    return bool(candidate.accepted) and candidate.hard_after == 0 and (
+        candidate.hard_after,
+        candidate.soft_after,
+    ) <= target
+
+
 def _candidate_rank(
-    evaluated: tuple[SpeculativeCandidate, Board],
+    evaluated: EvaluatedCandidate,
 ) -> tuple[float, float, int, int]:
     candidate, _ = evaluated
     return (
@@ -391,28 +545,144 @@ def _candidate_rank(
     )
 
 
+def _parallel_candidates(
+    board: Board,
+    profile: CompanyProfile,
+    model_factory: Callable[[], TextModel],
+    prompt: str,
+    width: int,
+    timeout_s: float,
+    early_target: tuple[float, float],
+    early_commit_enabled: bool,
+) -> tuple[tuple[EvaluatedCandidate, ...], EvaluatedCandidate | None]:
+    models: dict[int, TextModel] = {}
+    evaluated: list[EvaluatedCandidate] = []
+    for lane in range(1, width + 1):
+        try:
+            models[lane] = model_factory()
+        except Exception:
+            evaluated.append(
+                _factory_failure_candidate(board, profile, prompt, lane, width)
+            )
+    pool = ThreadPoolExecutor(
+        max_workers=width, thread_name_prefix="placement-lane"
+    )
+    future_lanes: dict[Future, int] = {
+        pool.submit(
+            _candidate,
+            board,
+            profile,
+            models[lane],
+            prompt,
+            lane,
+            width,
+        ): lane
+        for lane in models
+    }
+    pending = set(future_lanes)
+    early_winner = None
+    deadline = time.perf_counter() + timeout_s
+    while pending and early_winner is None:
+        remaining = deadline - time.perf_counter()
+        if remaining <= 0:
+            break
+        done, pending = wait(
+            pending,
+            timeout=remaining,
+            return_when=FIRST_COMPLETED,
+        )
+        if not done:
+            break
+        completed = [future.result() for future in done]
+        evaluated.extend(completed)
+        if early_commit_enabled:
+            eligible = [
+                item for item in completed if _meets_early_target(item, early_target)
+            ]
+            if eligible:
+                early_winner = min(eligible, key=_candidate_rank)
+    status = "cancelled-after-early-commit" if early_winner else "deadline"
+    for future in pending:
+        lane = future_lanes[future]
+        future.cancel()
+        cancel = getattr(models[lane], "cancel", None)
+        if callable(cancel):
+            cancel()
+        evaluated.append(
+            _deadline_candidate(
+                board,
+                profile,
+                prompt,
+                lane,
+                width,
+                timeout_s,
+                status=status,
+            )
+        )
+    pool.shutdown(wait=False, cancel_futures=True)
+    return _mark_duplicates(evaluated), early_winner
+
+
+def _serial_candidates(
+    board: Board,
+    profile: CompanyProfile,
+    model_factory: Callable[[], TextModel],
+    prompt: str,
+    width: int,
+) -> tuple[tuple[EvaluatedCandidate, ...], None]:
+    evaluated = []
+    for lane in range(1, width + 1):
+        try:
+            model = model_factory()
+        except Exception:
+            evaluated.append(
+                _factory_failure_candidate(board, profile, prompt, lane, width)
+            )
+            continue
+        evaluated.append(_candidate(board, profile, model, prompt, lane, width))
+    return _mark_duplicates(evaluated), None
+
+
 def _speculative_step(
     board: Board,
     profile: CompanyProfile,
-    model: TextModel,
+    model_factory: Callable[[], TextModel],
     turn: int,
     proposer: str,
     width: int,
+    timeout_s: float,
+    early_commit_enabled: bool,
+    parallel: bool,
 ) -> tuple[Board, PlacementStep]:
     before = evaluate(board, profile)
-    prompt = placement_prompt(board, profile, turn)
+    oracle_board, suggested = repair(board, profile)
+    prompt = placement_prompt(
+        board,
+        profile,
+        turn,
+        suggested_actions=tuple(suggested),
+    )
+    oracle = evaluate(oracle_board, profile)
+    early_target = (oracle.hard, oracle.soft)
     started = time.perf_counter()
-    with ThreadPoolExecutor(
-        max_workers=width, thread_name_prefix="placement-lane"
-    ) as pool:
-        futures = [
-            pool.submit(_candidate, board, profile, model, prompt, lane, width)
-            for lane in range(1, width + 1)
-        ]
-        evaluated = tuple(future.result() for future in futures)
+    if parallel:
+        evaluated, early_winner = _parallel_candidates(
+            board,
+            profile,
+            model_factory,
+            prompt,
+            width,
+            timeout_s,
+            early_target,
+            early_commit_enabled,
+        )
+    else:
+        evaluated, early_winner = _serial_candidates(
+            board, profile, model_factory, prompt, width
+        )
     wall_ms = round((time.perf_counter() - started) * 1000, 3)
     viable = tuple(item for item in evaluated if item[0].accepted)
-    winner = min(viable, key=_candidate_rank) if viable else None
+    winner = early_winner or (min(viable, key=_candidate_rank) if viable else None)
     representative = winner or min(
         evaluated,
         key=lambda item: (
@@ -423,6 +693,15 @@ def _speculative_step(
     )
     chosen, updated = representative
     after = evaluate(updated, profile)
+    input_tokens = [
+        item[0].input_tokens for item in evaluated if item[0].input_tokens is not None
+    ]
+    output_tokens = [
+        item[0].output_tokens
+        for item in evaluated
+        if item[0].output_tokens is not None
+    ]
+    costs = [item[0].cost_usd for item in evaluated if item[0].cost_usd is not None]
     reason = (
         f"speculative lane {chosen.lane}/{width} committed "
         f"{len(chosen.accepted)}/{len(chosen.proposed)} actions"
@@ -446,6 +725,11 @@ def _speculative_step(
         candidates=tuple(item[0] for item in evaluated),
         winner_lane=chosen.lane if winner else None,
         speculative_wall_ms=wall_ms,
+        early_commit=early_winner is not None,
+        elapsed_ms=wall_ms,
+        input_tokens=sum(input_tokens) if input_tokens else None,
+        output_tokens=sum(output_tokens) if output_tokens else None,
+        cost_usd=sum(costs) if costs else None,
     )
 
 
@@ -494,7 +778,11 @@ def _model_run(
     policy: str,
     proposer: str,
     fallback_model: TextModel | None,
+    lane_model_factory: Callable[[], TextModel],
     speculative_width: int,
+    speculative_timeout_s: float,
+    speculative_early_commit: bool,
+    speculative_parallel: bool,
 ) -> PlacementRun:
     current = board
     steps: list[PlacementStep] = []
@@ -503,10 +791,13 @@ def _model_run(
             current, step = _speculative_step(
                 current,
                 profile,
-                model,
+                lane_model_factory,
                 turn,
                 proposer,
                 speculative_width,
+                speculative_timeout_s,
+                speculative_early_commit,
+                speculative_parallel,
             )
         else:
             current, step = _model_step(current, profile, model, turn, proposer)
