@@ -460,6 +460,51 @@ describe("generateStream", () => {
     const result = await generateStream("http://x", request, () => {});
     expect(result).toEqual({});
   });
+
+  // Greptile P1 on #22. The engine had already sent the board; only the
+  // transport died afterwards. Throwing here reported a finished run as
+  // failed and dropped the board from history, which is the user's one copy.
+  it("keeps a terminal run.done when the stream errors after it", async () => {
+    const encoder = new TextEncoder();
+    const done = { event: "run.done", result: { status: "FEASIBLE" }, t_s: 9 };
+    // Delivered on pull, not enqueued up front: controller.error() discards a
+    // queue, so an eager enqueue would never hand run.done to the consumer and
+    // the test would pass for the wrong reason.
+    const chunks = [line({ event: "run.accepted", t_s: 0 }), line(done)];
+    let sent = 0;
+    const stream = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        if (sent < chunks.length) {
+          controller.enqueue(encoder.encode(chunks[sent++]));
+          return;
+        }
+        controller.error(new Error("connection reset"));
+      },
+    });
+    mockFetch.mockResolvedValueOnce(new Response(stream, { status: 200 }));
+
+    const result = await generateStream("http://x", request, () => {});
+    expect(result).toEqual({ status: "FEASIBLE" });
+  });
+
+  it("still reports a stream error that arrives before any terminal frame", async () => {
+    const encoder = new TextEncoder();
+    let delivered = false;
+    const stream = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        if (!delivered) {
+          delivered = true;
+          controller.enqueue(encoder.encode(line({ event: "run.accepted", t_s: 0 })));
+          return;
+        }
+        controller.error(new Error("connection reset"));
+      },
+    });
+    mockFetch.mockResolvedValueOnce(new Response(stream, { status: 200 }));
+
+    await expect(generateStream("http://x", request, () => {})).rejects.toThrow();
+  });
+
 });
 
 /* ------------------------------------------------------------------ health */

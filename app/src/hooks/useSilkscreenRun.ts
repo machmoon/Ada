@@ -507,6 +507,13 @@ export function useSilkscreenRunState(
     // Set it here as well as in the catch: the reader may take a moment to
     // notice, and the button must stop saying "running" the instant it is hit.
     setStatus("cancelled");
+    // Release the guard for the same reason. The status says idle immediately,
+    // so the next submission is enabled immediately, and a guard still held by
+    // a run the reader has not noticed yet would discard it in silence.
+    // `abortRef` deliberately stays put: it is what tells this run's own catch
+    // and finally that a newer run has taken over, and clearing it here would
+    // cost the cancelled run its elapsed time.
+    inFlightRef.current = false;
   }, []);
 
   const reset = useCallback(() => {

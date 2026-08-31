@@ -171,6 +171,37 @@ describe("useSilkscreenRunState", () => {
     expect(mockGenerateStream).not.toHaveBeenCalled();
   });
 
+  // Greptile P1 on #22. cancel() reports "cancelled" at once so the button
+  // stops saying "running", but the reader takes a beat to notice the abort.
+  // While the guard stayed held, the UI looked idle and accepted a new prompt
+  // that start() then dropped on the floor, with no run and no error.
+  it("accepts a new run submitted immediately after cancel", async () => {
+    const first = arm();
+    const hook = render();
+    act(() => hook.result.current.start({ intent: "first board" }));
+    act(() => first.emit({ event: "run.accepted", t_s: 0 }));
+
+    act(() => hook.result.current.cancel());
+    expect(hook.result.current.status).toBe("cancelled");
+
+    // The first run's reader has NOT rejected yet -- this is the whole window.
+    const second = arm();
+    act(() => hook.result.current.start({ intent: "second board" }));
+
+    expect(mockGenerateStream).toHaveBeenCalledTimes(2);
+    expect(second.request().intent).toBe("second board");
+    expect(hook.result.current.status).toBe("starting");
+    act(() => second.emit({ event: "run.accepted", t_s: 0 }));
+    expect(hook.result.current.status).toBe("running");
+
+    // The abandoned run rejecting late must not disturb the live one.
+    act(() =>
+      first.reject(new SilkscreenError("offline", "Could not reach the engine."))
+    );
+    await waitFor(() => expect(hook.result.current.status).toBe("running"));
+    expect(hook.result.current.error).toBeNull();
+  });
+
   it("cancel aborts the signal and lands on cancelled, not error", async () => {
     const driver = arm();
     const hook = render();
