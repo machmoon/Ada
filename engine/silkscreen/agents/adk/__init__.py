@@ -1,7 +1,7 @@
 """The Google ADK driver for the pipeline stages.
 
 Same stages, same events, a different runner: :mod:`silkscreen.agents.pipeline`
-walks the four stage bodies in a straight line, this package expresses them as
+walks the seven stage bodies in a straight line, this package expresses them as
 an ADK dynamic workflow. Which one runs is chosen by ``generate_pcb(engine=...)``.
 
 Nothing here is imported eagerly. ``google.adk`` ships in the optional ``adk``

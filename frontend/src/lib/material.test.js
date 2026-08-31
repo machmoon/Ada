@@ -52,17 +52,22 @@ describe('material surface contract', () => {
       ['../components/ReviewResults.svelte', /data-testid="review-results-state"[^>]+data-material="panel"/],
       ['../components/BoardWell.svelte', /data-testid="board-well-tip" data-material="popover"/],
       ['../components/SchematicWell.svelte', /class="caption" data-material="panel"/],
+      ['../components/PlacementBoard.svelte', /data-testid="placement-board"[^>]+data-material="panel"/],
+      ['../components/MetricHelp.svelte', /class="tooltip"[^>]+data-material="popover"/],
+      ['../components/PlacementLab.svelte', /class="controls"[^>]+data-material="panel"/],
+      ['../components/PlacementLab.svelte', /class="trace"[^>]+data-material="panel"/],
     ]
 
     for (const [file, pattern] of [...chrome, ...content]) {
       expect(source(file), `${file} is missing its material role`).toMatch(pattern)
     }
 
-    expect(source('../components/ArtifactCards.svelte').match(/data-material="panel"/g)).toHaveLength(3)
+    expect(source('../components/ArtifactCards.svelte').match(/data-material="panel"/g)).toHaveLength(4)
   })
 
   it('marks both drawing wells as intentional canvas exemptions', () => {
     expect(source('../components/BoardWell.svelte')).toMatch(/class="frame" data-material="canvas"/)
     expect(source('../components/SchematicWell.svelte')).toMatch(/class="frame" data-material="canvas"/)
+    expect(source('../components/PlacementBoard.svelte')).toMatch(/class="well" data-material="canvas"/)
   })
 })

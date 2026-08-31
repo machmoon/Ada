@@ -1,6 +1,6 @@
 """The ADK driver, held to the straight-line driver's contract.
 
-:mod:`silkscreen.agents.adk` runs the same four stage bodies as
+:mod:`silkscreen.agents.adk` runs the same seven stage bodies as
 :mod:`silkscreen.agents.pipeline`, through a Google ADK workflow rather than a
 straight line. Nearly every assertion here is one that ``test_agents.py``
 already makes about the SDK driver, because the claim being tested is that a
@@ -385,6 +385,88 @@ def test_both_drivers_build_the_same_board(tmp_path):
 
     assert placement(adk) == placement(sdk)
     assert adk.board.wirelength_nm == sdk.board.wirelength_nm
+
+
+@needs_adk
+def test_integrated_placement_has_sdk_adk_parameter_result_and_event_parity():
+    """The optional verifier stage is the same operation under either driver."""
+    from silkscreen.agents.pipeline import _generate_pcb_sdk
+
+    feedback = {"weights": {"compactness_weight": 1.25}}
+
+    def run(driver):
+        events = []
+        result = driver(
+            ScriptedModel(responses=[json.dumps(GOOD_CIRCUIT)]),
+            "a motor driver",
+            review=False,
+            route=False,
+            time_limit_s=10.0,
+            placement_profile="compact-control",
+            placement_policy="deterministic",
+            placement_feedback=feedback,
+            placement_max_turns=3,
+            on_event=events.append,
+        )
+        return result, events
+
+    sdk, sdk_events = run(_generate_pcb_sdk)
+    adk, adk_events = run(generate_pcb_adk)
+
+    assert sdk.placement is not None and adk.placement is not None
+    assert sdk.placement.applied is sdk.placement.run.completed
+    assert adk.placement.applied is adk.placement.run.completed
+    assert sdk.placement.applied is adk.placement.applied
+    assert sdk.placement.requested_policy == adk.placement.requested_policy
+    assert sdk.placement.run.policy == adk.placement.run.policy == "deterministic"
+    assert sdk.placement.run.profile == adk.placement.run.profile
+
+    def positions(result):
+        return [
+            (part.ref, part.x_nm, part.y_nm, part.rotated)
+            for part in result.board.parts
+        ]
+
+    assert adk.board.size_mm == sdk.board.size_mm
+    assert positions(adk) == positions(sdk)
+
+    def stable(events):
+        return [
+            {
+                key: value
+                for key, value in event.items()
+                if key not in {"t_s", "elapsed_s"}
+            }
+            for event in events
+        ]
+
+    assert stable(adk_events) == stable(sdk_events)
+    assert [
+        e["stage"] for e in adk_events if e["event"] == "stage.start"
+    ] == ["propose", "place", "placement_repair"]
+
+
+@needs_adk
+def test_placement_error_aborts_adk_before_schematic_and_routing(tmp_path):
+    """A verifier configuration error escapes unchanged and stops the graph."""
+    events = []
+    with pytest.raises(ValueError, match="unknown placement profile"):
+        generate_pcb_adk(
+            ScriptedModel(responses=[json.dumps(GOOD_CIRCUIT)]),
+            "a motor driver",
+            output=tmp_path / "board.kicad_pcb",
+            review=False,
+            time_limit_s=10.0,
+            placement_profile="missing-profile",
+            on_event=events.append,
+        )
+
+    assert [e["stage"] for e in events if e["event"] == "stage.start"] == [
+        "propose",
+        "place",
+        "placement_repair",
+    ]
+    assert not list(tmp_path.iterdir())
 
 
 # ---------------------------------------------------------------- failures

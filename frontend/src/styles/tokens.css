@@ -26,16 +26,26 @@
   --rule: light-dark(#B5B5B5, #4A4943);
   --rule-soft: light-dark(#D6D3C8, #34332F);
 
-  /* the board well, from design/Board.dc.html. It is a dark well in both
-     themes — the board is the board — so none of these turn over at night. */
+  /* The board is a fixed dark canvas in both light and dark app themes. */
   --well-bg: #001023;
   --well-text: #5B7291;
+  --board-fill: #19344F;
   --board-grid-dot: #848484;
   --board-edge-cuts: #D0D2CD;
   --board-courtyard: #FF26E2;
   --board-silkscreen: #F2EDA1;
   --board-copper-top: #C83434;
   --board-copper-bottom: #4D7FC4;
+  --board-component-fill: rgba(200, 52, 52, .55);
+  --board-power-fill: rgba(77, 127, 196, .7);
+  --board-keepout-fill: rgba(255, 255, 255, .08);
+
+  /* the guided pointer (docs/guided-cursor.md §5). The halo lands on the
+     paper chrome and on the always-dark board well alike, so it cannot come
+     from the ink ramp — it borrows the courtyard magenta family, deepened
+     for daylight so it reads as an overlay and not a severity. */
+  --guide-ring: light-dark(#A5157E, #FF4FE0);
+  --guide-glow: light-dark(rgba(165, 21, 126, .28), rgba(255, 79, 224, .32));
 
   /* the guided pointer (docs/guided-cursor.md §5). The halo lands on the
      paper chrome and on the always-dark board well alike, so it cannot come
