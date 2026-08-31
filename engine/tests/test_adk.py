@@ -80,7 +80,7 @@ def _chain(exc):
 
 
 @needs_adk
-def test_events_trace_every_stage_and_model_call(tmp_path):
+def test_events_trace_every_stage_and_model_call(tmp_path, offline_pdf_fetch):
     """The same sixteen frames, in the same order, as the SDK driver's stream."""
     model = _scripted_pipeline_model()
     events = []
@@ -95,7 +95,7 @@ def test_events_trace_every_stage_and_model_call(tmp_path):
     )
 
     assert [e["event"] for e in events] == [
-        "stage.start", "read.part", "model.call", "stage.done",
+        "stage.start", "read.part", "read.fetch", "model.call", "stage.done",
         "stage.start", "model.call", "stage.done",
         "stage.start", "stage.done",
         "stage.start", "stage.done",
@@ -111,7 +111,7 @@ def test_events_trace_every_stage_and_model_call(tmp_path):
 
 
 @needs_adk
-def test_both_engines_leave_the_same_files_behind(tmp_path):
+def test_both_engines_leave_the_same_files_behind(tmp_path, offline_pdf_fetch):
     """Parity of artifacts, not only of events.
 
     A driver that emitted the right frames and wrote three of the four files
@@ -146,7 +146,7 @@ def test_both_engines_leave_the_same_files_behind(tmp_path):
 
 
 @needs_adk
-def test_the_event_name_set_is_frozen(tmp_path):
+def test_the_event_name_set_is_frozen(tmp_path, offline_pdf_fetch):
     """The same frozen set the SDK driver is held to, from the other driver.
 
     ``frontend/src/lib/stream.js`` switches on these strings to turn a frame
@@ -164,12 +164,13 @@ def test_the_event_name_set_is_frozen(tmp_path):
                      time_limit_s=10.0, on_event=events.append)
 
     assert {e["event"] for e in events} == {
-        "stage.start", "stage.done", "read.part", "propose.round", "model.call",
+        "stage.start", "stage.done", "read.part", "read.fetch",
+        "propose.round", "model.call",
     }
 
 
 @needs_adk
-def test_events_carry_no_payload(tmp_path):
+def test_events_carry_no_payload(tmp_path, offline_pdf_fetch):
     """No event may carry board text, model output or datasheet text."""
     model = _scripted_pipeline_model()
     events = []
@@ -187,7 +188,7 @@ def test_events_carry_no_payload(tmp_path):
 
 
 @needs_adk
-def test_response_events_carry_each_answer_verbatim(tmp_path):
+def test_response_events_carry_each_answer_verbatim(tmp_path, offline_pdf_fetch):
     """The debug stream, from the other driver, mirroring the SDK suite's test.
 
     ``include_responses`` is threaded from the driver into ``_wire_events`` and
@@ -357,7 +358,7 @@ def test_events_surface_a_provider_failover(tmp_path):
 
 
 @needs_adk
-def test_both_drivers_build_the_same_board(tmp_path):
+def test_both_drivers_build_the_same_board(tmp_path, offline_pdf_fetch):
     """Two drivers, one placement: the graph must not change the answer.
 
     The comparison is the placement itself, part by part, not just the board
@@ -591,7 +592,7 @@ def test_an_unknown_engine_is_a_runtime_error():
 
 
 @needs_adk
-def test_the_adk_engine_is_selectable_by_name(tmp_path):
+def test_the_adk_engine_is_selectable_by_name(tmp_path, offline_pdf_fetch):
     """Everything test_full_pipeline_prompt_to_board asserts, via the dispatcher."""
     out = tmp_path / "board.kicad_pcb"
     result = generate_pcb(_scripted_pipeline_model(), INTENT, datasheets=SHEETS,

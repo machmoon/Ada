@@ -128,6 +128,15 @@ const DESCRIBERS = {
     return `reading ${part || 'a datasheet'}${counter}…`
   },
 
+  // The download is the one step that can stall on someone else's web server,
+  // so it reports separately from the read it belongs to.
+  'read.fetch': (e) => {
+    const part = text(e.part)
+    const bytes = num(e.bytes)
+    const size = bytes === null ? 'the PDF' : `${Math.round(bytes / 1024)} kB`
+    return `${part ? `${part}: ` : ''}downloaded ${size}`
+  },
+
   'propose.round': (e) => {
     const round = num(e.round)
     const which = round === null ? '' : ` round ${round}`
