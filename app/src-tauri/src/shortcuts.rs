@@ -30,28 +30,6 @@ impl Default for RegisteredShortcuts {
     }
 }
 
-pub struct LicenseState {
-    has_active_license: AtomicBool,
-}
-
-impl Default for LicenseState {
-    fn default() -> Self {
-        LicenseState {
-            has_active_license: AtomicBool::new(false),
-        }
-    }
-}
-
-impl LicenseState {
-    pub fn is_active(&self) -> bool {
-        self.has_active_license.load(Ordering::Relaxed)
-    }
-
-    pub fn set_active(&self, active: bool) {
-        self.has_active_license.store(active, Ordering::Relaxed);
-    }
-}
-
 pub(crate) type MoveWindowTask = Arc<AtomicBool>;
 
 pub(crate) struct MoveWindowState {
@@ -107,7 +85,6 @@ pub fn handle_shortcut_action<R: Runtime>(app: &AppHandle<R>, action_id: &str) {
         "move_window_left" => handle_move_window(app, "left"),
         "move_window_right" => handle_move_window(app, "right"),
         "audio_recording" => handle_audio_shortcut(app),
-        "screenshot" => handle_screenshot_shortcut(app),
         "system_audio" => handle_system_audio_shortcut(app),
         custom_action => {
             // Emit custom action event for frontend to handle
@@ -124,17 +101,6 @@ pub fn handle_shortcut_action<R: Runtime>(app: &AppHandle<R>, action_id: &str) {
 }
 
 pub fn start_move_window<R: Runtime>(app: &AppHandle<R>, direction: &str) {
-    {
-        let license_state = app.state::<LicenseState>();
-        if !license_state.is_active() {
-            eprintln!(
-                "Ignoring move_window start for direction '{}' - license inactive",
-                direction
-            );
-            return;
-        }
-    }
-
     let state = app.state::<MoveWindowState>();
     let mut tasks = match state.tasks.lock() {
         Ok(guard) => guard,
@@ -273,16 +239,6 @@ fn handle_audio_shortcut<R: Runtime>(app: &AppHandle<R>) {
     }
 }
 
-/// Handle screenshot shortcut
-fn handle_screenshot_shortcut<R: Runtime>(app: &AppHandle<R>) {
-    if let Some(window) = app.get_webview_window("main") {
-        // Emit event to trigger screenshot - frontend will determine auto/manual mode
-        if let Err(e) = window.emit("trigger-screenshot", json!({})) {
-            eprintln!("Failed to emit screenshot event: {}", e);
-        }
-    }
-}
-
 /// Handle system audio shortcut
 fn handle_system_audio_shortcut<R: Runtime>(app: &AppHandle<R>) {
     if let Some(window) = app.get_webview_window("main") {
@@ -330,19 +286,9 @@ pub fn update_shortcuts<R: Runtime>(
 
     let mut shortcuts_to_register = Vec::new();
 
-    let has_license = {
-        let license_state = app.state::<LicenseState>();
-        license_state.is_active()
-    };
-
     for (action_id, binding) in &config.bindings {
         if binding.enabled && !binding.key.is_empty() {
             if action_id == "move_window" {
-                if !has_license {
-                    eprintln!("Skipping move_window registration - license inactive");
-                    continue;
-                }
-
                 let modifiers = binding.key.trim();
                 if modifiers.is_empty() {
                     continue;
@@ -498,20 +444,6 @@ pub fn validate_shortcut_key(key: String) -> Result<bool, String> {
             Ok(false)
         }
     }
-}
-
-#[tauri::command]
-pub fn set_license_status<R: Runtime>(app: AppHandle<R>, has_license: bool) -> Result<(), String> {
-    {
-        let state = app.state::<LicenseState>();
-        state.set_active(has_license);
-    }
-
-    if !has_license {
-        stop_all_move_windows(&app);
-    }
-
-    Ok(())
 }
 
 /// Tauri command to set app icon visibility in dock/taskbar

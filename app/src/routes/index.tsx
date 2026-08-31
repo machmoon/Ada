@@ -1,21 +1,5 @@
 import { BrowserRouter as Router, Routes, Route } from "react-router-dom";
-import {
-  Dashboard,
-  App,
-  Kaleo,
-  Workbench,
-  Engine,
-  Console,
-  SystemPrompts,
-  ViewChat,
-  Settings,
-  DevSpace,
-  Shortcuts,
-  Audio,
-  Screenshot,
-  Chats,
-  Responses,
-} from "@/pages";
+import { Kaleo, Workbench, Engine, Console, Settings, Shortcuts } from "@/pages";
 import { DashboardLayout } from "@/layouts";
 import { RunProvider } from "@/contexts";
 import {
@@ -36,22 +20,12 @@ export default function AppRoutes() {
       <RunProvider baseUrl={loadEngineBaseUrl()} token={loadEngineToken()}>
       <Routes>
         <Route path="/" element={<Kaleo />} />
-        {/* Pluely's chat bar, kept until the removal pass: */}
-        <Route path="/pluely" element={<App />} />
         <Route element={<DashboardLayout />}>
           <Route path="/workbench" element={<Workbench />} />
           <Route path="/engine" element={<Engine />} />
           <Route path="/console" element={<Console />} />
-          <Route path="/dashboard" element={<Dashboard />} />
-          <Route path="/chats" element={<Chats />} />
-          <Route path="/system-prompts" element={<SystemPrompts />} />
-          <Route path="/chats/view/:conversationId" element={<ViewChat />} />
           <Route path="/shortcuts" element={<Shortcuts />} />
-          <Route path="/screenshot" element={<Screenshot />} />
           <Route path="/settings" element={<Settings />} />
-          <Route path="/audio" element={<Audio />} />
-          <Route path="/responses" element={<Responses />} />
-          <Route path="/dev-space" element={<DevSpace />} />
         </Route>
       </Routes>
       </RunProvider>

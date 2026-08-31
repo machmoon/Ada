@@ -1,15 +1,6 @@
-export { default as Dashboard } from "./dashboard";
 export { default as Kaleo } from "./kaleo";
 export { default as Workbench } from "./workbench";
 export { default as Engine } from "./engine";
 export { default as Console } from "./console";
-export { default as Chats } from "./chats";
-export { default as ViewChat } from "./chats/components/View";
-export { default as App } from "./app";
-export { default as SystemPrompts } from "./system-prompts";
 export { default as Settings } from "./settings";
-export { default as DevSpace } from "./dev";
 export { default as Shortcuts } from "./shortcuts";
-export { default as Audio } from "./audio";
-export { default as Screenshot } from "./screenshot";
-export { default as Responses } from "./responses";
