@@ -134,6 +134,7 @@ def enclosure(node_input: str) -> str:
             run.board,
             enclosure=run.enclosure,
             enclosure_style=run.enclosure_style,
+            rigorous=run.enclosure_rigorous,
             output=run.output,
             emit_stages=run.emit_stages,
             emit=run.emit,

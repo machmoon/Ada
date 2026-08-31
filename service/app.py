@@ -827,6 +827,9 @@ def generate(
             "'enclosure_style' must be at most "
             f"{MAX_ENCLOSURE_STYLE_CHARS} characters"
         )
+    enclosure_rigorous = payload.get("enclosure_rigorous", False)
+    if not isinstance(enclosure_rigorous, bool):
+        raise ValueError("'enclosure_rigorous' must be a boolean")
 
     datasheets = payload.get("datasheets") or {}
     if not isinstance(datasheets, dict):
@@ -904,7 +907,12 @@ def generate(
     # with the exact call it always made (and both drivers stay
     # event-identical by default, per the plan).
     enclosure_kwargs: dict[str, Any] = (
-        {"enclosure": True, "enclosure_style": enclosure_style.strip()}
+        {
+            "enclosure": True,
+            "enclosure_style": enclosure_style.strip(),
+            # Fast by default; the strict repair loop is the caller's opt-in.
+            "enclosure_rigorous": enclosure_rigorous,
+        }
         if enclosure_requested
         else {}
     )

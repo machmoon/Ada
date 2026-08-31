@@ -72,6 +72,9 @@ export function normalizeRequest(request) {
     ...(request.enclosure === true
       ? {
           enclosure: true,
+          // Rigorous fit checking is a second opt-in on top of the case itself:
+          // absent means the service's fast default, so false is never sent.
+          ...(request.enclosure_rigorous === true ? { enclosure_rigorous: true } : {}),
           ...(String(request.enclosure_style ?? '').trim()
             ? {
                 enclosure_style: String(request.enclosure_style ?? '')

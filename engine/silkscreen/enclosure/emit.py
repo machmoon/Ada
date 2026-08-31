@@ -23,6 +23,7 @@ from the envelope, and the spec only chooses style within bounds.
 
 from __future__ import annotations
 
+from ..packing import Layer
 from ..units import mm, to_mm
 from .board_shape import BoardEnvelope, PartExtent, find_part
 from .errors import CutoutError
@@ -48,6 +49,15 @@ LABEL_EMBOSS_NM: int = mm(0.6)
 LABEL_TEXT_SIZE_NM: int = mm(6.0)
 #: Overshoot used so difference() faces never coincide exactly.
 EPS_NM: int = mm(0.01)
+
+# Demo-scene colours (RGB[A] 0..1, fixed literals so emission stays
+# byte-stable). The board is a mock-up for the assembly() view only -- it is
+# never part of a printable solid.
+PCB_GREEN: str = "[0.000, 0.450, 0.200]"
+PART_GREY: str = "[0.280, 0.280, 0.300]"
+PART_GOLD: str = "[0.830, 0.690, 0.220]"
+CASE_GREY: str = "[0.550, 0.570, 0.600]"
+LID_GLASS: str = "[0.550, 0.570, 0.600, 0.350]"
 
 
 def _f(value_nm: int) -> str:
@@ -241,6 +251,81 @@ def _vent_lines(d: dict[str, int], through_nm: int) -> list[str]:
     return lines
 
 
+def _board_lines(
+    spec: EnclosureSpec, envelope: BoardEnvelope, d: dict[str, int]
+) -> list[str]:
+    """The ``board()`` demo module: green substrate slab plus one box per
+    part, positioned exactly where the board sits in the cavity (on the
+    standoffs when present). Display-only -- never unioned into a print."""
+    slab_x = spec.wall_nm + spec.clearance_nm  # == _sx(envelope.x_min_nm)
+    slab_y = _sy(envelope.y_max_nm, spec, envelope)
+    slab_z = spec.wall_nm + d["standoff_h"]  # board bottom face
+    top_z = slab_z + envelope.thickness_nm  # board top face
+    top_parts = [p for p in envelope.parts if p.side is Layer.TOP]
+    tallest = max(top_parts, key=lambda p: p.height_nm, default=None)
+    lines = [
+        "// The populated PCB, seated in the cavity: display-only demo",
+        "// geometry for assembly(), never part of a printable solid.",
+        "module board() {",
+        "    // substrate: envelope outline bbox x board thickness",
+        f"    color({PCB_GREEN})",
+        f"        translate([{_f(slab_x)}, {_f(slab_y)}, {_f(slab_z)}])",
+        f"            cube([{_f(d['board_x'])}, {_f(d['board_y'])}, "
+        f"{_f(d['board_z'])}]);",
+    ]
+    for part in envelope.parts:
+        if part.height_nm <= 0:
+            continue
+        side = "top" if part.side is Layer.TOP else "bottom"
+        colour = PART_GOLD if part is tallest else PART_GREY
+        x_lo = _sx(part.x_min_nm, spec, envelope)
+        y_lo = _sy(part.y_max_nm, spec, envelope)  # KiCad y_max -> smaller Y
+        size_x = part.x_max_nm - part.x_min_nm
+        size_y = part.y_max_nm - part.y_min_nm
+        z_lo = top_z if part.side is Layer.TOP else slab_z - part.height_nm
+        lines += [
+            f"    // part {part.ref} side={side} h={_f(part.height_nm)}",
+            f"    color({colour})",
+            f"        translate([{_f(x_lo)}, {_f(y_lo)}, {_f(z_lo)}])",
+            f"            cube([{_f(size_x)}, {_f(size_y)}, "
+            f"{_f(part.height_nm)}]);",
+        ]
+    lines += ["}", ""]
+    return lines
+
+
+def _assembly_lines(spec: EnclosureSpec, d: dict[str, int]) -> list[str]:
+    """The ``assembly()`` demo scene: base in the case colour, board seated
+    inside, lid exploded ~1.5x the case height above and translucent."""
+    lift = (3 * d["base_z"]) // 2
+    lines = [
+        "module assembly() {",
+        f"    color({CASE_GREY}) base();",
+        "    board();",
+    ]
+    if spec.lid == "none":
+        lines.append("    // lid style \"none\": nothing to explode")
+    elif spec.lid == "friction":
+        # Exploded in assembly orientation: lip-down, hovering above the
+        # cavity. rotate([180,0,0]) maps (y,z) -> (-y,-z), so the translate
+        # restores the footprint and puts the lid's lowest point at `lift`.
+        drop = d["lid_z"] + LIP_HEIGHT_NM  # plate + lip below the pivot
+        lines += [
+            "    // lid exploded above the base, translucent, lip-down",
+            f"    color({LID_GLASS})",
+            f"        translate([0, {_f(d['outer_y'])}, {_f(lift + drop)}])",
+            "            rotate([180, 0, 0]) lid();",
+        ]
+    else:
+        lines += [
+            "    // lid exploded above the base, translucent",
+            f"    color({LID_GLASS})",
+            f"        translate([0, 0, {_f(lift)}]) lid();",
+        ]
+    lines += ["}", ""]
+    return lines
+
+
 def emit_scad(spec: EnclosureSpec, envelope: BoardEnvelope) -> str:
     """Emit the complete enclosure as OpenSCAD source. Deterministic."""
     d = _dims(spec, envelope)
@@ -370,10 +455,15 @@ def emit_scad(spec: EnclosureSpec, envelope: BoardEnvelope) -> str:
                 ]
     lines += ["}", ""]
 
-    lines.append("base();")
-    if spec.lid != "none":
-        lines.append(
-            f"translate([{_f(d['outer_x'] + mm(5.0))}, 0, 0]) lid();"
-        )
-    lines.append("")
+    lines += _board_lines(spec, envelope, d)
+    lines += _assembly_lines(spec, d)
+
+    lines += [
+        "// Default scene: assembly() -- the demo view, with the board seated",
+        "// inside the base and the lid exploded above it, translucent.",
+        "// To render printable parts, call base() or lid() alone instead",
+        "// (e.g. comment out assembly() below, or use `openscad -D`).",
+        "assembly();",
+        "",
+    ]
     return "\n".join(lines)

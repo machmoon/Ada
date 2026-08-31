@@ -62,9 +62,18 @@
       </div>
       <div class="actions">
         <button type="button" onclick={copy} data-testid="case-copy">{copyLabel}</button>
-        <button type="button" onclick={save} data-testid="case-download">Download {SCAD_FILENAME}</button>
+        <button type="button" class="primary" onclick={save} data-testid="case-download">Download {SCAD_FILENAME}</button>
       </div>
     </header>
+
+    <div class="hint" data-material="panel" data-testid="case-hint">
+      <span class="lbl">see it in 3d</span>
+      <p>
+        Download <code>{SCAD_FILENAME}</code> and open it in OpenSCAD — the
+        default scene shows the board seated in the case with the lid exploded
+        above.
+      </p>
+    </div>
 
     {#if enclosure.margins}
       <div class="receipt" data-material="panel" data-testid="case-fit" data-clean={!collides}>
@@ -155,6 +164,22 @@
   .actions { display: flex; gap: 8px; }
   .actions button { min-height: 38px; padding: 0 12px; border: 1px solid var(--rule); background: var(--surface); color: var(--ink-mid); white-space: nowrap; }
   .actions button:hover { color: var(--ink); }
+  .actions button.primary {
+    background: var(--accent);
+    color: var(--accent-ink);
+    border: none;
+    border-radius: var(--radius);
+    font-weight: 500;
+  }
+  .actions button.primary:hover { color: var(--accent-ink); }
+
+  .hint {
+    margin-bottom: 14px;
+    padding: 12px 14px;
+    border: 1px solid var(--rule);
+    background: var(--surface);
+  }
+  .hint p { margin-top: 6px; color: var(--ink-mid); line-height: 1.5; max-width: 70ch; }
 
   .receipt { display: flex; align-items: center; gap: 18px; padding: 10px 13px; border: 1px solid var(--rule-soft); background: var(--surface); color: var(--ink-mid); font-size: var(--fs-ui); flex-wrap: wrap; }
   .margin b { color: var(--green); font-weight: 600; }

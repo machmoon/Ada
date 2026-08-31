@@ -65,6 +65,10 @@ def _case_main(argv: list[str]) -> int:
     parser.add_argument("--no-model", action="store_true",
                         help="emit the deterministic default case with no "
                              "model call (fully offline)")
+    parser.add_argument("--rigorous", action="store_true",
+                        help="run the full strict verify-and-repair loop "
+                             "(slower); default is demo-fast, where a fit "
+                             "failure rides the receipt as a warning")
     args = parser.parse_args(argv)
 
     from .enclosure.board_shape import board_envelope
@@ -107,7 +111,7 @@ def _case_main(argv: list[str]) -> int:
         try:
             # The loop's accepted FitReport is the receipt; no re-verification.
             spec, fit, repair_rounds = propose_enclosure(
-                model, envelope, style_hint=args.intent
+                model, envelope, style_hint=args.intent, rigorous=args.rigorous
             )
         except Exception as exc:
             print(f"error: {exc}", file=sys.stderr)
@@ -192,6 +196,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--case-style", default="", metavar="TEXT",
                         help="natural-language case intent, e.g. "
                              "'rounded corners, USB cutout left'")
+    parser.add_argument("--rigorous", action="store_true",
+                        help="with --case: run the case proposal's full "
+                             "strict verify-and-repair loop (slower); "
+                             "default is demo-fast, where a fit failure "
+                             "rides the receipt as a warning")
     args = parser.parse_args(argv)
 
     _load_dotenv(Path.cwd() / ".env")
@@ -215,7 +224,11 @@ def main(argv: list[str] | None = None) -> int:
     # Opt-in only, so a run without --case makes the exact call it always
     # made (the plan's both-drivers-identical-by-default rule).
     case_kwargs = (
-        {"enclosure": True, "enclosure_style": args.case_style}
+        {
+            "enclosure": True,
+            "enclosure_style": args.case_style,
+            "enclosure_rigorous": args.rigorous,
+        }
         if args.case
         else {}
     )

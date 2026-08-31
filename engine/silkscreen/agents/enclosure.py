@@ -2,10 +2,16 @@
 
 The :mod:`silkscreen.agents.propose` loop, applied to 3D: the model's output
 goes through :func:`silkscreen.enclosure.ir.parse_enclosure_spec` and then
-:func:`silkscreen.enclosure.verify.verify_fit` with ``strict=True``, and every
+:func:`silkscreen.enclosure.verify.verify_fit`. How hard the loop pushes back
+is the ``rigorous`` flag's call. The **fast default** (``rigorous=False``,
+demo speed) repairs only JSON/spec validation failures, allows one repair
+round, and runs ``verify_fit(strict=False)`` purely for the receipt -- a fit
+failure is downgraded to a warning on the returned report and the artifact
+still ships. **Rigorous mode** (``rigorous=True``) is the strict loop: every
 failure -- JSON shape, unprintable wall, a cutout naming a part the board does
-not have, a fit warning -- is batched back as a single repair prompt. The loop
-is bounded and gives up loudly with :class:`EnclosureProposalError`.
+not have, a fit warning -- is batched back as a single repair prompt over
+three repair rounds, and a hard fit failure blocks. The loop is bounded and
+gives up loudly with :class:`EnclosureProposalError`.
 
 The model never receives or invents a raw dimension to transcribe (plan
 decision 3): the prompt carries the *measured* board facts -- outline size,
@@ -41,6 +47,12 @@ __all__ = ["ENCLOSURE_PROMPT", "EnclosureProposalError", "propose_enclosure"]
 #: A part whose courtyard sits within this of a board edge is offered to the
 #: model as a cutout candidate on that face.
 _EDGE_NEAR_NM: int = mm(3.0)
+
+#: Repair budgets per mode, applied when the caller does not pass
+#: ``max_repairs`` explicitly: fast mode gets one round (speed over rigor,
+#: by default), rigorous mode keeps the strict loop's three.
+_FAST_MAX_REPAIRS: int = 1
+_RIGOROUS_MAX_REPAIRS: int = 3
 
 
 class EnclosureProposalError(EnclosureError):
@@ -134,15 +146,42 @@ def _near_faces(part: PartExtent, envelope: BoardEnvelope) -> list[str]:
     return faces
 
 
+def _degraded_report(
+    spec: EnclosureSpec, envelope: BoardEnvelope, exc: EnclosureError
+) -> FitReport:
+    """The honest receipt for a fast-mode spec whose fit check failed.
+
+    Fast mode ships the artifact anyway (speed over rigor, by default), so the
+    failure must ride the report rather than vanish: the first warning names
+    it. A :class:`CavityFitError` carries its signed margins and they are kept;
+    other failures have none to report. ``params_mm`` mirrors what the emitter
+    will write, best-effort -- a spec broken enough that even the parameter
+    dump raises still gets its warning.
+    """
+    from ..enclosure.emit import scad_params
+
+    margins = dict(getattr(exc, "margins_nm", None) or {})
+    try:
+        params = scad_params(spec, envelope)
+    except EnclosureError:
+        params = {}
+    return FitReport(
+        margins_nm=margins,
+        warnings=(f"fit verification failed: {exc}",),
+        params_mm=params,
+    )
+
+
 def propose_enclosure(
     model: Model,
     envelope: BoardEnvelope,
     *,
     style_hint: str = "",
-    max_repairs: int = 3,
+    rigorous: bool = False,
+    max_repairs: int | None = None,
     on_event: Callable[[dict[str, Any]], None] | None = None,
 ) -> tuple[EnclosureSpec, FitReport, int]:
-    """Ask for an enclosure spec and repair it until it validates AND fits.
+    """Ask for an enclosure spec and repair it until it validates.
 
     Returns ``(spec, fit, repair_rounds)``. ``fit`` is the
     :class:`~silkscreen.enclosure.verify.FitReport` the accepting round
@@ -151,23 +190,40 @@ def propose_enclosure(
     the model needed -- is a genuinely useful quality signal, mirrored into
     the ``stage.done`` event.
 
-    Each round runs :func:`parse_enclosure_spec` and then
-    :func:`verify_fit(strict=True) <silkscreen.enclosure.verify.verify_fit>`,
-    so fit failures and spec-fixable fit *warnings* feed the repair loop
-    rather than shipping silently. Warnings the model cannot fix -- a
-    defaulted part height is measured from the board, not chosen by the spec
-    -- stay on the returned report's ``warnings`` instead of burning repair
-    rounds. ``on_event`` receives one ``enclosure.round`` event per rejected
-    round.
+    ``rigorous`` selects how much the loop pushes back; **fast is the
+    default** because a demo wants its ``.scad`` now:
+
+    * ``rigorous=False`` (fast): only :func:`parse_enclosure_spec` failures
+      feed the repair loop, with a budget of one repair round unless
+      ``max_repairs`` says otherwise. ``verify_fit(strict=False)`` still runs
+      -- the receipt is never skipped -- but it can neither block nor trigger
+      a repair: a hard fit failure (:class:`CavityFitError` included) is
+      downgraded to a ``"fit verification failed: ..."`` warning on the
+      returned report, and the spec is accepted so the artifact ships. The
+      receipt stays honest -- it says the fit failed -- but the demo gets its
+      case.
+    * ``rigorous=True``: the strict loop. Each round runs
+      :func:`verify_fit(strict=True)
+      <silkscreen.enclosure.verify.verify_fit>`, so fit failures and
+      spec-fixable fit *warnings* feed the repair loop rather than shipping
+      silently, over three repair rounds unless ``max_repairs`` says
+      otherwise. Warnings the model cannot fix -- a defaulted part height is
+      measured from the board, not chosen by the spec -- stay on the returned
+      report's ``warnings`` instead of burning repair rounds.
+
+    ``on_event`` receives one ``enclosure.round`` event per rejected round.
 
     Raises:
         EnclosureProposalError: the model answered, but never with a spec that
-            validated and fit, within the budget. Carries ``attempts``.
+            validated (and, in rigorous mode, fit) within the budget. Carries
+            ``attempts``.
         ModelError: the model could not be reached at all. Deliberately not
             wrapped -- an upstream outage is a different condition from a bad
             proposal, and callers route them differently (the
             :func:`~silkscreen.agents.propose.propose_circuit` convention).
     """
+    if max_repairs is None:
+        max_repairs = _RIGOROUS_MAX_REPAIRS if rigorous else _FAST_MAX_REPAIRS
     facts = _facts_block(envelope)
     hint = f"\nStyle the user asked for:\n{style_hint}\n" if style_hint else ""
     prompt = f"{ENCLOSURE_PROMPT}\n{hint}\nBoard facts:\n{facts}\n"
@@ -184,6 +240,16 @@ def propose_enclosure(
         except EnclosureValidationError as exc:
             errors = list(exc.errors)
         else:
+            if not rigorous:
+                # Fast mode: the receipt is produced but never enforced. A
+                # hard fit failure is downgraded to a warning on the report,
+                # and the spec is accepted as-is -- the artifact ships either
+                # way.
+                try:
+                    fit = verify_fit(spec, envelope, strict=False)
+                except (CavityFitError, CutoutError, WallError) as exc:
+                    fit = _degraded_report(spec, envelope, exc)
+                return spec, fit, round_no
             try:
                 fit = verify_fit(spec, envelope, strict=True)
             except EnclosureValidationError as exc:

@@ -376,6 +376,7 @@ def enclosure_stage(
     *,
     enclosure: bool,
     enclosure_style: str,
+    rigorous: bool = False,
     output: str | Path | None,
     emit_stages: bool,
     emit: Emit,
@@ -392,6 +393,11 @@ def enclosure_stage(
     it back through :func:`~silkscreen.enclosure.board_shape.board_envelope`
     -- the envelope is derived from ``.kicad_pcb`` text, the same artifact the
     caller receives, not from in-memory state the file might not carry.
+
+    ``rigorous`` selects the proposal loop's temperament (default fast: one
+    repair round, fit failures downgraded to warnings on the receipt;
+    ``True`` restores the strict verify-and-repair loop -- see
+    :func:`~silkscreen.agents.enclosure.propose_enclosure`).
 
     ``enclosure.scad`` is written beside the project only when ``output`` is
     set and ``emit_stages`` is on (the ``schematic_stage`` filesystem rule --
@@ -416,13 +422,15 @@ def enclosure_stage(
         with tempfile.TemporaryDirectory(prefix="silkscreen-enclosure-") as tmp:
             measured = write_board(board, Path(tmp) / "board.kicad_pcb")
             envelope = board_envelope(measured)
-        # The loop verified every accepted spec with strict=True; the report
-        # it returns is the receipt, board-derived warnings included, so the
-        # stage never re-verifies what was already verified.
+        # The loop's report is the receipt, board-derived warnings included,
+        # so the stage never re-verifies what was already verified. Fast mode
+        # (the default) never lets a fit failure block; ``rigorous`` restores
+        # the strict repair loop.
         spec, fit, repair_rounds = propose_enclosure(
             agent_model,
             envelope,
             style_hint=enclosure_style,
+            rigorous=rigorous,
             on_event=emit,
         )
         scad = emit_scad(spec, envelope)

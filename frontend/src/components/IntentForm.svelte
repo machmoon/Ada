@@ -57,7 +57,13 @@
   let noSolverBudget = $state(seed.no_solver_budget !== false)
   let review = $state(seed.review !== false)
   let ground = $state(seed.ground === true)
-  let enclosure = $state(seed.enclosure === true)
+  // Demo-first default: a fresh form ships with the case on. A restored or
+  // edited request keeps whatever it actually said — an explicit false (or a
+  // normalized request that omitted the key, which is how "off" is sent) stays
+  // off rather than being silently re-enabled.
+  // svelte-ignore state_referenced_locally
+  let enclosure = $state(initial ? seed.enclosure === true : true)
+  let enclosureRigorous = $state(seed.enclosure_rigorous === true)
   let enclosureStyle = $state(seed.enclosure_style ?? '')
   // Seeded once with the rest of the editable form state.
   // svelte-ignore state_referenced_locally
@@ -93,6 +99,7 @@
     review,
     ground: ground && hasDatasheets,
     enclosure,
+    enclosure_rigorous: enclosureRigorous,
     enclosure_style: enclosureStyle,
     placement_enabled: placementEnabled,
     placement_profile: placementProfile,
@@ -601,6 +608,14 @@
     </label>
 
     {#if enclosure}
+      <label
+        class="control checkbox rigorous"
+        title="Run the slower, exhaustive fit verification instead of the fast demo checks"
+      >
+        <input type="checkbox" bind:checked={enclosureRigorous} data-testid="intent-form-enclosure-rigorous" />
+        <span>rigorous fit checks (slower)</span>
+      </label>
+
       <label class="control case-style" title="Free-text styling for the case; left empty, the model chooses">
         <span class="lbl">case style</span>
         <input
@@ -769,6 +784,7 @@
   .control { display: flex; align-items: center; gap: 8px; }
   .checkbox { font-size: var(--fs-ui); color: var(--ink-mid); cursor: pointer; }
   .checkbox.off { color: var(--ink-faint); cursor: default; }
+  .rigorous { font-size: var(--fs-mono-sm); color: var(--ink-soft); }
   .unit { font-size: var(--fs-ui); color: var(--ink-soft); }
 
   .budget {

@@ -76,6 +76,7 @@ class _RunContext:
     placement_max_turns: int
     enclosure: bool = False
     enclosure_style: str = ""
+    enclosure_rigorous: bool = False
     facts: list[PartFacts] = field(default_factory=list)
     spec: CircuitSpec | None = None
     attempts: list[ProposalAttempt] = field(default_factory=list)
@@ -233,6 +234,7 @@ def generate_pcb_adk(
     placement_max_turns: int = 8,
     enclosure: bool = False,
     enclosure_style: str = "",
+    enclosure_rigorous: bool = False,
 ) -> PipelineResult:
     """Run the stages as an ADK workflow. See :func:`silkscreen.agents.generate_pcb`.
 
@@ -271,6 +273,7 @@ def generate_pcb_adk(
         placement_max_turns=placement_max_turns,
         enclosure=enclosure,
         enclosure_style=enclosure_style,
+        enclosure_rigorous=enclosure_rigorous,
     )
     token = secrets.token_hex(8)
     _RUNS[token] = run

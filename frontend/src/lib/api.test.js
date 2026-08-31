@@ -269,6 +269,35 @@ describe('normalizeRequest', () => {
     expect(request.enclosure_style).toHaveLength(500)
   })
 
+  it('forwards rigorous fit checks only alongside the enclosure opt-in', () => {
+    const request = normalizeRequest({ enclosure: true, enclosure_rigorous: true })
+
+    expect(request.enclosure_rigorous).toBe(true)
+    expect(normalizeRequest({ enclosure_rigorous: true })).not.toHaveProperty(
+      'enclosure_rigorous',
+    )
+    expect(
+      normalizeRequest({ enclosure: false, enclosure_rigorous: true }),
+    ).not.toHaveProperty('enclosure_rigorous')
+  })
+
+  it('omits rigorous fit checks entirely rather than sending false, which claims nothing', () => {
+    expect(normalizeRequest({ enclosure: true })).not.toHaveProperty('enclosure_rigorous')
+    expect(
+      normalizeRequest({ enclosure: true, enclosure_rigorous: false }),
+    ).not.toHaveProperty('enclosure_rigorous')
+    expect(
+      normalizeRequest({ enclosure: true, enclosure_rigorous: 'yes' }),
+    ).not.toHaveProperty('enclosure_rigorous')
+  })
+
+  it('keeps rigorous fit checks stable through renormalization, so retry and restore cannot drop them', () => {
+    const first = normalizeRequest({ intent: 'a board', enclosure: true, enclosure_rigorous: true })
+    const again = normalizeRequest(first)
+
+    expect(again.enclosure_rigorous).toBe(true)
+  })
+
   it('keeps the enclosure opt-in stable through renormalization, so retry and restore cannot drop it', () => {
     const first = normalizeRequest({
       intent: 'a board',

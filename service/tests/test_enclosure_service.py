@@ -69,6 +69,7 @@ def _stub_pipeline(monkeypatch, enclosure, seen=None, events=()):
     def fake(model, intent, **kw):
         kw.pop("enclosure", None)
         kw.pop("enclosure_style", None)
+        kw.pop("enclosure_rigorous", None)
         if seen is not None:
             seen.update(kw)
         on_event = kw.get("on_event")
@@ -115,6 +116,7 @@ def test_enclosure_kwargs_reach_the_pipeline(monkeypatch, server):
     def fake(model, intent, **kw):
         seen["enclosure"] = kw.pop("enclosure", None)
         seen["enclosure_style"] = kw.pop("enclosure_style", None)
+        seen["enclosure_rigorous"] = kw.pop("enclosure_rigorous", None)
         return _WithEnclosure(real(model, intent, **kw), _success_enclosure())
 
     monkeypatch.setattr(app, "generate_pcb", fake)
@@ -124,6 +126,14 @@ def test_enclosure_kwargs_reach_the_pipeline(monkeypatch, server):
     assert status == 200
     assert seen["enclosure"] is True
     assert seen["enclosure_style"] == "usb left"
+    # Fast is the wire default: rigor is the caller's opt-in.
+    assert seen["enclosure_rigorous"] is False
+
+    status, _ = post(
+        server, {**REQUEST, "enclosure": True, "enclosure_rigorous": True}
+    )
+    assert status == 200
+    assert seen["enclosure_rigorous"] is True
 
 
 def test_enclosure_failure_degrades_to_null_plus_warning(monkeypatch, server):
@@ -153,6 +163,7 @@ def test_without_opt_in_the_response_is_unchanged(monkeypatch, server):
     assert "enclosure" not in body
     assert "enclosure" not in seen
     assert "enclosure_style" not in seen
+    assert "enclosure_rigorous" not in seen
 
 
 def test_enclosure_must_be_a_boolean(monkeypatch, server):
@@ -165,6 +176,21 @@ def test_enclosure_must_be_a_boolean(monkeypatch, server):
     status, body = post(server, {**REQUEST, "enclosure": "yes"})
     assert status == 400
     assert "'enclosure'" in body["error"]
+
+
+def test_enclosure_rigorous_must_be_a_boolean(monkeypatch, server):
+    """The known-issue-10 taxonomy: a field-level 400, before the pipeline."""
+    import service.app as app
+
+    def untouched(*a, **kw):  # pragma: no cover - only fires on regression
+        raise AssertionError("a field-level 400 must not run the pipeline")
+
+    monkeypatch.setattr(app, "generate_pcb", untouched)
+    status, body = post(
+        server, {**REQUEST, "enclosure": True, "enclosure_rigorous": "yes"}
+    )
+    assert status == 400
+    assert "'enclosure_rigorous'" in body["error"]
 
 
 def test_enclosure_style_must_be_a_string(monkeypatch, server):

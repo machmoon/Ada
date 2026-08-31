@@ -226,6 +226,8 @@ def test_named_modules_and_parameter_header_are_present():
     assert "module base()" in scad
     assert "module lid()" in scad
     assert "module standoffs()" in scad
+    assert "module board()" in scad
+    assert "module assembly()" in scad
     for name in ("board_x", "board_y", "wall", "clearance", "cavity_x",
                  "cavity_y", "cavity_z", "outer_x", "outer_y"):
         assert re.search(rf"^{name} = -?\d+\.\d+;$", scad, re.M), name
@@ -275,6 +277,145 @@ def test_label_text_is_escaped():
     assert 'text("rev \\"A\\" \\\\ test"' in scad
 
 
+# ----------------------------------------------- demo scene: board + assembly
+
+# One coloured box: "color([...])" then a translate line then a cube line --
+# the shape of every solid in the board() demo module.
+_COLOR_CUBE = re.compile(
+    r"color\((\[[^\]]+\])\)\s*\n\s*"
+    r"translate\(\[(-?\d+\.\d+), (-?\d+\.\d+), (-?\d+\.\d+)\]\)\s*\n\s*"
+    r"cube\(\[(-?\d+\.\d+), (-?\d+\.\d+), (-?\d+\.\d+)\]\);"
+)
+
+
+def _boxes(board: str) -> list[tuple[str, tuple[float, ...], tuple[float, ...]]]:
+    return [
+        (
+            m.group(1),
+            tuple(float(m.group(i)) for i in (2, 3, 4)),
+            tuple(float(m.group(i)) for i in (5, 6, 7)),
+        )
+        for m in _COLOR_CUBE.finditer(board)
+    ]
+
+
+def test_board_slab_is_a_green_box_of_bbox_times_thickness():
+    board = _board_module(emit_scad(make_spec(), make_envelope()))
+    colour, pos, dims = _boxes(board)[0]
+    # PCB green, with an RGB triple (no alpha: the slab is opaque).
+    assert colour.count(",") == 2 and colour == "[0.000, 0.450, 0.200]"
+    # Inline math from the raw literals: the slab sits wall+clearance in
+    # from the outer box and directly on the floor (standoffs off).
+    assert pos[0] == pytest.approx(WALL + CLEARANCE, abs=1e-3)
+    assert pos[1] == pytest.approx(WALL + CLEARANCE, abs=1e-3)
+    assert pos[2] == pytest.approx(WALL, abs=1e-3)
+    assert dims[0] == pytest.approx(BOARD["x1"] - BOARD["x0"], abs=1e-3)
+    assert dims[1] == pytest.approx(BOARD["y1"] - BOARD["y0"], abs=1e-3)
+    assert dims[2] == pytest.approx(BOARD["thickness"], abs=1e-3)
+
+
+def test_board_parts_sit_on_the_slab_at_courtyard_coords():
+    board = _board_module(emit_scad(make_spec(), make_envelope()))
+    boxes = _boxes(board)
+    assert len(boxes) == 3  # slab + J1 + U1, in envelope order
+    assert "// part J1 side=top" in board
+    assert "// part U1 side=top" in board
+    j1_colour, j1_pos, j1_dims = boxes[1]
+    u1_colour, u1_pos, u1_dims = boxes[2]
+    # J1 is the tallest part -> gold; U1 -> dark grey. Both opaque RGB.
+    assert j1_colour != u1_colour
+    assert j1_colour.count(",") == 2 and u1_colour.count(",") == 2
+    slab_top = WALL + BOARD["thickness"]  # standoffs off
+    # Inline frame math (same as the cutout test): x = wall + c + kicad_x,
+    # y = wall + c + (board_y1 - kicad_y_max), both parts seated on the slab.
+    assert j1_pos == pytest.approx(
+        (WALL + CLEARANCE + J1["x0"],
+         WALL + CLEARANCE + (BOARD["y1"] - J1["y1"]),
+         slab_top), abs=1e-3,
+    )
+    assert j1_dims == pytest.approx(
+        (J1["x1"] - J1["x0"], J1["y1"] - J1["y0"], J1["h"]), abs=1e-3
+    )
+    assert u1_pos == pytest.approx(
+        (WALL + CLEARANCE + U1["x0"],
+         WALL + CLEARANCE + (BOARD["y1"] - U1["y1"]),
+         slab_top), abs=1e-3,
+    )
+    assert u1_dims == pytest.approx(
+        (U1["x1"] - U1["x0"], U1["y1"] - U1["y0"], U1["h"]), abs=1e-3
+    )
+
+
+def test_board_bottom_part_hangs_below_the_slab():
+    envelope = make_envelope(extra_parts=(_bottom_part(),))
+    scad = emit_scad(make_spec(standoffs=True), envelope)
+    board = _board_module(scad)
+    assert "// part C9 side=bottom" in board
+    boxes = _boxes(board)
+    slab_pos = boxes[0][1]
+    _, c9_pos, c9_dims = boxes[3]
+    # Standoffs on: the slab is raised by the emitted standoff height, and
+    # the bottom part's top face coincides with the slab's bottom face.
+    gap = read_params(scad)["standoff_h"]
+    assert slab_pos[2] == pytest.approx(WALL + gap, abs=1e-3)
+    assert c9_dims[2] == pytest.approx(BOTTOM_H, abs=1e-3)
+    assert c9_pos[2] + c9_dims[2] == pytest.approx(slab_pos[2], abs=1e-3)
+
+
+def test_default_scene_is_assembly_with_exploded_translucent_lid():
+    scad = emit_scad(make_spec(), make_envelope())
+    # assembly() is the top-level default render.
+    assert scad.rstrip().endswith("assembly();")
+    asm = _assembly_module(scad)
+    assert ") base();" in asm and "board();" in asm
+    # Friction lid: translucent (RGBA colour), flipped lip-down, footprint
+    # restored via a y=outer_y translate, and lifted clear of the base.
+    m = re.search(
+        r"color\(\[(-?\d+\.\d+), (-?\d+\.\d+), (-?\d+\.\d+), "
+        r"(-?\d+\.\d+)\]\)\s*\n\s*"
+        r"translate\(\[0, (-?\d+\.\d+), (-?\d+\.\d+)\]\)\s*\n\s*"
+        r"rotate\(\[180, 0, 0\]\) lid\(\);",
+        asm,
+    )
+    assert m is not None, "exploded translucent friction lid not found"
+    alpha = float(m.group(4))
+    assert 0.0 < alpha < 0.5  # see-through, not opaque, not invisible
+    # Inline math from the raw literals: outer_y = board_y + 2c + 2w = 36,
+    # base_z = w + (board 1.6 + tallest 3.2 + c) = 7.8, lift = 1.5*base_z,
+    # and the flip pivot adds the whole lid solid (plate + lip, read from
+    # the file itself) so the lid's lowest point sits at the lift height.
+    lip_h = float(_LIP.search(_lid_module(scad)).group(5))
+    base_z = WALL + BOARD["thickness"] + J1["h"] + CLEARANCE
+    assert float(m.group(5)) == pytest.approx(
+        (BOARD["y1"] - BOARD["y0"]) + 2 * CLEARANCE + 2 * WALL, abs=1e-3
+    )
+    assert float(m.group(6)) == pytest.approx(
+        1.5 * base_z + WALL + lip_h, abs=1e-3
+    )
+
+
+def test_screw_assembly_lid_lifts_straight_up():
+    scad = emit_scad(make_spec(lid="screw", standoffs=True), make_envelope())
+    asm = _assembly_module(scad)
+    m = re.search(
+        r"color\(\[[^\]]+, (-?\d+\.\d+)\]\)\s*\n\s*"
+        r"translate\(\[0, 0, (-?\d+\.\d+)\]\) lid\(\);",
+        asm,
+    )
+    assert m is not None, "exploded translucent screw lid not found"
+    assert 0.0 < float(m.group(1)) < 0.5
+    # base_z now includes the standoff height (read from the header).
+    base_z = read_params(scad)["base_z"]
+    assert float(m.group(2)) == pytest.approx(1.5 * base_z, abs=1e-3)
+
+
+def test_lid_none_assembly_omits_the_lid_but_keeps_the_board():
+    scad = emit_scad(make_spec(lid="none", cutouts=()), make_envelope())
+    asm = _assembly_module(scad)
+    assert "board();" in asm
+    assert " lid();" not in asm
+
+
 # --------------------------------------------------- lid CSG: vents and label
 
 # Single-line "translate([...]) cube([...]);" -- the vent-slot form. The lip
@@ -294,7 +435,17 @@ _LIP = re.compile(
 
 def _lid_module(scad: str) -> str:
     start = scad.index("module lid() {")
-    return scad[start:scad.index("\nbase();", start)]
+    return scad[start:scad.index("\nmodule board()", start)]
+
+
+def _board_module(scad: str) -> str:
+    start = scad.index("module board() {")
+    return scad[start:scad.index("\nmodule assembly()", start)]
+
+
+def _assembly_module(scad: str) -> str:
+    start = scad.index("module assembly() {")
+    return scad[start:scad.index("\nassembly();", start)]
 
 
 def test_friction_vents_pierce_plate_and_lip():

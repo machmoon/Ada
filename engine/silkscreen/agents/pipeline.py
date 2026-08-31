@@ -380,6 +380,7 @@ def _generate_pcb_sdk(
     placement_max_turns: int = 8,
     enclosure: bool = False,
     enclosure_style: str = "",
+    enclosure_rigorous: bool = False,
 ) -> PipelineResult:
     """Run the stages as a straight line. See :func:`generate_pcb`."""
     emit, agent_model, enter, observe = _wire_events(
@@ -436,6 +437,7 @@ def _generate_pcb_sdk(
         board,
         enclosure=enclosure,
         enclosure_style=enclosure_style,
+        rigorous=enclosure_rigorous,
         output=output,
         emit_stages=emit_stages,
         emit=emit,
@@ -482,6 +484,7 @@ def generate_pcb(
     placement_max_turns: int = 8,
     enclosure: bool = False,
     enclosure_style: str = "",
+    enclosure_rigorous: bool = False,
     engine: str = "",
 ) -> PipelineResult:
     """Generate a placed board from a natural-language intent.
@@ -536,6 +539,13 @@ def generate_pcb(
         enclosure_style: Natural-language case intent ("rounded corners, USB
             cutout left"), handed to the proposal prompt as a style hint.
             Ignored when ``enclosure`` is off.
+        enclosure_rigorous: Run the enclosure proposal loop at full
+            strictness. Off (the default) is demo-fast: one repair round,
+            only spec-validation failures repaired, and a fit failure rides
+            the receipt as a warning instead of blocking -- the ``.scad``
+            ships regardless. On restores the strict loop (three repair
+            rounds, ``verify_fit(strict=True)``, hard fit failures block).
+            Ignored when ``enclosure`` is off.
         engine: Which driver runs the stages -- ``"sdk"`` for the straight line
             in this module, ``"adk"`` for the Google ADK workflow in
             :mod:`silkscreen.agents.adk`. Both call the same stage bodies and
@@ -574,6 +584,7 @@ def generate_pcb(
             placement_max_turns=placement_max_turns,
             enclosure=enclosure,
             enclosure_style=enclosure_style,
+            enclosure_rigorous=enclosure_rigorous,
         )
     if chosen == "adk":
         # Imported here, never at module scope: a base install has no google.adk,
@@ -605,6 +616,7 @@ def generate_pcb(
             placement_max_turns=placement_max_turns,
             enclosure=enclosure,
             enclosure_style=enclosure_style,
+            enclosure_rigorous=enclosure_rigorous,
         )
     # RuntimeError, not ValueError: the service answers a pipeline ValueError as
     # a 400 with the raw message, and a bad engine name is not a client's fault.

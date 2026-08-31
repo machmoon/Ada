@@ -22,7 +22,11 @@ from silkscreen.agents.enclosure import (
 from silkscreen.enclosure import render
 from silkscreen.enclosure.board_shape import BoardEnvelope, PartExtent
 from silkscreen.enclosure.emit import emit_scad
-from silkscreen.enclosure.errors import EmptyGeometryError, RenderUnavailable
+from silkscreen.enclosure.errors import (
+    CavityFitError,
+    EmptyGeometryError,
+    RenderUnavailable,
+)
 from silkscreen.enclosure.ir import parse_enclosure_spec
 from silkscreen.units import mm
 
@@ -180,13 +184,13 @@ def test_repair_prompt_batches_every_validation_error():
 
 def test_fit_failures_feed_the_repair_loop_not_just_json_shape():
     """A cutout naming a part the board lacks parses fine and must still be
-    sent back: each round runs verify_fit(strict=True)."""
+    sent back in rigorous mode: each round runs verify_fit(strict=True)."""
     ghost = dict(
         GOOD_ENCLOSURE,
         cutouts=[{"id": "usb", "ref": "J9", "face": "left", "margin_mm": 0.5}],
     )
     model = ScriptedModel(responses=[json.dumps(ghost), json.dumps(GOOD_ENCLOSURE)])
-    _spec, _fit, rounds = propose_enclosure(model, _envelope())
+    _spec, _fit, rounds = propose_enclosure(model, _envelope(), rigorous=True)
     assert rounds == 1
     assert "'J9'" in model.calls[1]["prompt"]
     assert "not on this board" in model.calls[1]["prompt"]
@@ -195,9 +199,93 @@ def test_fit_failures_feed_the_repair_loop_not_just_json_shape():
 def test_strict_fit_warnings_feed_the_repair_loop():
     tight = dict(GOOD_ENCLOSURE, clearance_mm=0.3)
     model = ScriptedModel(responses=[json.dumps(tight), json.dumps(GOOD_ENCLOSURE)])
-    _spec, _fit, rounds = propose_enclosure(model, _envelope())
+    _spec, _fit, rounds = propose_enclosure(model, _envelope(), rigorous=True)
     assert rounds == 1
     assert "the board may bind" in model.calls[1]["prompt"]
+
+
+# ------------------------------------------------------------- fast vs rigorous
+
+
+def _overhanging_envelope() -> BoardEnvelope:
+    """The 40 x 30 board with J1 overhanging the left edge by 3 mm.
+
+    GOOD_ENCLOSURE's 1.0 mm clearance minus a 3 mm overhang is a -2 mm x
+    margin, so verify_fit raises CavityFitError on an otherwise valid spec.
+    """
+    base = _envelope()
+    j1 = PartExtent(
+        ref="J1",
+        x_min_nm=-mm(3.0), y_min_nm=mm(12.0), x_max_nm=mm(8.0), y_max_nm=mm(18.0),
+        height_nm=mm(3.2), height_default=False,
+    )
+    return BoardEnvelope(
+        outline_nm=base.outline_nm,
+        x_min_nm=base.x_min_nm, y_min_nm=base.y_min_nm,
+        x_max_nm=base.x_max_nm, y_max_nm=base.y_max_nm,
+        thickness_nm=base.thickness_nm,
+        parts=(base.parts[0], j1),
+        max_height_nm=base.max_height_nm,
+    )
+
+
+def test_fast_mode_downgrades_a_cavity_fit_failure_and_still_ships():
+    """The fast default never lets verify_fit block: the spec is accepted on
+    round 1, the failure rides the receipt as a warning (signed margins kept),
+    and the .scad still emits -- the demo gets its artifact."""
+    envelope = _overhanging_envelope()
+    # One scripted response: a repair round would raise ModelError.
+    model = ScriptedModel(responses=[json.dumps(GOOD_ENCLOSURE)])
+    spec, fit, rounds = propose_enclosure(model, envelope)
+    assert rounds == 0
+    assert len(model.calls) == 1
+    assert any("fit verification failed" in w for w in fit.warnings)
+    assert any("does not fit the cavity" in w for w in fit.warnings)
+    # The receipt stays honest: the collision keeps its sign and size.
+    assert fit.margins_nm["x"] == -mm(2.0)
+    scad = emit_scad(spec, envelope)
+    assert "module base()" in scad
+
+
+def test_rigorous_mode_blocks_on_a_cavity_fit_failure():
+    """rigorous=True is exactly the old strict behaviour: a hard fit failure
+    feeds the repair loop and exhausts the three-round budget."""
+    good = json.dumps(GOOD_ENCLOSURE)
+    model = ScriptedModel(responses=[good, good, good, good])
+    with pytest.raises(EnclosureProposalError) as excinfo:
+        propose_enclosure(model, _overhanging_envelope(), rigorous=True)
+    assert excinfo.value.attempts == 4  # rigorous default: 3 repairs + 1
+    assert "does not fit the cavity" in str(excinfo.value)
+
+
+def test_fast_mode_makes_at_most_one_repair_round():
+    """Fast-mode budget: one repair round, then give up loudly. The third
+    (good) response proves the loop stopped asking, not that it ran out."""
+    bad = json.dumps(BAD_ENCLOSURE)
+    model = ScriptedModel(responses=[bad, bad, json.dumps(GOOD_ENCLOSURE)])
+    with pytest.raises(EnclosureProposalError) as excinfo:
+        propose_enclosure(model, _envelope())
+    assert excinfo.value.attempts == 2
+    assert len(model.calls) == 2
+
+
+def test_rigorous_mode_keeps_the_three_round_budget():
+    bad = json.dumps(BAD_ENCLOSURE)
+    model = ScriptedModel(responses=[bad, bad, bad, bad])
+    with pytest.raises(EnclosureProposalError) as excinfo:
+        propose_enclosure(model, _envelope(), rigorous=True)
+    assert excinfo.value.attempts == 4
+
+
+def test_fast_mode_still_repairs_spec_validation_errors():
+    """Speed skips the fit gate, not the parser: an unparseable proposal is
+    still sent back, within the one-round budget."""
+    model = ScriptedModel(
+        responses=[json.dumps(BAD_ENCLOSURE), json.dumps(GOOD_ENCLOSURE)]
+    )
+    spec, _fit, rounds = propose_enclosure(model, _envelope())
+    assert rounds == 1
+    assert spec.wall_nm == mm(2.0)
 
 
 def test_each_rejected_round_emits_an_enclosure_round_event():
@@ -403,13 +491,78 @@ def test_enclosure_failure_degrades_and_the_board_still_ships(
     assert len(failed) == 1
     assert failed[0]["error"]
     assert len(failed[0]["error"]) <= 160
-    # Four visible repair rounds preceded the give-up: an honest fix-it loop.
-    assert len([e for e in events if e["event"] == "enclosure.round"]) == 4
+    # Two visible rounds -- the fast default's one-repair budget -- preceded
+    # the give-up: an honest fix-it loop, just a short one.
+    assert len([e for e in events if e["event"] == "enclosure.round"]) == 2
     # The run finished: review closed the stream and the board was written.
     assert [e["stage"] for e in events if e["event"] == "stage.done"][-1] == "review"
     assert (tmp_path / "board.kicad_pcb").exists()
     assert not (tmp_path / "enclosure.scad").exists()
     assert result.findings  # review still ran after the degradation
+
+
+def test_enclosure_rigorous_kwarg_restores_the_strict_pipeline_loop(
+    tmp_path, offline_pdf_fetch
+):
+    """enclosure_rigorous=True threads end to end: the old three-repair strict
+    loop runs (four visible rounds) before the stage degrades."""
+    events = []
+    result = generate_pcb(
+        _pipeline_model(json.dumps(BAD_ENCLOSURE)),  # every round rejected
+        INTENT,
+        datasheets=SHEETS,
+        output=tmp_path / "board.kicad_pcb",
+        time_limit_s=15.0,
+        on_event=events.append,
+        enclosure=True,
+        enclosure_rigorous=True,
+    )
+    assert result.enclosure is None
+    assert len([e for e in events if e["event"] == "enclosure.round"]) == 4
+    assert (tmp_path / "board.kicad_pcb").exists()
+
+
+def test_fast_pipeline_ships_the_scad_when_the_fit_fails(
+    tmp_path, offline_pdf_fetch, monkeypatch
+):
+    """The demo-fast default end to end: a CavityFitError from verify_fit
+    neither fails the stage nor burns a repair round -- the .scad is written
+    and the receipt carries the failure as a warning."""
+    from silkscreen.agents import enclosure as agent_enclosure
+
+    def colliding(spec, envelope, *, strict=False):
+        raise CavityFitError(
+            "board does not fit the cavity; per-axis margins "
+            "{'x': '-2.000 mm'} (negative = collision)",
+            {"x": -mm(2.0), "y": mm(1.0), "z": mm(1.0)},
+        )
+
+    monkeypatch.setattr(agent_enclosure, "verify_fit", colliding)
+    events = []
+    result = generate_pcb(
+        _pipeline_model(json.dumps(GOOD_ENCLOSURE)),
+        INTENT,
+        datasheets=SHEETS,
+        output=tmp_path / "board.kicad_pcb",
+        time_limit_s=15.0,
+        on_event=events.append,
+        enclosure=True,
+    )
+    assert result.enclosure is not None
+    assert "module base()" in result.enclosure.scad
+    assert (tmp_path / "enclosure.scad").exists()
+    assert result.enclosure.repair_rounds == 0
+    assert any(
+        "fit verification failed" in w for w in result.enclosure.fit.warnings
+    )
+    assert result.enclosure.fit.margins_nm["x"] == -mm(2.0)
+    assert not any(e["event"] == "enclosure.failed" for e in events)
+    assert not any(e["event"] == "enclosure.round" for e in events)
+    done = next(
+        e for e in events
+        if e["event"] == "stage.done" and e.get("stage") == "enclosure"
+    )
+    assert done["repair_rounds"] == 0
 
 
 def test_enclosure_events_carry_no_payload(tmp_path, offline_pdf_fetch):
@@ -483,6 +636,29 @@ def test_both_drivers_emit_identical_enclosure_events(tmp_path, offline_pdf_fetc
     for result, where in ((sdk_result, "sdk"), (adk_result, "adk")):
         assert result.enclosure.scad_path == tmp_path / where / "enclosure.scad"
         assert result.enclosure.scad_path in result.artifacts
+
+
+@needs_adk
+def test_adk_driver_threads_the_rigorous_flag(tmp_path, offline_pdf_fetch):
+    """Driver parity for the new kwarg: the ADK context field reaches the
+    stage, so rigorous mode runs the same four rounds it does under the SDK
+    driver (test_enclosure_rigorous_kwarg_restores_the_strict_pipeline_loop)."""
+    from silkscreen.agents.adk import generate_pcb_adk
+
+    events = []
+    result = generate_pcb_adk(
+        _pipeline_model(json.dumps(BAD_ENCLOSURE)),
+        INTENT,
+        datasheets=SHEETS,
+        output=tmp_path / "board.kicad_pcb",
+        time_limit_s=15.0,
+        on_event=events.append,
+        enclosure=True,
+        enclosure_rigorous=True,
+    )
+    assert result.enclosure is None
+    assert len([e for e in events if e["event"] == "enclosure.round"]) == 4
+    assert (tmp_path / "board.kicad_pcb").exists()
 
 
 # ---------------------------------------------------------------- render gate

@@ -170,6 +170,32 @@ def test_stl_success_reports_the_stl_path(tmp_path, monkeypatch, capsys):
     assert str(out.with_suffix(".stl")) in capsys.readouterr().out
 
 
+def test_case_subcommand_threads_the_rigorous_flag(tmp_path, monkeypatch):
+    """``silkscreen case --rigorous`` reaches propose_enclosure; the default
+    stays fast. The CLI imports propose_enclosure at call time, so patching
+    the module attribute intercepts it."""
+    import silkscreen.agents.enclosure as agent_enclosure
+    from silkscreen.enclosure.ir import parse_enclosure_spec
+    from silkscreen.enclosure.verify import verify_fit
+
+    seen = {}
+
+    def fake_propose(model, envelope, *, style_hint="", rigorous=False, **kw):
+        seen["rigorous"] = rigorous
+        spec = parse_enclosure_spec({})
+        return spec, verify_fit(spec, envelope), 0
+
+    monkeypatch.setattr(agent_enclosure, "propose_enclosure", fake_propose)
+    monkeypatch.setattr(cli, "GeminiModel", lambda name: object())
+    board = _outlined_fixture(tmp_path)
+    out = tmp_path / "case.scad"
+
+    assert cli.main(["case", str(board), "-o", str(out), "--rigorous"]) == 0
+    assert seen["rigorous"] is True
+    assert cli.main(["case", str(board), "-o", str(out)]) == 0
+    assert seen["rigorous"] is False
+
+
 # ------------------------------------------------- generate command flags
 
 
@@ -240,8 +266,18 @@ def test_case_flag_opts_in_to_the_enclosure_kwargs(
     assert code == 0
     assert captured_generate["enclosure"] is True
     assert captured_generate["enclosure_style"] == "usb left"
+    # Fast is the default: rigor is opt-in via --rigorous.
+    assert captured_generate["enclosure_rigorous"] is False
     # A run whose stage failed says so, and still exits cleanly.
     assert "without one" in capsys.readouterr().err
+
+
+def test_rigorous_flag_opts_in_to_the_strict_loop(tmp_path, captured_generate):
+    out = tmp_path / "board.kicad_pcb"
+    code = cli.main(["an ldo board", "-o", str(out), "--case", "--rigorous"])
+    assert code == 0
+    assert captured_generate["enclosure"] is True
+    assert captured_generate["enclosure_rigorous"] is True
 
 
 def test_without_case_the_kwargs_are_absent(tmp_path, captured_generate):
@@ -250,6 +286,7 @@ def test_without_case_the_kwargs_are_absent(tmp_path, captured_generate):
     assert cli.main(["an ldo board", "-o", str(out)]) == 0
     assert "enclosure" not in captured_generate
     assert "enclosure_style" not in captured_generate
+    assert "enclosure_rigorous" not in captured_generate
 
 
 def test_case_success_prints_the_receipt(tmp_path, monkeypatch, capsys):
