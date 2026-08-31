@@ -101,7 +101,7 @@ Every stage is a real KiCad file you can open and inspect on its own, so you can
 where a design went wrong instead of only seeing the last artifact.
 
 ```
-1005 tests collected — no network, no API key, no KiCad install
+1108 tests collected — no network, no API key, no KiCad install
 ```
 
 **Next:** [full install guide and troubleshooting](docs/install.md) ·
@@ -438,7 +438,7 @@ treats the board file as the interface.
 | Requires KiCad running | Yes | **No** |
 | Headless / CI | Hard | **Native** |
 | Platform lock | KiCad's plugin loader | **None — pure Python** |
-| Testable without KiCad | No | **Yes, all 1005 tests** |
+| Testable without KiCad | No | **Yes, all 1108 tests** |
 
 ### What it reads
 
@@ -703,6 +703,48 @@ simulator starts; runtime is capped at 120 seconds and returned waveforms at 2,0
 points per signal. `spice_capabilities` reports simulator names without exposing local
 executable paths.
 
+### In Google Meet
+
+`meetings/` reads the transcript of a meeting that already happened and drafts a
+board for what the meeting asked for. **Read the limits before the feature:**
+
+- It reads a conference **after it ends**, not while it runs. Nothing listens
+  live; a live listener would need the Meet Media API, which is a different and
+  much larger piece of work.
+- It only sees a meeting where the **organiser turned transcription on**. No
+  transcript means no input, and the run says so rather than reporting an empty
+  meeting.
+- It does **not** join the call. There is no headless browser, no fake
+  participant, and no media plumbing — every open-source meeting bot works that
+  way, and this deliberately does not. It is the Google Meet REST API v2 and
+  nothing else.
+- It has **never been run against a live Google Workspace account**. The Meet
+  API path is unverified live: every test drives a recorded transport offline.
+
+Configuration is environment only, and the package does **not** perform the
+OAuth flow — the host supplies an already-obtained bearer token:
+
+```bash
+export MEET_ACCESS_TOKEN=...   # required; scope meetings.space.readonly
+export MEET_SPACES=spaces/abc,spaces/def  # optional allowlist; empty = every conference the token can see
+export MEET_API_BASE=https://meet.googleapis.com/v2  # optional, pinned by default
+export MEET_MAX_AGE_HOURS=24   # ignore conferences that ended longer ago
+export MEET_MAX_RUNS_PER_POLL=3  # cap the board runs one poll may start
+```
+
+Token acquisition, refresh and storage belong to the host application. The scope
+is read-only on purpose: nothing here creates, modifies or joins a meeting.
+
+What survives the meeting is **drafted, not ordered**. A request whose quote is
+not in the transcript is dropped, a request below the confidence floor is
+recorded but not built, and every skipped request is still reported — a bot that
+quietly ignores what someone asked for is the failure people actually hit.
+Nothing is ever purchased.
+
+The board itself comes from the same generator the CLI uses, so this is a
+different way to supply the sentence, not a second pipeline. When the output
+files matter, `python -m silkscreen "..."` remains the complete path.
+
 ---
 
 ## Reviewing a board
@@ -862,7 +904,7 @@ engine/
       pipeline.py   prompt -> PCB
       adk/          ADK dynamic workflow over the same stage bodies
     audit/        optional visual review of a finished board
-  tests/          1005 tests — no network, no API keys, no KiCad
+  tests/          1108 tests — no network, no API keys, no KiCad
     fixtures/     ref.kicad_pcb -- 11-footprint board fixture
 scripts/
   demo.py         end-to-end: read -> place -> write -> verify

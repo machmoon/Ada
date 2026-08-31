@@ -44,7 +44,7 @@ where = ["engine"]
 include = ["silkscreen*"]
 
 [tool.pytest.ini_options]
-testpaths = ["engine/tests", "service/tests", "slackbot/tests"]
+testpaths = ["engine/tests", "service/tests", "slackbot/tests", "meetings/tests"]
 norecursedirs = ["vendor", ".venv", "frontend", "frontend-archive", "node_modules"]
 pythonpath = ["engine", "."]
 filterwarnings = [
