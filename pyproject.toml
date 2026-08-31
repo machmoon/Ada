@@ -30,6 +30,7 @@ silkscreen-setup = "silkscreen.onboard:main"
 silkscreen-serve = "silkscreen.serve:main"
 silkscreen-mcp = "silkscreen.mcp.server:main"
 silkscreen-review = "silkscreen.audit.cli:main"
+silkscreen-order = "silkscreen.ordercli:main"
 
 [build-system]
 requires = ["setuptools>=68"]
