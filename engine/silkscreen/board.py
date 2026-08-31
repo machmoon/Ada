@@ -20,6 +20,7 @@ from pathlib import Path
 from .footprints import (
     Footprint,
     UnsupportedPackage,
+    chip_passive,
     for_passive,
     lqfp,
     silk_segments,
@@ -130,6 +131,26 @@ def _footprint_for_device(
     Deliberately conservative: it covers the shapes this pipeline generates and
     raises otherwise. Guessing a land pattern is how boards come back dead.
     """
+    if pin_count == 2:
+        # The model nondeterministically declares two-terminal parts (an LED,
+        # a two-pin connector) under ``devices`` instead of ``passives``, and
+        # validation rightly accepts that -- the IR does not forbid it. Before
+        # this rule existed the spec validated, the repair loop never fired,
+        # and emission crashed here after the paid model call. Electrically a
+        # 2-pin device is exactly a two-terminal part, so reuse the proven
+        # 1206 chip land pattern (pads "1"/"2", courtyard from fit_courtyard)
+        # rather than inventing a new one -- a wrong new land pattern is worse
+        # than a generic proven one (see known issue 11). 1206 is the largest
+        # readable two-pad pattern here short of the 1210 crystal size:
+        # hand-solderable, and a real package for LEDs; a header-style
+        # connector would need geometry no generator here has been verified
+        # against. One rule for every 2-pin device, never
+        # keyed on the name -- refs are assigned later and nothing else in
+        # this module sniffs prefixes.
+        fp = chip_passive("1206", net1=nets.get("1", ""), net2=nets.get("2", ""))
+        fp.name = "TwoPin_1206"
+        fp.description = f"2-pin device {name} on a 1206 two-pad land pattern"
+        return fp
     if pin_count == 3:
         return sot223(nets)
     if pin_count in (4, 6, 8, 10, 14, 16, 20, 24, 28):
@@ -139,7 +160,8 @@ def _footprint_for_device(
         return lqfp(pin_count, body_mm=body, nets=nets)
     raise UnsupportedPackage(
         f"No package rule for {name!r} with {pin_count} pins. Supported: "
-        f"3 (SOT-223), 4-28 even (SOIC), 32/44/48/64/100/144 (LQFP)."
+        f"2 (1206 two-pad), 3 (SOT-223), 4-28 even (SOIC), "
+        f"32/44/48/64/100/144 (LQFP)."
     )
 
 
