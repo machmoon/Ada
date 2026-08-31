@@ -29,7 +29,7 @@ Every stage is a real KiCad file you can open and inspect on its own, so you can
 where a design went wrong instead of only seeing the last artifact.
 
 ```
-554 passed — no network, no API key, no KiCad install
+673 tests collected — no network, no API key, no KiCad install
 ```
 
 ---
@@ -93,7 +93,7 @@ that consumes the file. Install it if you are a person who wants to see a board.
 | `agents/resilience.py` — provider failover | **Working** · 14 tests |
 | `fab.py` — Gerber, Excellon, BOM, pick-and-place | **Working** · fab package export |
 | `order.py` — order options, manufacturability preflight | **Working** · blocks an unrouted board |
-| `mcp/` — MCP server over stdio | **Working** · 23 tests |
+| `mcp/` — MCP server over stdio | **Working** · 43 tests |
 | `audit/` — optional visual design review | **Working** · 52 tests |
 | `service/` — Cloud Run + Firestore cache | **Working** · 103 tests |
 | `frontend/` — Svelte review UI, served by the service | **Working** · persistent orchestrator chat, expandable model/tool traces, session JSON, review, schematic and board tabs |
@@ -227,6 +227,67 @@ Nothing sets rotation today.
 `--no-route` stops after placement, which is what every run produced before this
 existed.
 
+### Simulating the circuit
+
+DRC answers whether a board can be *made*. Nothing answered whether the circuit
+*works* — and that gap is why a design loop cannot close itself: it can produce a
+plausible schematic and a manufacturable board with no evidence the thing does what it
+was asked for. `spice/` is that missing check, shaped like a test runner rather than a
+waveform viewer.
+
+```python
+from silkscreen.spice import Assertion, Measurement, Source, Testbench, Transient, verify
+
+bench = Testbench(
+    analysis=Transient(step=1e-6, stop=2e-3),
+    sources=[Source.pulse("V1", "VIN", "GND",
+                          initial=0, pulsed=5, width=1e-3, period=2e-3)],
+)
+report = verify(spec, bench, [
+    Assertion(name="rise time under 250 us",
+              measurement=Measurement(kind="rise_time", signal="VOUT",
+                                      window=(0, 1e-3)),
+              op="<", value=250e-6, unit="s"),
+])
+report.passed        # bool
+report.summary()     # which clause failed, and by how much
+```
+
+`python scripts/simulate_demo.py` runs it end to end against an RC low-pass, checking
+every result against closed-form circuit theory:
+
+```
+  PASS  10-90% rise time is tau*ln(9)
+        measured 0.00021946s, expected within 0.000219503s (margin -4.28e-08)
+  PASS  -3 dB corner is 1/(2*pi*R*C)
+        measured 1593.23Hz, expected within 1593.14Hz (margin -0.0889)
+```
+
+**Nothing here can return a quiet zero.** An agent that gets an empty result reads it as
+a circuit that behaves. So a missing model, a probe on a net that does not exist, a
+signal with no rising edge, and a solver that will not converge each raise a distinct,
+self-describing error. A measurement that cannot be taken fails its clause rather than
+passing it vacuously.
+
+**Where it stops, plainly.** A device (an IC) in the circuit IR is a pin map with no
+behaviour attached, and no netlist generator can invent one. Trusted Python code can
+supply a `SubcircuitModel` — the part's own SPICE model — directly on `Testbench`.
+The MCP/JSON tool deliberately does not accept raw SPICE programs; IC simulation there
+waits for a trusted server-side model registry. Without a model the run raises and names
+the part rather than quietly leaving it out. Passive networks need nothing extra. A
+diode with no model gets a generic silicon stand-in and a warning saying so;
+`Testbench(strict=True)` turns that warning into an error, which is what you want when
+the verdict has to be about the specified part.
+
+ngspice and LTspice sit behind one interface, selected automatically. ngspice is what CI
+installs and what this is verified against; LTspice discovery and batch invocation are
+implemented but have not been run end to end — see the note in
+`spice/simulators.py`. Install ngspice with `brew install ngspice` or
+`apt-get install ngspice`; without a simulator the simulation tests skip and the rest of
+the suite is unaffected.
+
+---
+
 ### Generating footprints
 
 Emitting a board means generating real land patterns: pads at real coordinates, a
@@ -256,7 +317,7 @@ treats the board file as the interface.
 | Requires KiCad running | Yes | **No** |
 | Headless / CI | Hard | **Native** |
 | Platform lock | KiCad's plugin loader | **None — pure Python** |
-| Testable without KiCad | No | **Yes, all 554 tests** |
+| Testable without KiCad | No | **Yes, all 673 tests** |
 
 ### What it reads
 
@@ -417,8 +478,14 @@ and the board and review panes offer the emitted `.kicad_pcb` as a download.
 silkscreen-mcp        # JSON-RPC 2.0 over stdio
 ```
 
-Five tools: `validate_circuit`, `build_board`, `emit_kicad_pcb`, `place_parts`,
-`generate_footprint`.
+Tools: `validate_circuit`, `build_board`, `emit_kicad_pcb`, `place_parts`,
+`generate_footprint`, `simulate_circuit`, `spice_capabilities`.
+
+`simulate_circuit` accepts typed sources (`dc`, `ac`, `pulse`, `sine`) and typed
+analyses only. Unknown fields and raw model/directive text are rejected before a
+simulator starts; runtime is capped at 120 seconds and returned waveforms at 2,000
+points per signal. `spice_capabilities` reports simulator names without exposing local
+executable paths.
 
 ---
 
@@ -566,6 +633,8 @@ engine/
     kicad.py      read/modify an existing .kicad_pcb via kiutils
     ids.py        stable UUIDs, so two runs diff cleanly
     cli.py        python -m silkscreen "..."
+    spice/        typed testbenches, deck building, simulators, measurements
+    mcp/          JSON-RPC tools, including the bounded simulation verifier
     agents/       the only place a model call happens
       model.py      provider seam + scripted stand-in for tests
       datasheet.py  PDF -> structured facts, with page citations
@@ -575,10 +644,11 @@ engine/
       pipeline.py   prompt -> PCB
       adk/          ADK dynamic workflow over the same stage bodies
     audit/        optional visual review of a finished board
-  tests/          554 tests — no network, no API keys, no KiCad
+  tests/          673 tests — no network, no API keys, no KiCad
     fixtures/     ref.kicad_pcb -- 11-footprint board fixture
 scripts/
   demo.py         end-to-end: read -> place -> write -> verify
+  simulate_demo.py closed-form RC checks through a real ngspice run
   check_docs.py   fails CI if a quoted test count goes stale
 frontend/
   src/
@@ -655,31 +725,41 @@ docker build .                                      # the `docker` job
 
 ### Expected output
 
-**1. Test suite** — 554 tests, no warnings (four key-gated live-model tests skip unless `GOOGLE_API_KEY` is set):
+**1. Test suite** — 673 tests (live-model and local-simulator cases skip when
+their optional dependency is unavailable):
 
 ```
-554 passed in 190.85s
+659 successful, 14 skipped
 ```
 
 The suite is dominated by the 20-second solver budget in a handful of placement
-tests; the rest run in milliseconds.
+tests; the rest run in milliseconds. Google ADK currently emits one warning for
+its experimental JSON-schema function-declaration feature.
 
 | File | Tests | Covers |
 |---|---:|---|
-| `test_app.py` | 76 | Cloud Run HTTP surface, the NDJSON stream, and the served UI bundle, over a real socket |
+| `test_spice.py` | 99 | Deck construction, rawfile parsing, measurements, assertions, and closed-form ngspice checks |
+| `test_app.py` | 96 | Cloud Run HTTP surface, the NDJSON stream, and the served UI bundle, over a real socket |
 | `test_grounding.py` | 73 | Datasheet grounding — SSRF-guarded PDF fetch, page extraction, page-cache sharding, citation corroboration |
+| `test_audit.py` | 52 | Deterministic and model-assisted design review |
 | `test_packing.py` | 43 | CP-SAT model: no-overlap, clearance, edge pinning, rotation, symmetry breaking, keepouts, pinned parts, fallback, determinism |
-| `test_agents.py` | 31 | Datasheet extraction, proposal repair loop, review — against a scripted model |
+| `test_mcp.py` | 43 | MCP protocol and tools, including the bounded SPICE boundary |
+| `test_agents.py` | 34 | Datasheet extraction, proposal repair loop, review — against a scripted model |
+| `test_order.py` | 30 | Order options and manufacturability preflight |
+| `test_fab.py` | 29 | Gerber, drill, BOM, and pick-and-place export |
 | `test_kicad.py` | 28 | Board read/write, coordinate conversion, round-trip |
-| `test_mcp.py` | 23 | MCP protocol — initialize, tools/list, tools/call, stdio transport, every tool |
+| `test_schematic.py` | 22 | Schematic generation and KiCad validation |
+| `test_netlist.py` | 21 | Circuit IR validation — every rejection rule |
+| `test_routing.py` | 20 | Grid routing, vias, keepouts, and honest unrouted results |
 | `test_board.py` | 20 | Footprint generation and emitting a `.kicad_pcb` from a circuit spec |
-| `test_adk.py` | 17 | Parity between the SDK and ADK drivers — same events, same result, same exceptions |
-| `test_netlist.py` | 15 | Circuit IR validation — every rejection rule |
+| `test_adk.py` | 18 | Parity between the SDK and ADK drivers — same events, same result, same exceptions |
 | `test_retrieval.py` | 15 | Datasheet chunking, embedding, cosine ranking, page citations |
 | `test_resilience.py` | 14 | Provider failover — every fallback path, forced |
 | `test_cache.py` | 7 | Firestore fact cache, via a fake client |
-| `test_live_model.py` | 3 | The live Gemini path, behind an API-key gate that skips it by default |
-| **Total** | **365** | |
+| `test_live_model.py` | 4 | The live Gemini path, behind an API-key gate that skips it by default |
+| `test_models.py` | 3 | Gemini model discovery and selection policy |
+| `test_orchestrator.py` | 2 | Root-orchestrator clarification and tool dispatch |
+| **Total** | **673** | |
 
 **2. Lint:**
 
@@ -690,7 +770,7 @@ All checks passed!
 **3. Doc drift** — re-counts the suite and checks every figure quoted in the docs:
 
 ```
-docs ok: 16 claim(s) across 2 files match a suite of 183
+docs ok: 21 claim(s) across 2 files match a suite of 673
 ```
 
 **4. End-to-end demo** — reads the 11-footprint fixture board, places it, writes a
