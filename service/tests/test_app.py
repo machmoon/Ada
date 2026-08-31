@@ -133,7 +133,10 @@ def scripted():
 
 
 @pytest.fixture
-def server():
+def server(offline_pdf_fetch):
+    # offline_pdf_fetch, not because these tests care about datasheets, but
+    # because read_datasheet downloads a pdf_url now and this suite is offline
+    # by contract. Taking it here covers every route test at once.
     store = MemoryFactStore()
     failure_trace_store = MemoryFailureTraceStore()
     Handler.model_factory = staticmethod(scripted)

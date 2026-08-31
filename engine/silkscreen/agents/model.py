@@ -91,8 +91,20 @@ def request_timeout_ms(timeout_s: float | None = None) -> int:
 class Document:
     """A PDF to put in front of the model.
 
-    Either a ``url`` the provider fetches itself, or raw ``data``. Gemini reads
-    up to 1000 pages / 50MB per document at roughly 258 tokens a page.
+    Prefer ``data``. Gemini reads up to 1000 pages / 50MB per document at
+    roughly 258 tokens a page, and inline bytes are the transport every caller
+    in this repo uses -- :func:`agents.datasheet.read_datasheet` downloads a
+    URL and passes what it got.
+
+    ``url`` is **not** "a link the provider fetches for you", which is what this
+    docstring used to claim and what cost a day of debugging. Gemini's
+    ``file_uri`` accepts a Files API URI
+    (``generativelanguage.googleapis.com/v1beta/files/...``) or a YouTube link,
+    and nothing else. Handed a public datasheet URL it answers
+    ``429 RESOURCE_EXHAUSTED`` -- carrying no quota metric and no retry delay,
+    so it reads as an exhausted key and defeats every failover attempt.
+    Measured against one 2.3MB PDF: the same file costs 48,485 prompt tokens
+    inline and 48,483 through a Files API URI, while its own https URL is a 429.
     """
 
     url: str | None = None

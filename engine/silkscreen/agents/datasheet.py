@@ -11,11 +11,24 @@ useful in a domain where being wrong costs four weeks and a fab run.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import asdict, dataclass, field, fields
 
 from .model import Document, Model, ModelError, parse_json
 
-__all__ = ["PartFacts", "PinFact", "read_datasheet", "DATASHEET_PROMPT"]
+__all__ = [
+    "PartFacts",
+    "PinFact",
+    "read_datasheet",
+    "DATASHEET_PROMPT",
+    "MAX_INLINE_PDF_BYTES",
+]
+
+#: The most PDF we will put in one request. Gemini's ceiling is a 20MB *total
+#: request* and inline bytes travel base64, which inflates by 4/3, so 15MB of
+#: PDF is about all that fits. ``fetch_pdf`` defaults to 50MB, which would sail
+#: past it and fail at the API instead of here, naming nothing useful.
+MAX_INLINE_PDF_BYTES = 15_000_000
 
 
 @dataclass(frozen=True)
@@ -141,18 +154,61 @@ Rules:
 """
 
 
+def _download(url: str, fetch: Callable[..., bytes] | None) -> bytes:
+    """Fetch a datasheet PDF and prove that is what arrived.
+
+    A 200 response is not evidence of a PDF. Distributors increasingly serve an
+    HTML viewer page from a ``.pdf`` URL -- LCSC's AMS1117 link does exactly
+    that -- and handing those bytes to the model as ``application/pdf`` buys a
+    400 from the API naming neither the part nor the URL. Checking the magic
+    here is what turns that into a sentence someone can act on.
+
+    ``grounding`` is imported inside the function on purpose: it imports
+    ``review``, which imports this module for ``PartFacts``, so importing it at
+    module scope would close that cycle.
+    """
+    from .grounding import GroundingError, fetch_pdf
+
+    data = (fetch or fetch_pdf)(url, max_bytes=MAX_INLINE_PDF_BYTES)
+    if not data.startswith(b"%PDF-"):
+        raise GroundingError(
+            f"{url} did not return a PDF: the body begins {data[:16]!r}. "
+            f"A distributor link that renders a viewer page is the usual "
+            f"cause; use the manufacturer's own PDF."
+        )
+    return data
+
+
 def read_datasheet(
     model: Model,
     part_number: str,
     *,
     pdf_url: str | None = None,
     pdf_bytes: bytes | None = None,
+    fetch: Callable[..., bytes] | None = None,
 ) -> PartFacts:
-    """Extract structured facts for ``part_number`` from its datasheet."""
+    """Extract structured facts for ``part_number`` from its datasheet.
+
+    A ``pdf_url`` is **downloaded here** and sent as bytes. Gemini does not
+    fetch arbitrary URLs: its ``file_uri`` field accepts a Files API URI or a
+    YouTube link and nothing else, and handing it a public datasheet URL returns
+    a bare ``429 RESOURCE_EXHAUSTED`` -- no quota metric, no retry delay -- which
+    reads as an exhausted key and survives every failover attempt, because
+    retrying cannot fix a malformed request.
+
+    ``fetch`` exists so the suite stays offline, the same reason ``Model`` has
+    ``ScriptedModel`` behind it. It defaults to :func:`grounding.fetch_pdf`,
+    which validates the URL against SSRF, caps redirects, and caps the body.
+    """
     if not pdf_url and not pdf_bytes:
         raise ValueError("read_datasheet needs a pdf_url or pdf_bytes")
 
-    doc = Document(url=pdf_url, data=pdf_bytes)
+    if pdf_bytes is None:
+        pdf_bytes = _download(pdf_url, fetch)
+
+    # Bytes, never the url: see this function's docstring for what passing a
+    # public URL through to the provider actually does.
+    doc = Document(data=pdf_bytes)
     prompt = f"{DATASHEET_PROMPT}\n\nThe part is: {part_number}"
     raw = model.generate(prompt, documents=[doc], temperature=0.0)
     data = parse_json(raw)
