@@ -85,7 +85,10 @@ const DESCRIBERS: Record<string, Describer | undefined> = Object.assign(
     "model.call": (e: StreamFrame) => {
       const where = whereOf(e.stage);
       const took = seconds(e.elapsed_s);
-      if (!e.ok) {
+      // Same reading as the reducer: absent `ok` is not a failure. The
+      // engine always sends it, so this only matters for a frame this build
+      // half-recognises — and then the two must agree.
+      if (e.ok === false) {
         return `Model call${where} failed${took ? ` after ${took} s` : ""}.`;
       }
       // Either name identifies the call; with neither, the sentence still has
@@ -150,7 +153,7 @@ const STAGE_DONE: Record<string, Describer | undefined> = Object.assign(
   Object.create(null) as Record<string, Describer>,
   {
     read: (e: StreamFrame) =>
-      `Read ${plural(count(e.parts), "part")}: ${plural(count(e.pins), "pin")}, ` +
+      `Facts for ${plural(count(e.parts), "part")} (read or cached): ${plural(count(e.pins), "pin")}, ` +
       `${plural(count(e.requirements), "requirement")}.`,
 
     propose: (e: StreamFrame) => {
@@ -325,13 +328,17 @@ export function reduceFrame(state: RunProgress, frame: unknown): RunProgress {
     elapsedS: t === null ? state.elapsedS : Math.max(state.elapsedS, t),
   };
 
+  // done/error are terminal. A replayed or duplicated frame after the run
+  // ended must not resurrect it — status only ever moves forward.
+  const terminal = state.status === "done" || state.status === "error";
+
   switch (e.event) {
     case "run.accepted":
-      next.status = "accepted";
+      if (!terminal) next.status = "accepted";
       break;
 
     case "stage.start":
-      next = startStage(next, e, t);
+      if (!terminal) next = startStage(next, e, t);
       break;
 
     case "stage.done":
@@ -413,6 +420,8 @@ const KNOWN_EVENTS = new Set([
   "read.part",
   "propose.round",
   "model.call",
+  // Emitted per call in debug mode, which the app itself turns on.
+  "model.request",
   "model.response",
   "model.retry",
   "ground.part",

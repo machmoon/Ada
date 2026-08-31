@@ -208,14 +208,10 @@ export interface OrderPanelProps {
   /** The response's `order` block, or `undefined` when none was requested. */
   order?: RunResult["order"] | null;
   /**
-   * Nets the router could not finish, `{net: reason}`.
-   *
-   * The one-shot response carries no per-net routing report today — the only
-   * place unrouted nets are named is the preflight's `unrouted-nets` detail,
-   * which is prose. This prop is the seam for a caller that has the structured
-   * form (from `board.unrouted_nets`, if the service ever sends it); when it
-   * is absent the panel says the report is unavailable rather than implying
-   * the board is fully routed.
+   * Nets the router could not finish, `{net: reason}` — normally
+   * `result.routing.unrouted`, which the service sends on every run
+   * (`ArtifactPanel` wires it through). When it is absent the panel says the
+   * report is unavailable rather than implying the board is fully routed.
    */
   unroutedNets?: Record<string, string> | null;
   className?: string;
@@ -346,11 +342,12 @@ export function OrderPanel({ order, unroutedNets, className }: OrderPanelProps) 
           </span>
         ) : (
           <span className="text-sm text-muted-foreground">
-            No per-net routing report came back with this run. Silkscreen's
-            router is partial by design and names every net it cannot finish;
-            if any were left open, the <span className="font-mono">unrouted-nets</span>{" "}
-            blocker above spells them out. Do not read the absence of a report
-            as a fully routed board.
+            This run's response carried no <span className="font-mono">routing</span>{" "}
+            block. Silkscreen's router is partial by design and names every net
+            it cannot finish; if any were left open, the{" "}
+            <span className="font-mono">unrouted-nets</span> blocker above
+            spells them out. Do not read the absence of a report as a fully
+            routed board.
           </span>
         )}
       </div>

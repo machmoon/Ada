@@ -416,6 +416,13 @@ export function useSilkscreenRunState(
         logEvent("run.finished", `Run finished in ${entry.elapsedS.toFixed(1)} s.`);
       } catch (caught) {
         if (!mountedRef.current) return;
+        // A stale run — one that was cancelled and then superseded by a new
+        // start() — must not write anything: its late rejection would clobber
+        // the live run's status. Only the run that still owns abortRef may
+        // report a terminal state.
+        if (abortRef.current !== controller && controller.signal.aborted) {
+          return;
+        }
         // Check the signal first: an abort during the opening fetch surfaces
         // from the client as an `offline` SilkscreenError, which would
         // otherwise read as "the engine is down" when it plainly is not.
@@ -434,8 +441,13 @@ export function useSilkscreenRunState(
         setStatus("error");
         setElapsedMs(Date.now() - began);
       } finally {
-        if (abortRef.current === controller) abortRef.current = null;
-        inFlightRef.current = false;
+        // The in-flight guard, like the abort handle, belongs to the CURRENT
+        // run: a stale run releasing it would let a new start() fire while
+        // another run is still streaming — a second paid run for one action.
+        if (abortRef.current === controller) {
+          abortRef.current = null;
+          inFlightRef.current = false;
+        }
       }
     })();
     },

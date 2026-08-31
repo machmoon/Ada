@@ -108,7 +108,12 @@ export function BoardView({
     if (e.button !== 0) return;
     panRef.current = { id: e.pointerId, x: e.clientX, y: e.clientY, moved: 0 };
     lastTravelRef.current = 0;
-    e.currentTarget.setPointerCapture(e.pointerId);
+    // Deliberately NO setPointerCapture here: with a capture active the
+    // browser retargets pointerup — and the click composed from it — to the
+    // capturing surface, so a part's own onClick can never fire and mouse
+    // selection is dead. Capture starts only once the press has travelled
+    // past the drag slop (below), where it is a pan and clicks stop
+    // mattering.
   };
 
   const onPointerMove = (e: React.PointerEvent<HTMLDivElement>) => {
@@ -119,6 +124,9 @@ export function BoardView({
     pan.x = e.clientX;
     pan.y = e.clientY;
     pan.moved += Math.abs(dx) + Math.abs(dy);
+    if (pan.moved > DRAG_SLOP_PX && !e.currentTarget.hasPointerCapture(e.pointerId)) {
+      e.currentTarget.setPointerCapture(e.pointerId);
+    }
     setTransform((t) => ({ ...t, tx: t.tx + dx, ty: t.ty + dy }));
   };
 
@@ -256,13 +264,13 @@ export function BoardView({
                 vectorEffect="non-scaling-stroke"
               />
 
-              {parts.map((p) => {
+              {parts.map((p, pi) => {
                 const isSelected = selectedSet.has(p.ref);
                 const isActive = activeRef === p.ref;
                 const padCount = p.pads.length;
                 return (
                   <g
-                    key={p.ref}
+                    key={`${p.ref}-${pi}`}
                     data-testid="board-part"
                     data-ref={p.ref}
                     data-selected={isSelected || undefined}
@@ -315,9 +323,9 @@ export function BoardView({
                       strokeDasharray={isSelected ? undefined : "4 3"}
                       vectorEffect="non-scaling-stroke"
                     />
-                    {p.pads.map((pad) => (
+                    {p.pads.map((pad, padIndex) => (
                       <rect
-                        key={pad.number}
+                        key={`${pad.number}-${padIndex}`}
                         x={pad.rect.x}
                         y={pad.rect.y}
                         width={pad.rect.width}
@@ -334,9 +342,9 @@ export function BoardView({
             {/* Labels sit OUTSIDE the flipped group: glyphs inside it render
                 mirrored. board.ts already resolved these into this frame. */}
             <g pointerEvents="none">
-              {parts.map((p) => (
+              {parts.map((p, pi) => (
                 <text
-                  key={p.ref}
+                  key={`${p.ref}-${pi}`}
                   data-testid="board-part-label"
                   data-ref={p.ref}
                   x={p.label.x}

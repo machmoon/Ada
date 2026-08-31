@@ -114,7 +114,7 @@ describe("describeFrame", () => {
     // A known event whose fields are all the wrong type still produces a sentence.
     expect(
       describeFrame({ event: "stage.done", stage: "read", parts: "x", pins: null, requirements: {} })
-    ).toBe("Read 0 parts: 0 pins, 0 requirements.");
+    ).toBe("Facts for 0 parts (read or cached): 0 pins, 0 requirements.");
   });
 
   it("names a stage it has never heard of instead of dropping it", () => {

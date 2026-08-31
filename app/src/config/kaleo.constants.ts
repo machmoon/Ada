@@ -20,7 +20,6 @@ export const KALEO_STORAGE_KEYS = {
  * `127.0.0.0/8` is matched by prefix because the whole block is loopback.
  */
 export const LOOPBACK_HOSTS = ["localhost", "::1", "[::1]"] as const;
-export const LOOPBACK_V4_PREFIX = "127.";
 
 /**
  * How to start the engine, quoted from the repository's own docs rather than

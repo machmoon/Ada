@@ -41,9 +41,16 @@ function sameRecord(a: Record<string, string>, b: Record<string, string>): boole
   return ka.length === kb.length && ka.every((k) => a[k] === b[k]);
 }
 
-/** True when there is a URL for retrieval to actually ground on. */
+/**
+ * True when at least one row will actually survive serialization — the same
+ * part-AND-url rule as `rowsToRecord`. A URL-only row must not arm the
+ * switch: it serializes to an empty `datasheets`, and `ground: true` with no
+ * datasheets is a guaranteed 400 from the service on a paid submit.
+ */
 function canGround(rows: DatasheetRow[]): boolean {
-  return rows.some((row) => row.url.trim().length > 0);
+  return rows.some(
+    (row) => row.part.trim().length > 0 && row.url.trim().length > 0
+  );
 }
 
 function clampTimeLimit(raw: string): number {
@@ -143,8 +150,8 @@ export const RunOptions = ({ request, onChange, disabled }: RunOptionsProps) => 
           </Label>
           <p className="text-[10px] text-muted-foreground">
             {groundable
-              ? "Retrieve pin facts from the PDFs below before proposing."
-              : "Needs a datasheet URL — retrieval has nothing to ground on."}
+              ? "After the run, check the review\u2019s findings back against these PDFs."
+              : "Needs a part and its datasheet URL — grounding has nothing to check against."}
           </p>
         </div>
         <Switch

@@ -18,6 +18,7 @@ import {
 } from "@/pages";
 import { DashboardLayout } from "@/layouts";
 import { RunProvider } from "@/contexts";
+import { loadEngineBaseUrl } from "@/pages/engine/components/EngineConnection";
 
 export default function AppRoutes() {
   return (
@@ -27,7 +28,9 @@ export default function AppRoutes() {
           separate webviews, so each gets its own provider instance — the
           overlay's live run does not appear in the dashboard's tree yet
           (known gap, see the PR notes). */}
-      <RunProvider>
+      {/* Seed from the persisted (and re-validated on read) engine address,
+          so runs target what the Engine page says they target. */}
+      <RunProvider baseUrl={loadEngineBaseUrl()}>
       <Routes>
         <Route path="/" element={<Kaleo />} />
         {/* Pluely's chat bar, kept until the removal pass: */}

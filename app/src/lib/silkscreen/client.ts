@@ -19,7 +19,7 @@ import type { GenerateRequest, RunError, RunResult, StreamFrame } from "./types"
 
 export const DEFAULT_BASE_URL = "http://127.0.0.1:8081";
 
-/** A solve can legitimately run for minutes; the service's own budget is 300 s. */
+/** A solve can legitimately run for minutes; 300 s is this client's own ceiling. */
 export const REQUEST_TIMEOUT_MS = 300_000;
 export const MIN_TIME_LIMIT_S = 5;
 export const MAX_TIME_LIMIT_S = 60;
@@ -60,13 +60,23 @@ export class SilkscreenError extends Error {
   }
 }
 
+/**
+ * The caller's abort signal combined with this client's own ceiling. Passing
+ * a signal must not silently remove the timeout — the app always passes one,
+ * so `signal ?? timeout` would leave every real request without a deadline.
+ */
+function withTimeout(signal?: AbortSignal): AbortSignal {
+  const timeout = AbortSignal.timeout(REQUEST_TIMEOUT_MS);
+  return signal ? AbortSignal.any([signal, timeout]) : timeout;
+}
+
 function clampTimeLimit(value: number | undefined): number {
   const n = Number(value);
   if (!Number.isFinite(n)) return MIN_TIME_LIMIT_S;
   return Math.min(MAX_TIME_LIMIT_S, Math.max(MIN_TIME_LIMIT_S, Math.round(n)));
 }
 
-/** Drop half-filled datasheet rows and clamp the solver budget to what the service accepts. */
+/** Drop half-filled datasheet rows and clamp the solver budget to this app's 5–60 s range. */
 export function normalizeRequest(request: GenerateRequest): GenerateRequest {
   const datasheets: Record<string, string> = {};
   for (const [part, url] of Object.entries(request.datasheets ?? {})) {
@@ -80,8 +90,12 @@ export function normalizeRequest(request: GenerateRequest): GenerateRequest {
     time_limit_s: clampTimeLimit(request.time_limit_s),
     review: request.review !== false,
     // Grounding is opt-in and only sent when asked for: an absent flag is the
-    // service's default, so a stray `ground: false` would say nothing.
-    ...(request.ground === true ? { ground: true } : {}),
+    // service's default, so a stray `ground: false` would say nothing. And
+    // never after normalization emptied `datasheets` — the service 400s a
+    // ground request with nothing to ground on.
+    ...(request.ground === true && Object.keys(datasheets).length > 0
+      ? { ground: true }
+      : {}),
     ...(request.debug === true ? { debug: true } : {}),
   };
 }
@@ -155,7 +169,7 @@ export async function generate(
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(normalizeRequest(request)),
-    signal: signal ?? AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+    signal: withTimeout(signal),
   });
   const body = await readJson(response);
   if (!response.ok) throw errorFromBody(response.status, body as Partial<RunError>);
@@ -186,7 +200,7 @@ export async function generateStream(
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload),
-      signal: signal ?? AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+      signal: withTimeout(signal),
     });
   } catch (error) {
     throw new SilkscreenError(

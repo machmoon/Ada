@@ -126,7 +126,17 @@ export const RunProgress = ({ stages, elapsedS, onCancel }: RunProgressProps) =>
   );
 };
 
-const SEVERITY_ORDER: string[] = ["error", "warning", "info"];
+// The engine's own vocabulary (agents/review.py). The audit CLI's
+// error/warning/info never flows through /generate, but keep it sorted after
+// so a future response carrying it still ranks sensibly.
+const SEVERITY_ORDER: string[] = [
+  "blocker",
+  "error",
+  "marginal",
+  "warning",
+  "note",
+  "info",
+];
 
 function countBySeverity(findings: Finding[]): Map<string, number> {
   const counts = new Map<string, number>();
@@ -138,8 +148,12 @@ function countBySeverity(findings: Finding[]): Map<string, number> {
 }
 
 function severityVariant(severity: string) {
-  if (severity === "error") return "destructive" as const;
-  if (severity === "warning") return "secondary" as const;
+  if (severity === "blocker" || severity === "error") {
+    return "destructive" as const;
+  }
+  if (severity === "marginal" || severity === "warning") {
+    return "secondary" as const;
+  }
   return "outline" as const;
 }
 
@@ -195,7 +209,7 @@ export const RunSummary = ({
   onNewRun,
 }: RunSummaryProps) => {
   const board = result.placements?.board_mm;
-  const partCount = result.parts?.length ?? result.placements?.parts.length ?? null;
+  const partCount = result.parts?.length ?? result.placements?.parts?.length ?? null;
   const netCount = result.nets?.length ?? null;
   const findings = result.findings;
   const counts = findings ? countBySeverity(findings) : null;
@@ -271,7 +285,7 @@ export const RunSummary = ({
             data-testid="summary-origins"
           >
             {findings.filter((f) => f.origin === "proven").length} measured,{" "}
-            {findings.filter((f) => f.origin !== "proven").length} model-suggested
+            {findings.filter((f) => f.origin !== "proven").length} unattributed
           </span>
         ) : null}
         {result.blockers?.length ? (
@@ -330,7 +344,7 @@ function explain(
     case "timeout":
       return {
         title: "The run ran out of time.",
-        body: "The engine did not finish inside the request budget. A smaller board, or a shorter placer budget, comes back sooner.",
+        body: "The run passed this app\u2019s 300 second ceiling and was cancelled. A smaller board, or a shorter placer budget, comes back sooner.",
       };
     case "cancelled":
       return { title: "Run cancelled.", body: "Nothing was written." };

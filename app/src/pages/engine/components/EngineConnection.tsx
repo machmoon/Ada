@@ -4,11 +4,7 @@ import { Button, Header, Input, Label } from "@/components";
 import { safeLocalStorage } from "@/lib";
 import { cn } from "@/lib/utils";
 import { DEFAULT_BASE_URL, health } from "@/lib/silkscreen/client";
-import {
-  LOOPBACK_HOSTS,
-  LOOPBACK_V4_PREFIX,
-  KALEO_STORAGE_KEYS,
-} from "@/config/kaleo.constants";
+import { LOOPBACK_HOSTS, KALEO_STORAGE_KEYS } from "@/config/kaleo.constants";
 
 export interface BaseUrlCheck {
   ok: boolean;
@@ -60,9 +56,20 @@ export function validateEngineBaseUrl(raw: string): BaseUrlCheck {
   }
 
   const host = parsed.hostname.toLowerCase();
+  // A real loopback literal, not a name that merely starts with "127." —
+  // `127.evil.com` and `127.0.0.1.evil.com` are DNS names an attacker
+  // resolves anywhere they like. Four numeric octets, first one 127, or the
+  // exact IPv6/name forms; anything else is a hostname and is refused.
+  const isV4Loopback = (h: string): boolean => {
+    const octets = h.split(".");
+    if (octets.length !== 4) return false;
+    if (!octets.every((o) => /^\d{1,3}$/.test(o) && Number(o) <= 255)) {
+      return false;
+    }
+    return Number(octets[0]) === 127;
+  };
   const isLoopback =
-    (LOOPBACK_HOSTS as readonly string[]).includes(host) ||
-    host.startsWith(LOOPBACK_V4_PREFIX);
+    (LOOPBACK_HOSTS as readonly string[]).includes(host) || isV4Loopback(host);
   if (!isLoopback) {
     return {
       ok: false,

@@ -88,7 +88,7 @@ const SECRET_KEY = /key|token|secret|password|authorization|credential/i;
 const SECRET_PARAM =
   /([?&#][^?&=\s]*(?:key|token|secret|password|signature|sig|auth|credential)[^?&=\s]*=)[^&\s#"'<>]*/gi;
 /** An `Authorization: Bearer …` value, wherever it was stringified from. */
-const BEARER = /\bBearer\s+[A-Za-z0-9._~+/-]+=*/g;
+const BEARER = /\bBearer\s+[A-Za-z0-9._~+/-]+=*/gi;
 
 const UNSERIALIZABLE = "[unserializable]";
 const ENCODER = new TextEncoder();
@@ -295,7 +295,11 @@ function append(input: LogInput): void {
   const src = SOURCES.includes(input?.src as LogSrc)
     ? (input.src as LogSrc)
     : "app";
-  const event = typeof input?.event === "string" ? input.event : "";
+  // Event names are engine-controlled strings; they take the same scrub and
+  // a short cap so the "one appending path sanitizes everything" claim holds
+  // for every field, not every field but one.
+  const event =
+    typeof input?.event === "string" ? scrubClip(input.event, 256) : "";
   const t = Number.isFinite(input?.t) ? (input.t as number) : Date.now();
 
   // Scrubbed here, not at call sites: a caller-written msg (an error message,

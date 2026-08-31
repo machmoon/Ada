@@ -4,7 +4,7 @@ import {
   SPEECH_TO_TEXT_PROVIDERS,
   STORAGE_KEYS,
 } from "@/config";
-import { getPlatform, safeLocalStorage, trackAppStart } from "@/lib";
+import { getPlatform, safeLocalStorage } from "@/lib";
 import { getShortcutsConfig } from "@/lib/storage";
 import {
   getCustomizableState,
@@ -332,13 +332,11 @@ export const AppProvider = ({ children }: { children: ReactNode }) => {
       // Load license and data
       await getActiveLicenseStatus();
 
-      // Track app start
+      // Upstream phoned PostHog here with a stable per-install id on every
+      // launch. Kaleo sends no telemetry: no consent surface exists, so no
+      // capture. (`analytics.ts` itself goes in the Pluely-removal pass.)
       try {
-        const appVersion = await invoke<string>("get_app_version");
-        const storage = await invoke<{
-          instance_id: string;
-        }>("secure_storage_get");
-        await trackAppStart(appVersion, storage.instance_id || "");
+        // nothing to track
       } catch (error) {
         console.debug("Failed to track app start:", error);
       }

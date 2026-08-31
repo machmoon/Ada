@@ -3,6 +3,7 @@ import { CheckIcon, CopyIcon, TerminalIcon } from "lucide-react";
 import { Button, Header } from "@/components";
 import { PageLayout } from "@/layouts";
 import { useCopyToClipboard, useEngineHealth } from "@/hooks";
+import { useSilkscreenRun } from "@/contexts/run.context";
 import { ENGINE_START_STEPS, type EngineStartStep } from "@/config/kaleo.constants";
 import {
   EngineConnection,
@@ -65,6 +66,13 @@ const Engine = () => {
   const [baseUrl, setBaseUrl] = useState(loadEngineBaseUrl);
   // The poll restarts on its own when `baseUrl` changes — the hook keys on it.
   const health = useEngineHealth(baseUrl);
+  // Saving here must reach the run layer too, or the address on this page and
+  // the address runs actually target quietly diverge until the next launch.
+  const run = useSilkscreenRun();
+  const applyBaseUrl = (url: string) => {
+    setBaseUrl(url);
+    run.setBaseUrl(url);
+  };
 
   return (
     <PageLayout
@@ -84,7 +92,7 @@ const Engine = () => {
         </div>
       }
     >
-      <EngineConnection baseUrl={baseUrl} onBaseUrlChange={setBaseUrl} />
+      <EngineConnection baseUrl={baseUrl} onBaseUrlChange={applyBaseUrl} />
 
       <div id="engine-start" className="space-y-3">
         <Header

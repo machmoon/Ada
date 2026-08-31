@@ -128,7 +128,7 @@ export interface RunResult {
   intent?: string;
   /** `[width, height]` in millimetres — same numbers as `placements.board_mm`. */
   board_mm?: [number, number];
-  /** CP-SAT solver status: OPTIMAL / FEASIBLE / FALLBACK. */
+  /** CP-SAT solver status, lowercase on the wire: optimal / feasible / fallback. */
   status?: string;
   /** How many repair rounds the propose loop needed. */
   repair_rounds?: number;
@@ -142,6 +142,19 @@ export interface RunResult {
   placements?: Placements;
   schematic?: Schematic;
   order?: Record<string, unknown>;
+  /**
+   * The router's own report, sent on every run: counts, the nets it finished,
+   * and — the honesty contract — every net it could not, by name, with the
+   * reason. `completion` is the routed fraction (0..1).
+   */
+  routing?: {
+    tracks?: number;
+    vias?: number;
+    routed?: string[];
+    unrouted?: Record<string, string>;
+    warnings?: string[];
+    completion?: number;
+  };
   grounding?: Record<string, unknown>;
   duration_s?: number;
   wirelength_mm?: number | null;
@@ -154,7 +167,8 @@ export interface RunError {
   error: string;
   detail?: string;
   error_id?: string;
-  status: number;
+  /** Only the `run.error` stream frame carries this; error bodies do not. */
+  status?: number;
 }
 
 /**

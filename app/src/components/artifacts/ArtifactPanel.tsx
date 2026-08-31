@@ -82,7 +82,10 @@ export function ArtifactPanel({
 
       <RunSummary result={result} />
 
-      <OrderPanel order={result.order} unroutedNets={unroutedNets} />
+      <OrderPanel
+        order={result.order}
+        unroutedNets={unroutedNets ?? result.routing?.unrouted ?? null}
+      />
     </aside>
   );
 }
