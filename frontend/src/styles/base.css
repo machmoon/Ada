@@ -28,6 +28,22 @@ button:disabled { cursor: default; }
 
 :focus-visible { outline: 1px solid var(--navy); outline-offset: 1px; }
 
+/* A surface declares its material role in markup. Chrome, panels, popovers,
+   and sticky surfaces blur the page behind them in glass mode; tint and
+   canvas are deliberate no-filter roles, which prevents nested blur stacks. */
+[data-material='chrome'],
+[data-material='panel'],
+[data-material='popover'],
+[data-material='sticky'] {
+  backdrop-filter: var(--material-filter);
+  -webkit-backdrop-filter: var(--material-filter);
+}
+
+[data-material='panel'],
+[data-material='popover'] {
+  border-radius: var(--panel-radius);
+}
+
 /* the mockup's three utilities */
 .lbl {
   font-family: var(--font-mono);

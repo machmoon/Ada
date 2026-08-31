@@ -147,12 +147,12 @@ describe('describeStageEvent', () => {
     )
   })
 
-  it('drops the budget clause when the event carries no time limit', () => {
+  it('distinguishes an unlimited solver from a legacy event with no budget field', () => {
     expect(describeStageEvent({ event: 'stage.start', stage: 'place' })).toBe(
       `placing with CP-SAT${ELLIPSIS}`,
     )
     expect(describeStageEvent({ event: 'stage.start', stage: 'place', time_limit_s: null })).toBe(
-      `placing with CP-SAT${ELLIPSIS}`,
+      `placing with CP-SAT (no solver budget)${ELLIPSIS}`,
     )
   })
 
@@ -436,6 +436,53 @@ describe('describeStageEvent', () => {
     )
   })
 
+  it('names orchestrator and worker prompts before their calls', () => {
+    expect(
+      describeStageEvent({
+        event: 'model.request',
+        layer: 'orchestrator',
+        model: 'gemini-auto',
+      }),
+    ).toBe('orchestrator prompt prepared for gemini-auto')
+    expect(
+      describeStageEvent({ event: 'model.request', layer: 'worker', stage: 'review' }),
+    ).toBe('worker prompt prepared (review)')
+  })
+
+  it('names the orchestrator reasoning effort when a chat starts', () => {
+    expect(
+      describeStageEvent({
+        event: 'chat.accepted',
+        model: 'gemini-3.1-pro-preview',
+        thinking_level: 'high',
+        quota_rpm: 6,
+      }),
+    ).toBe('orchestrator started with gemini-3.1-pro-preview · high thinking · 6 RPM pace')
+  })
+
+  it('explains an app-side quota wait', () => {
+    expect(
+      describeStageEvent({
+        event: 'quota.wait',
+        layer: 'worker',
+        quota_rpm: 6,
+        delay_s: 10,
+      }),
+    ).toBe('worker waiting for quota pace: 10.0 s at 6 RPM')
+  })
+
+  it('describes orchestrator tool boundaries and clarification completion', () => {
+    expect(describeStageEvent({ event: 'tool.start', tool: 'generate_board' })).toBe(
+      'orchestrator called generate_board...',
+    )
+    expect(describeStageEvent({ event: 'tool.done', tool: 'generate_board' })).toBe(
+      'generate_board finished',
+    )
+    expect(describeStageEvent({ event: 'chat.done', needs_clarification: true })).toBe(
+      'waiting for one clarification',
+    )
+  })
+
   it('reports a raw model response by its size', () => {
     expect(
       describeStageEvent({
@@ -547,16 +594,25 @@ describe('describeStageEvent', () => {
 
   it('never throws, and always returns a readable sentence, on a gutted event', () => {
     const events = [
+      'chat.accepted',
       'run.accepted',
       'stage.start',
       'stage.done',
       'read.part',
       'propose.round',
       'model.call',
+      'model.request',
+      'model.response',
       'model.retry',
+      'tool.start',
+      'tool.done',
+      'tool.error',
       'ground.part',
       'run.done',
       'run.error',
+      'assistant.message',
+      'chat.done',
+      'chat.error',
       'client.badframe',
       'some.event',
     ]

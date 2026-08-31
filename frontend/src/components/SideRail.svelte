@@ -33,7 +33,7 @@
   )
 </script>
 
-<aside class="rail" data-testid="side-rail">
+<aside class="rail" data-testid="side-rail" data-material="chrome">
   <!-- A skipped review checked nothing, so the heading and the net row have to
        say what actually ran instead. -->
   <div class="lbl heading" data-testid="side-rail-heading">{reviewed ? 'What was checked' : 'What ran'}</div>
@@ -75,9 +75,6 @@
     width: var(--rail-w);
     border-left: 1px solid var(--rule-soft);
     background: var(--rail);
-    /* Inert under Drafting Table; the glass skin defines both. */
-    backdrop-filter: var(--glass-blur, none);
-    -webkit-backdrop-filter: var(--glass-blur, none);
     flex-shrink: 0;
     padding: 26px 20px;
     overflow-y: auto;

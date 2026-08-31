@@ -49,6 +49,11 @@ MAX_EVENT_TEXT = 160
 #: The single opt-in exception: a ``model.response`` event carries the model's
 #: own answer verbatim, clipped here, for a client debugging what it was told.
 MAX_RESPONSE_TEXT = 16_000
+#: Debug requests are usually a few kilobytes, but repaired proposals can carry
+#: a complete validation batch and datasheet facts. Keep enough to diagnose the
+#: call without allowing one pathological prompt to turn the progress stream
+#: into an unbounded transport.
+MAX_REQUEST_TEXT = 64_000
 
 
 @dataclass
@@ -124,6 +129,7 @@ class _EventingModel:
         self._emit = emit
         self.stage = ""
         self.include_responses = include_responses
+        self._call_seq = 0
 
     def generate(
         self,
@@ -134,6 +140,33 @@ class _EventingModel:
         temperature: float = 0.0,
         max_output_tokens: int = 8192,
     ) -> str:
+        self._call_seq += 1
+        call_id = f"worker-{self._call_seq}"
+        if self.include_responses:
+            document_refs = []
+            for document in documents or []:
+                document_refs.append(
+                    {
+                        "url": document.url,
+                        "mime_type": document.mime_type,
+                        "bytes": len(document.data) if document.data is not None else 0,
+                    }
+                )
+            self._emit(
+                {
+                    "event": "model.request",
+                    "layer": "worker",
+                    "call_id": call_id,
+                    "stage": self.stage,
+                    "system": (system or "")[:MAX_REQUEST_TEXT],
+                    "prompt": prompt[:MAX_REQUEST_TEXT],
+                    "documents": document_refs,
+                    "temperature": temperature,
+                    "max_output_tokens": max_output_tokens,
+                    "truncated": len(system or "") > MAX_REQUEST_TEXT
+                    or len(prompt) > MAX_REQUEST_TEXT,
+                }
+            )
         # A failover model keeps an append-only attempt log. Anything appended
         # during this call is a provider that failed on the way to an answer;
         # a model without such a log simply produces no retry events.
@@ -149,17 +182,21 @@ class _EventingModel:
                 max_output_tokens=max_output_tokens,
             )
         except Exception:
-            self._emit_retries(log, seen)
-            self._emit_call(started, ok=False, chars=0)
+            self._emit_retries(log, seen, call_id)
+            self._emit_call(started, call_id=call_id, ok=False, chars=0)
             raise
-        self._emit_retries(log, seen)
-        self._emit_call(started, ok=True, chars=len(text))
+        self._emit_retries(log, seen, call_id)
+        self._emit_call(started, call_id=call_id, ok=True, chars=len(text))
         if self.include_responses:
             self._emit(
                 {
                     "event": "model.response",
+                    "layer": "worker",
+                    "call_id": call_id,
                     "stage": self.stage,
                     "provider": getattr(self._model, "last_provider", None),
+                    "model": getattr(self._model, "last_model", None)
+                    or getattr(self._model, "model", None),
                     "chars": len(text),
                     "truncated": len(text) > MAX_RESPONSE_TEXT,
                     "text": text[:MAX_RESPONSE_TEXT],
@@ -167,20 +204,25 @@ class _EventingModel:
             )
         return text
 
-    def _emit_call(self, started: float, *, ok: bool, chars: int) -> None:
+    def _emit_call(
+        self, started: float, *, call_id: str, ok: bool, chars: int
+    ) -> None:
         self._emit(
             {
                 "event": "model.call",
+                "layer": "worker",
+                "call_id": call_id,
                 "stage": self.stage,
                 "provider": getattr(self._model, "last_provider", None),
-                "model": getattr(self._model, "model", None),
+                "model": getattr(self._model, "last_model", None)
+                or getattr(self._model, "model", None),
                 "elapsed_s": round(time.monotonic() - started, 3),
                 "ok": ok,
                 "chars": chars,
             }
         )
 
-    def _emit_retries(self, log: object, seen: int) -> None:
+    def _emit_retries(self, log: object, seen: int, call_id: str) -> None:
         if not isinstance(log, list):
             return
         for attempt in log[seen:]:
@@ -189,6 +231,8 @@ class _EventingModel:
             self._emit(
                 {
                     "event": "model.retry",
+                    "layer": "worker",
+                    "call_id": call_id,
                     "stage": self.stage,
                     "provider": getattr(attempt, "provider", None),
                     "error": str(getattr(attempt, "error", "") or "")[:MAX_EVENT_TEXT],
@@ -274,7 +318,7 @@ def _generate_pcb_sdk(
     preloaded_facts: list[PartFacts] | None = None,
     output: str | Path | None = None,
     max_repairs: int = 3,
-    time_limit_s: float = 20.0,
+    time_limit_s: float | None = 20.0,
     review: bool = True,
     route: bool = True,
     emit_stages: bool = True,
@@ -335,7 +379,7 @@ def generate_pcb(
     preloaded_facts: list[PartFacts] | None = None,
     output: str | Path | None = None,
     max_repairs: int = 3,
-    time_limit_s: float = 20.0,
+    time_limit_s: float | None = 20.0,
     review: bool = True,
     route: bool = True,
     emit_stages: bool = True,
@@ -357,7 +401,7 @@ def generate_pcb(
             designs and reviews the board as though the part were undocumented.
         output: Where to write the ``.kicad_pcb``. Skipped if omitted.
         max_repairs: How many times the proposal may be sent back for repair.
-        time_limit_s: Placement solver budget.
+        time_limit_s: Placement solver budget, or ``None`` for no solver limit.
         review: Run the adversarial review pass.
         route: Lay copper after placing. Off leaves a placed board whose pads
             carry nets and whose copper is empty -- which KiCad draws as a

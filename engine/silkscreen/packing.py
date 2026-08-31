@@ -258,7 +258,7 @@ def pack(
     grid_nm: int = DEFAULT_GRID_NM,
     clearance_nm: int = DEFAULT_CLEARANCE_NM,
     max_board_nm: tuple[int, int] | None = None,
-    time_limit_s: float = 10.0,
+    time_limit_s: float | None = 10.0,
     size_weight: float = 1.0,
     wire_weight: float = 1.0,
     balance_objective: bool = False,
@@ -282,7 +282,8 @@ def pack(
         clearance_nm: Minimum edge-to-edge gap between two placed courtyards.
         max_board_nm: Optional hard ``(width, height)`` cap. The model is
             infeasible if the parts cannot fit inside it.
-        time_limit_s: Wall-clock budget for CP-SAT.
+        time_limit_s: Wall-clock budget for CP-SAT. ``None`` lets CP-SAT run
+            until it proves the optimum or infeasibility.
         size_weight: Relative weight on board half-perimeter. Zero disables it.
         wire_weight: Relative weight on total HPWL. Multiplied by each net's own
             ``weight``, so a power rail can be down-weighted without being
@@ -671,7 +672,8 @@ def pack(
     model.Minimize(cp_model.LinearExpr.Sum(objective_terms))
 
     solver = cp_model.CpSolver()
-    solver.parameters.max_time_in_seconds = float(time_limit_s)
+    if time_limit_s is not None:
+        solver.parameters.max_time_in_seconds = float(time_limit_s)
     solver.parameters.random_seed = seed
     solver.parameters.num_workers = workers
     status = solver.Solve(model)
@@ -689,8 +691,13 @@ def pack(
     if status not in (cp_model.OPTIMAL, cp_model.FEASIBLE):
         # Time limit expired with nothing found. Return a valid-but-poor layout
         # rather than raising, which is what the original did.
+        limit = (
+            f"in {time_limit_s}s"
+            if time_limit_s is not None
+            else "before the unrestricted search stopped"
+        )
         warnings.append(
-            f"CP-SAT found no solution in {time_limit_s}s "
+            f"CP-SAT found no solution {limit} "
             f"({solver.StatusName(status)}); used shelf fallback."
         )
         # The fallback packs by size alone. Say so loudly rather than returning
@@ -754,8 +761,13 @@ def pack(
         wirelength = sum(solver.Value(t) for t in hpwl_terms) * grid_nm
 
     if status == cp_model.FEASIBLE:
+        reason = (
+            "Time limit reached"
+            if time_limit_s is not None
+            else "Solver stopped before proving optimality"
+        )
         warnings.append(
-            f"Time limit reached; solution is feasible but not proven optimal "
+            f"{reason}; solution is feasible but not proven optimal "
             f"(gap bound {solver.BestObjectiveBound():.0f} vs "
             f"{solver.ObjectiveValue():.0f})."
         )

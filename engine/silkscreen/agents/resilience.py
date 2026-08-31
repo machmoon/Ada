@@ -86,6 +86,9 @@ class FallbackModel:
     #: provider actually served a request.
     log: list[Attempt] = field(default_factory=list)
     _sleep: Callable[[float], None] = time.sleep
+    #: Called immediately before every provider attempt. Services can use this
+    #: to coordinate quota pacing across retries without changing providers.
+    before_attempt: Callable[[str], None] | None = None
 
     def __post_init__(self) -> None:
         if not self.providers:
@@ -97,6 +100,16 @@ class FallbackModel:
         for attempt in reversed(self.log):
             if attempt.ok:
                 return attempt.provider
+        return None
+
+    @property
+    def last_model(self) -> str | None:
+        """Concrete model id behind :attr:`last_provider`, when it exposes one."""
+        served = self.last_provider
+        for provider in self.providers:
+            if provider.name == served:
+                value = getattr(provider.model, "model", None)
+                return str(value) if value else None
         return None
 
     def generate(
@@ -111,6 +124,8 @@ class FallbackModel:
         attempts: list[Attempt] = []
         for provider in self.providers:
             for try_no in range(provider.attempts):
+                if self.before_attempt is not None:
+                    self.before_attempt(provider.name)
                 started = time.monotonic()
                 try:
                     raw = provider.model.generate(

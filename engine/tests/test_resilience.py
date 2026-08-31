@@ -107,6 +107,18 @@ def test_retries_within_a_provider_before_moving_on():
     assert flaky.calls == 3, "should exhaust its retries before failing over"
 
 
+def test_every_provider_attempt_passes_through_the_pre_call_hook():
+    called = []
+    fb = chain(
+        Provider("primary", Boom(), attempts=2),
+        Provider("backup", ScriptedModel(responses=["ok"]), attempts=1),
+        before_attempt=called.append,
+    )
+
+    assert fb.generate("hi") == "ok"
+    assert called == ["primary", "primary", "backup"]
+
+
 def test_backoff_grows_and_is_capped():
     delays = []
     fb = FallbackModel(

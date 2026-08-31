@@ -26,7 +26,7 @@ import traceback
 import urllib.parse
 import uuid
 from collections.abc import Callable
-from dataclasses import fields
+from dataclasses import fields, replace
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
@@ -64,6 +64,13 @@ from silkscreen.order import (  # noqa: E402
 from silkscreen.units import to_mm  # noqa: E402
 
 from .cache import FactStore, MemoryFactStore  # noqa: E402
+from .models import (  # noqa: E402
+    model_catalog,
+    select_model,
+    select_quota_rpm,
+    select_thinking_level,
+)
+from .quota import GEMINI_REQUEST_PACER, RequestPacer  # noqa: E402
 
 __all__ = [
     "Handler",
@@ -463,6 +470,44 @@ def build_model():
     )
 
 
+def run_chat_orchestrator(**kwargs):
+    """Load ADK only for the route that needs its LLM agent."""
+    try:
+        from silkscreen.agents.adk.orchestrator import run_orchestrator
+    except ImportError as exc:
+        raise RuntimeError(
+            "the chat orchestrator needs the adk extra: pip install 'silkscreen[adk]'"
+        ) from exc
+    return run_orchestrator(**kwargs)
+
+
+class _PacedModel:
+    """Apply a pre-call hook to a non-fallback model injected into the service."""
+
+    def __init__(self, model, before_attempt: Callable[[str], None]) -> None:
+        self._model = model
+        self._before_attempt = before_attempt
+
+    @property
+    def last_provider(self):
+        return getattr(self._model, "last_provider", None)
+
+    @property
+    def last_model(self):
+        return getattr(self._model, "last_model", None)
+
+    def generate(self, prompt: str, **kwargs):
+        self._before_attempt("worker")
+        return self._model.generate(prompt, **kwargs)
+
+
+def _with_request_pacing(model, before_attempt: Callable[[str], None]):
+    """Pace every explicit fallback attempt, or one ordinary model call."""
+    if isinstance(model, FallbackModel):
+        return replace(model, before_attempt=before_attempt)
+    return _PacedModel(model, before_attempt)
+
+
 def generate(
     payload: dict[str, Any],
     *,
@@ -538,14 +583,20 @@ def generate(
             unusable.append(part)
             to_read[part] = datasheets[part]
 
-    # Coerce here, not in the route handler: float() raises TypeError on a
-    # JSON null and ValueError on a string, and both are this caller's error.
-    # Naming the field keeps the route's except clause narrow, so a genuine
-    # internal TypeError still surfaces as a 500 with an error id.
-    try:
-        time_limit_s = float(payload.get("time_limit_s", DEFAULT_TIME_LIMIT))
-    except (TypeError, ValueError):
-        raise ValueError("'time_limit_s' must be a number") from None
+    no_solver_budget = payload.get("no_solver_budget", False)
+    if not isinstance(no_solver_budget, bool):
+        raise ValueError("'no_solver_budget' must be a boolean")
+    if no_solver_budget:
+        time_limit_s = None
+    else:
+        # Coerce here, not in the route handler: float() raises TypeError on a
+        # JSON null and ValueError on a string, and both are this caller's error.
+        # Naming the field keeps the route's except clause narrow, so a genuine
+        # internal TypeError still surfaces as a 500 with an error id.
+        try:
+            time_limit_s = float(payload.get("time_limit_s", DEFAULT_TIME_LIMIT))
+        except (TypeError, ValueError):
+            raise ValueError("'time_limit_s' must be a number") from None
 
     result = generate_pcb(
         model,
@@ -615,6 +666,16 @@ def generate(
         ),
     }
 
+    if result.route is not None:
+        response["routing"] = {
+            "tracks": len(result.route.tracks),
+            "vias": len(result.route.vias),
+            "routed": list(result.route.routed),
+            "unrouted": dict(result.route.unrouted),
+            "warnings": list(result.route.warnings),
+            "completion": round(result.route.completion, 4),
+        }
+
     if order_opts is not None:
         response["order"] = _order_block(board, result.spec, order_opts)
 
@@ -681,10 +742,12 @@ def generate(
 
 
 class Handler(BaseHTTPRequestHandler):
-    """Four routes: a health check Cloud Run can probe, the generator in its
-    one-shot and streaming forms, and the built web bundle."""
+    """Same-origin API and built web bundle for the review interface."""
 
     model_factory = staticmethod(build_model)
+    model_catalog_factory = staticmethod(model_catalog)
+    orchestrator_runner = staticmethod(run_chat_orchestrator)
+    request_pacer: RequestPacer = GEMINI_REQUEST_PACER
     store: FactStore | None = None
     pages_store: FactStore | None = None
     embedder_factory = staticmethod(build_embedder)
@@ -777,6 +840,10 @@ class Handler(BaseHTTPRequestHandler):
             self._send(200, {"ok": True, "service": "silkscreen"})
             return
 
+        if route == "/models":
+            self._send(200, self.model_catalog_factory())
+            return
+
         static = self._resolve_static(route)
         if static is not None:
             self._send_file(static)
@@ -793,6 +860,9 @@ class Handler(BaseHTTPRequestHandler):
         self._send(404, {"error": f"no route {self.path}"})
 
     def do_POST(self) -> None:
+        if self.path == "/chat/stream":
+            self._chat_stream()
+            return
         if self.path == "/generate/stream":
             self._generate_stream()
             return
@@ -837,12 +907,32 @@ class Handler(BaseHTTPRequestHandler):
         self,
         payload: dict[str, Any],
         on_event: Callable[[dict[str, Any]], None] | None = None,
+        quota_rpm: int | None = None,
     ) -> dict[str, Any]:
         """One pipeline run, wired to whatever this handler was injected with."""
         store = self.store if self.store is not None else build_store()
+        model = self.model_factory()
+        if quota_rpm is not None:
+
+            def before_attempt(provider: str) -> None:
+                self.request_pacer.wait(
+                    quota_rpm,
+                    on_wait=lambda delay: on_event
+                    and on_event(
+                        {
+                            "event": "quota.wait",
+                            "layer": "worker",
+                            "provider": provider,
+                            "quota_rpm": quota_rpm,
+                            "delay_s": round(delay, 3),
+                        }
+                    ),
+                )
+
+            model = _with_request_pacing(model, before_attempt)
         return generate(
             payload,
-            model=self.model_factory(),
+            model=model,
             store=store,
             pages_store=self.pages_store,
             embedder_factory=self.embedder_factory,
@@ -921,6 +1011,143 @@ class Handler(BaseHTTPRequestHandler):
 
         with contextlib.suppress(ConnectionError):
             emit({"event": "run.done", "result": result})
+
+    def _chat_stream(self) -> None:
+        """One ADK orchestrator turn, with pipeline and model events inline."""
+        payload = self._read_payload()
+        if payload is None:
+            return
+
+        intent = payload.get("intent")
+        clarification = payload.get("clarification", "")
+        if not isinstance(intent, str) or not intent.strip():
+            self._send(400, {"error": "'intent' is required"})
+            return
+        if not isinstance(clarification, str):
+            self._send(400, {"error": "'clarification' must be a string"})
+            return
+
+        session_id = str(payload.get("session_id") or uuid.uuid4().hex)
+        turn_id = str(payload.get("turn_id") or uuid.uuid4().hex[:12])
+        if len(session_id) > 128 or len(turn_id) > 128:
+            self._send(
+                400,
+                {"error": "session and turn ids must be at most 128 characters"},
+            )
+            return
+
+        try:
+            catalog = self.model_catalog_factory()
+            orchestrator_model = select_model(payload.get("model"), catalog)
+            thinking_level = select_thinking_level(payload.get("thinking_level"))
+            quota_rpm = select_quota_rpm(payload.get("quota_rpm"))
+        except ValueError as exc:
+            self._send(400, {"error": str(exc)})
+            return
+
+        self.send_response(200)
+        self.send_header("Content-Type", "application/x-ndjson")
+        self.send_header("Cache-Control", "no-cache")
+        self.end_headers()
+
+        started = time.monotonic()
+        event_seq = 0
+        gone = False
+
+        def emit(event: dict[str, Any]) -> None:
+            nonlocal event_seq, gone
+            event_seq += 1
+            frame = {
+                "schema_version": 1,
+                "session_id": session_id,
+                "turn_id": turn_id,
+                "event_id": f"e{event_seq}",
+                **event,
+            }
+            frame.setdefault("t_s", round(time.monotonic() - started, 3))
+            try:
+                self.wfile.write((json.dumps(frame) + "\n").encode())
+                self.wfile.flush()
+            except ConnectionError:
+                gone = True
+                raise
+
+        def generate_board() -> dict[str, Any]:
+            board_payload = {
+                key: value
+                for key, value in payload.items()
+                if key
+                not in {
+                    "clarification",
+                    "session_id",
+                    "turn_id",
+                    "model",
+                    "thinking_level",
+                    "quota_rpm",
+                }
+            }
+            if clarification.strip():
+                board_payload["intent"] = (
+                    f"{intent.strip()}\n\nClarification: {clarification.strip()}"
+                )
+            return self._run(board_payload, on_event=emit, quota_rpm=quota_rpm)
+
+        def pace_orchestrator() -> None:
+            self.request_pacer.wait(
+                quota_rpm,
+                on_wait=lambda delay: emit(
+                    {
+                        "event": "quota.wait",
+                        "layer": "orchestrator",
+                        "model": orchestrator_model,
+                        "quota_rpm": quota_rpm,
+                        "delay_s": round(delay, 3),
+                    }
+                ),
+            )
+
+        try:
+            emit(
+                {
+                    "event": "chat.accepted",
+                    "layer": "orchestrator",
+                    "model": orchestrator_model,
+                    "thinking_level": thinking_level or "auto",
+                    "quota_rpm": quota_rpm or "auto",
+                }
+            )
+            outcome = self.orchestrator_runner(
+                message=intent,
+                clarification=clarification,
+                model=orchestrator_model,
+                thinking_level=thinking_level,
+                session_id=session_id,
+                generate=generate_board,
+                emit=emit,
+                debug=bool(payload.get("debug", False)),
+                before_model_call=pace_orchestrator,
+            )
+        except Exception as exc:
+            if gone:
+                sys.stderr.write(f"stream client disconnected: {self.path}\n")
+                return
+            status, body = _error_response(exc)
+            with contextlib.suppress(ConnectionError):
+                emit({"event": "chat.error", "status": status, **body})
+            return
+
+        with contextlib.suppress(ConnectionError):
+            emit(
+                {
+                    "event": "chat.done",
+                    "assistant": outcome.assistant,
+                    "needs_clarification": outcome.needs_clarification,
+                    "model": outcome.model,
+                    "thinking_level": thinking_level or "auto",
+                    "quota_rpm": quota_rpm or "auto",
+                    "result": outcome.result,
+                }
+            )
 
     def log_message(self, fmt: str, *args: Any) -> None:
         sys.stderr.write(f"{self.address_string()} - {fmt % args}\n")

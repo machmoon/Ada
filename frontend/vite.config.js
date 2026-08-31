@@ -21,6 +21,13 @@ export default defineConfig({
         timeout: 300000,
         proxyTimeout: 300000,
       },
+      '/chat': {
+        target: API,
+        changeOrigin: false,
+        timeout: 300000,
+        proxyTimeout: 300000,
+      },
+      '/models': { target: API, changeOrigin: false },
       '/healthz': { target: API, changeOrigin: false },
     },
   },

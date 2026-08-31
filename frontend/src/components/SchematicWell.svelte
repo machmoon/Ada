@@ -28,7 +28,7 @@
 </script>
 
 <figure class="schematic" data-testid="schematic-well">
-  <div class="frame">
+  <div class="frame" data-material="canvas">
     <div class="lbl well-label" data-testid="schematic-well-label">Schematic</div>
 
     <div
@@ -169,7 +169,7 @@
     </div>
   </div>
 
-  <figcaption class="caption">
+  <figcaption class="caption" data-material="panel">
     <span class="mono" data-testid="schematic-well-caption">{caption}</span>
     <span class="spacer"></span>
     <span class="mono selected-caption" data-testid="schematic-well-selection">

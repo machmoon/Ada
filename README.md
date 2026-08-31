@@ -29,7 +29,7 @@ Every stage is a real KiCad file you can open and inspect on its own, so you can
 where a design went wrong instead of only seeing the last artifact.
 
 ```
-542 passed — no network, no API key, no KiCad install
+706 tests collected — no network, no API key, no KiCad install
 ```
 
 ---
@@ -44,10 +44,11 @@ where a design went wrong instead of only seeing the last artifact.
 | KiCad project (`.kicad_pro`) | ✅ | ❌ |
 | Adversarial review, findings, citations | ✅ text | ✅ nicer to read |
 
-**The CLI is the supported path.** The web UI (`service/` + `frontend/`) is a review
-viewer built around the one artifact the pipeline used to produce, and it has not
-caught up with schematics or routing: it shows a placement diagram and hands you the
-final `.kicad_pcb`. Use it to read a review; use the CLI to design a board.
+**The CLI is still the complete project-output path.** The web UI (`service/` +
+`frontend/`) now starts with a persistent orchestrator chat, shows the observable model,
+tool, validation, and retry activity, and hands you compact cards for the schematic,
+placement diagram, review, and final `.kicad_pcb`. It still does not return the native
+`.kicad_sch`/`.kicad_pro` or draw routed tracks, so use the CLI when those files matter.
 
 ---
 
@@ -81,21 +82,21 @@ that consumes the file. Install it if you are a person who wants to see a board.
 | Component | State |
 |---|---|
 | `kicad.py` — `.kicad_pcb` read/write | **Working** · 28 tests |
-| `packing.py` — CP-SAT placer | **Working** · 43 tests |
+| `packing.py` — CP-SAT placer | **Working** · 44 tests |
 | `netlist.py` — validated circuit IR | **Working** · 21 tests |
-| `schematic.py` — `.kicad_sch` + `.kicad_pro` emission | **Working** · 20 tests · KiCad ERC clean |
+| `schematic.py` — `.kicad_sch` + `.kicad_pro` emission | **Working** · 22 tests · KiCad ERC clean |
 | `routing.py` — two-layer grid autorouter | **Working, partial by design** · 20 tests — see below |
 | `footprints.py` + `board.py` — land patterns, board emission | **Working** · 20 tests |
 | `agents/` — datasheet, propose, review, pipeline | **Working** · 34 tests |
 | `agents/adk/` — ADK dynamic-workflow driver for the pipeline | **Working** · 18 tests |
 | `agents/retrieval.py` — page-cited datasheet retrieval | **Working** · 15 tests |
-| `agents/resilience.py` — provider failover | **Working** · 14 tests |
+| `agents/resilience.py` — provider failover | **Working** · 15 tests |
 | `fab.py` — Gerber, Excellon, BOM, pick-and-place | **Working** · fab package export |
 | `order.py` — order options, manufacturability preflight | **Working** · blocks an unrouted board |
-| `mcp/` — MCP server over stdio | **Working** · 23 tests |
+| `mcp/` — MCP server over stdio | **Working** · 43 tests |
 | `audit/` — optional visual design review | **Working** · 52 tests |
-| `service/` — Cloud Run + Firestore cache | **Working** · 99 tests |
-| `frontend/` — Svelte review UI, served by the service | **Working** · review, schematic and board tabs, with an in-app debug console for log export |
+| `service/` — Cloud Run + Firestore cache | **Working** · 108 tests |
+| `frontend/` — Svelte review UI, served by the service | **Working** · persistent orchestrator chat, expandable model/tool traces, session JSON, review, schematic and board tabs |
 | Overlay UI, guided cursor | Not built (mockups only) |
 
 ---
@@ -226,6 +227,67 @@ Nothing sets rotation today.
 `--no-route` stops after placement, which is what every run produced before this
 existed.
 
+### Simulating the circuit
+
+DRC answers whether a board can be *made*. Nothing answered whether the circuit
+*works* — and that gap is why a design loop cannot close itself: it can produce a
+plausible schematic and a manufacturable board with no evidence the thing does what it
+was asked for. `spice/` is that missing check, shaped like a test runner rather than a
+waveform viewer.
+
+```python
+from silkscreen.spice import Assertion, Measurement, Source, Testbench, Transient, verify
+
+bench = Testbench(
+    analysis=Transient(step=1e-6, stop=2e-3),
+    sources=[Source.pulse("V1", "VIN", "GND",
+                          initial=0, pulsed=5, width=1e-3, period=2e-3)],
+)
+report = verify(spec, bench, [
+    Assertion(name="rise time under 250 us",
+              measurement=Measurement(kind="rise_time", signal="VOUT",
+                                      window=(0, 1e-3)),
+              op="<", value=250e-6, unit="s"),
+])
+report.passed        # bool
+report.summary()     # which clause failed, and by how much
+```
+
+`python scripts/simulate_demo.py` runs it end to end against an RC low-pass, checking
+every result against closed-form circuit theory:
+
+```
+  PASS  10-90% rise time is tau*ln(9)
+        measured 0.00021946s, expected within 0.000219503s (margin -4.28e-08)
+  PASS  -3 dB corner is 1/(2*pi*R*C)
+        measured 1593.23Hz, expected within 1593.14Hz (margin -0.0889)
+```
+
+**Nothing here can return a quiet zero.** An agent that gets an empty result reads it as
+a circuit that behaves. So a missing model, a probe on a net that does not exist, a
+signal with no rising edge, and a solver that will not converge each raise a distinct,
+self-describing error. A measurement that cannot be taken fails its clause rather than
+passing it vacuously.
+
+**Where it stops, plainly.** A device (an IC) in the circuit IR is a pin map with no
+behaviour attached, and no netlist generator can invent one. Trusted Python code can
+supply a `SubcircuitModel` — the part's own SPICE model — directly on `Testbench`.
+The MCP/JSON tool deliberately does not accept raw SPICE programs; IC simulation there
+waits for a trusted server-side model registry. Without a model the run raises and names
+the part rather than quietly leaving it out. Passive networks need nothing extra. A
+diode with no model gets a generic silicon stand-in and a warning saying so;
+`Testbench(strict=True)` turns that warning into an error, which is what you want when
+the verdict has to be about the specified part.
+
+ngspice and LTspice sit behind one interface, selected automatically. ngspice is what CI
+installs and what this is verified against; LTspice discovery and batch invocation are
+implemented but have not been run end to end — see the note in
+`spice/simulators.py`. Install ngspice with `brew install ngspice` or
+`apt-get install ngspice`; without a simulator the simulation tests skip and the rest of
+the suite is unaffected.
+
+---
+
 ### Generating footprints
 
 Emitting a board means generating real land patterns: pads at real coordinates, a
@@ -255,7 +317,7 @@ treats the board file as the interface.
 | Requires KiCad running | Yes | **No** |
 | Headless / CI | Hard | **Native** |
 | Platform lock | KiCad's plugin loader | **None — pure Python** |
-| Testable without KiCad | No | **Yes, all 542 tests** |
+| Testable without KiCad | No | **Yes, all 706 tests** |
 
 ### What it reads
 
@@ -363,14 +425,19 @@ gcloud run deploy silkscreen --source . --region us-central1 \
 the board, the emitted `.kicad_pcb`, and a versioned `schematic` topology block
 with stable part ids, board refs, pins and structured net endpoints. Extracted
 datasheet facts persist to Firestore, so the second request for a part skips the most expensive stage.
-`GET /healthz` is the readiness probe. The container also serves the built review
-UI at `/`, same origin as `/generate`, so there is no CORS anywhere.
+`POST /chat/stream` is the presentation path: a genuine ADK `LlmAgent` may ask one
+essential clarification and otherwise calls the validated generator as its
+`generate_board` tool. It streams versioned NDJSON events for the orchestrator, tool,
+worker calls, and final result. `GET /models` discovers the current key's
+`generateContent`-capable Gemini models, with a short server cache and configured fallback
+catalog. `GET /healthz` is the readiness probe. The container serves the built UI at `/`,
+same origin as all of these routes, so there is no CORS anywhere.
 
 ### Running the web UI
 
 The UI is a Svelte SPA in `frontend/`, and it needs Node 22 or newer
 (`node --version`). In development it runs on Vite's dev server, which proxies
-`/generate` and `/healthz` to the Python service — two terminals:
+`/generate`, `/chat`, `/models`, and `/healthz` to the Python service — two terminals:
 
 ```bash
 PORT=8081 python -m service.app            # terminal 1: the API
@@ -390,14 +457,32 @@ The UI has its own suite, which CI runs before the build:
 cd frontend && npm test  # Vitest over frontend/src/lib
 ```
 
-A run lands on the review. The **Schematic** tab draws the validated circuit as
-generic IC and passive symbols with physical pin numbers and net-labelled
-connections; it deliberately does not claim to be a native `.kicad_sch` or a
-library-accurate symbol sheet. The **Board** tab draws the board the placer
-actually produced — courtyard outlines, copper pads, and part refs, straight
-from the `placements` the service returns. Selecting a finding highlights the
-parts it names in either drawing, and the board and review panes will hand you
-the emitted `.kicad_pcb` as a download.
+A run stays in the **Chat** tab as a persistent transcript. Friendly activity summaries
+are shown by default; raw orchestrator and worker prompts/responses are expandable for a
+demo or debugging. Before submitting, the orchestrator panel selects Gemini 3.7 Flash or
+Gemini 3.1 Pro Preview and an Auto/Fast/Standard/Deep thinking effort. Gemini 3 cannot
+disable thinking completely, so Fast maps to the supported `low` level. A separate
+request-pace control can space every explicit orchestrator and worker attempt at 15, 6,
+or 3 RPM across one service instance; Auto preserves the provider default. This mitigates
+RPM bursts but cannot raise Google's per-project token or daily quotas. Clarification,
+retry, edit, copy-error, and discovered-model retry
+controls remain beside the failed or incomplete turn. **Save session** exports a versioned
+JSON snapshot containing the transcript, trace, result, and board artifact; **Open session**
+restores it locally. Treat that debug export as sensitive if a prompt contains private
+design information.
+
+Appearance stays local to the browser. **Glass** in the title bar switches the whole
+rendered interface from the opaque Drafting Table skin to a translucent material, while
+**Night** independently selects its light or dark reading. Both choices persist across
+reloads; reduced-transparency system settings replace blur with opaque surfaces, and the
+PCB canvas keeps its fixed KiCad colours in every combination.
+
+The compact artifact cards open the existing views. **Schematic** draws the validated
+circuit as generic symbols with physical pin numbers and net-labelled connections; it does
+not claim to be a native `.kicad_sch` or a library-accurate sheet. **Board** draws the
+placement the service actually produced — courtyard outlines, pads, and part refs — while
+**Review** shows the grounded findings. Selecting a finding highlights the parts it names,
+and the board and review panes offer the emitted `.kicad_pcb` as a download.
 
 ### As an MCP server
 
@@ -405,8 +490,14 @@ the emitted `.kicad_pcb` as a download.
 silkscreen-mcp        # JSON-RPC 2.0 over stdio
 ```
 
-Five tools: `validate_circuit`, `build_board`, `emit_kicad_pcb`, `place_parts`,
-`generate_footprint`.
+Tools: `validate_circuit`, `build_board`, `emit_kicad_pcb`, `place_parts`,
+`generate_footprint`, `simulate_circuit`, `spice_capabilities`.
+
+`simulate_circuit` accepts typed sources (`dc`, `ac`, `pulse`, `sine`) and typed
+analyses only. Unknown fields and raw model/directive text are rejected before a
+simulator starts; runtime is capped at 120 seconds and returned waveforms at 2,000
+points per signal. `spice_capabilities` reports simulator names without exposing local
+executable paths.
 
 ---
 
@@ -554,6 +645,8 @@ engine/
     kicad.py      read/modify an existing .kicad_pcb via kiutils
     ids.py        stable UUIDs, so two runs diff cleanly
     cli.py        python -m silkscreen "..."
+    spice/        typed testbenches, deck building, simulators, measurements
+    mcp/          JSON-RPC tools, including the bounded simulation verifier
     agents/       the only place a model call happens
       model.py      provider seam + scripted stand-in for tests
       datasheet.py  PDF -> structured facts, with page citations
@@ -563,16 +656,17 @@ engine/
       pipeline.py   prompt -> PCB
       adk/          ADK dynamic workflow over the same stage bodies
     audit/        optional visual review of a finished board
-  tests/          542 tests — no network, no API keys, no KiCad
+  tests/          706 tests — no network, no API keys, no KiCad
     fixtures/     ref.kicad_pcb -- 11-footprint board fixture
 scripts/
   demo.py         end-to-end: read -> place -> write -> verify
+  simulate_demo.py closed-form RC checks through a real ngspice run
   check_docs.py   fails CI if a quoted test count goes stale
 frontend/
   src/
     lib/          api client, run store, severity + format helpers
     components/   title bar, intent form, progress, findings, side rail
-    styles/       the Drafting Table design tokens
+    styles/       paper/glass material and light/dark design tokens
   dist/           built bundle -- service/app.py serves it at /
 vendor/
   mudriknow/      third-party (MIT), reference only -- not imported, not tested
@@ -643,31 +737,42 @@ docker build .                                      # the `docker` job
 
 ### Expected output
 
-**1. Test suite** — 542 tests, no warnings (four key-gated live-model tests skip unless `GOOGLE_API_KEY` is set):
+**1. Test suite** — 706 tests (live-model and local-simulator cases skip when
+their optional dependency is unavailable):
 
 ```
-542 passed in 190.85s
+669 successful, 14 skipped
 ```
 
 The suite is dominated by the 20-second solver budget in a handful of placement
-tests; the rest run in milliseconds.
+tests; the rest run in milliseconds. Google ADK currently emits one warning for
+its experimental JSON-schema function-declaration feature.
 
 | File | Tests | Covers |
 |---|---:|---|
-| `test_app.py` | 76 | Cloud Run HTTP surface, the NDJSON stream, and the served UI bundle, over a real socket |
+| `test_spice.py` | 99 | Deck construction, rawfile parsing, measurements, assertions, and closed-form ngspice checks |
+| `test_app.py` | 99 | Cloud Run HTTP surface, the NDJSON stream, and the served UI bundle, over a real socket |
 | `test_grounding.py` | 73 | Datasheet grounding — SSRF-guarded PDF fetch, page extraction, page-cache sharding, citation corroboration |
+| `test_audit.py` | 52 | Deterministic and model-assisted design review |
 | `test_packing.py` | 43 | CP-SAT model: no-overlap, clearance, edge pinning, rotation, symmetry breaking, keepouts, pinned parts, fallback, determinism |
-| `test_agents.py` | 31 | Datasheet extraction, proposal repair loop, review — against a scripted model |
+| `test_mcp.py` | 43 | MCP protocol and tools, including the bounded SPICE boundary |
+| `test_agents.py` | 34 | Datasheet extraction, proposal repair loop, review — against a scripted model |
+| `test_order.py` | 30 | Order options and manufacturability preflight |
+| `test_fab.py` | 29 | Gerber, drill, BOM, and pick-and-place export |
 | `test_kicad.py` | 28 | Board read/write, coordinate conversion, round-trip |
-| `test_mcp.py` | 23 | MCP protocol — initialize, tools/list, tools/call, stdio transport, every tool |
+| `test_schematic.py` | 22 | Schematic generation and KiCad validation |
+| `test_netlist.py` | 21 | Circuit IR validation — every rejection rule |
+| `test_routing.py` | 20 | Grid routing, vias, keepouts, and honest unrouted results |
 | `test_board.py` | 20 | Footprint generation and emitting a `.kicad_pcb` from a circuit spec |
-| `test_adk.py` | 17 | Parity between the SDK and ADK drivers — same events, same result, same exceptions |
-| `test_netlist.py` | 15 | Circuit IR validation — every rejection rule |
+| `test_adk.py` | 18 | Parity between the SDK and ADK drivers — same events, same result, same exceptions |
 | `test_retrieval.py` | 15 | Datasheet chunking, embedding, cosine ranking, page citations |
-| `test_resilience.py` | 14 | Provider failover — every fallback path, forced |
+| `test_resilience.py` | 15 | Provider failover — every fallback path, forced |
 | `test_cache.py` | 7 | Firestore fact cache, via a fake client |
-| `test_live_model.py` | 3 | The live Gemini path, behind an API-key gate that skips it by default |
-| **Total** | **365** | |
+| `test_live_model.py` | 4 | The live Gemini path, behind an API-key gate that skips it by default |
+| `test_models.py` | 22 | Gemini discovery, model/thinking selection, and request-pace policy |
+| `test_orchestrator.py` | 4 | Root clarification, tool dispatch, ADK thinking, and pre-call pacing hook |
+| `test_quota.py` | 5 | Shared request spacing, Auto behavior, and invalid pace rejection |
+| **Total** | **703** | |
 
 **2. Lint:**
 
@@ -678,7 +783,7 @@ All checks passed!
 **3. Doc drift** — re-counts the suite and checks every figure quoted in the docs:
 
 ```
-docs ok: 16 claim(s) across 2 files match a suite of 183
+docs ok: 20 claim(s) across 2 files match a suite of 703
 ```
 
 **4. End-to-end demo** — reads the 11-footprint fixture board, places it, writes a

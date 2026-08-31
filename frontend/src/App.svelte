@@ -1,20 +1,26 @@
 <script>
+  import { get } from 'svelte/store'
   import BoardWell from './components/BoardWell.svelte'
+  import ConversationView from './components/ConversationView.svelte'
   import DebugConsole from './components/DebugConsole.svelte'
-  import ErrorPanel from './components/ErrorPanel.svelte'
-  import IntentForm from './components/IntentForm.svelte'
-  import PipelineFeed from './components/PipelineFeed.svelte'
   import ReviewResults from './components/ReviewResults.svelte'
-  import RunProgress from './components/RunProgress.svelte'
   import SchematicWell from './components/SchematicWell.svelte'
   import SideRail from './components/SideRail.svelte'
   import StatusBar from './components/StatusBar.svelte'
   import TitleBar from './components/TitleBar.svelte'
-  import { ApiError, generateStream, normalizeRequest } from './lib/api.js'
+  import { ApiError, chatStream, normalizeRequest } from './lib/api.js'
   import { highlightRefs, readPlacements } from './lib/board.js'
   import { pcbText } from './lib/download.js'
   import { logEvent } from './lib/log.js'
-  import { failRun, finishRun, resetRun, run, stageEvent, startRun } from './lib/run.js'
+  import {
+    failRun,
+    finishClarification,
+    finishRun,
+    resetRun,
+    run,
+    stageEvent,
+    startRun,
+  } from './lib/run.js'
   import { highlightSchematicParts, readSchematic } from './lib/schematic.js'
   import { resolveTab } from './lib/tabs.js'
 
@@ -32,14 +38,38 @@
     return () => window.removeEventListener('hashchange', onhash)
   })
 
-  async function submit(raw) {
+  async function submit(raw, options = {}) {
     const request = normalizeRequest(raw)
     selected = -1
-    startRun(request)
+    startRun(request, {
+      preserve: options.preserve === true,
+      message: options.message ?? request.intent,
+      model: options.model,
+      thinkingLevel: options.thinkingLevel,
+      quotaRpm: options.quotaRpm,
+    })
+    goTab('chat')
     try {
-      // Streamed, with a one-shot fallback inside generateStream for a service
-      // that has no streaming endpoint: stageEvent is simply never called there.
-      finishRun(await generateStream(request, stageEvent))
+      const state = get(run)
+      const outcome = await chatStream(
+        {
+          ...request,
+          clarification: String(options.clarification ?? ''),
+          session_id: state.sessionId,
+          turn_id: state.id,
+          model: state.orchestratorModel,
+          thinking_level: state.thinkingLevel,
+          quota_rpm: state.quotaRpm,
+        },
+        stageEvent,
+      )
+      if (outcome.needsClarification) {
+        finishClarification(outcome)
+      } else if (outcome.result) {
+        finishRun(outcome.result)
+      } else {
+        throw new ApiError('internal', 'The orchestrator finished without a board result.')
+      }
     } catch (err) {
       failRun(err instanceof ApiError ? err : new ApiError('internal', String(err)))
     }
@@ -53,7 +83,13 @@
   const schematic = $derived($run.phase === 'done' ? readSchematic($run.result) : null)
   const boardEnabled = $derived(placements !== null)
   const schematicEnabled = $derived(schematic !== null)
-  const tab = $derived(resolveTab(hash, { schematic: schematicEnabled, board: boardEnabled }))
+  const tab = $derived(
+    resolveTab(hash, {
+      schematic: schematicEnabled,
+      board: boardEnabled,
+      review: $run.phase === 'done',
+    }),
+  )
   const pcb = $derived($run.result ? pcbText($run.result) : '')
 
   const findings = $derived($run.result ? $run.result.findings : [])
@@ -117,16 +153,43 @@
   function newBoard() {
     selected = -1
     logEvent('ui.new-board', 'started another board', {})
-    goTab('review')
+    goTab('chat')
     resetRun()
   }
 
-  function retry() {
+  function retry(
+    model = $run.orchestratorModel || 'auto',
+    thinkingLevel = $run.thinkingLevel || 'auto',
+    quotaRpm = $run.quotaRpm || 'auto',
+  ) {
     if (!$run.request) return
     // Logged before the submit, which mints the next run id: the id worth
     // recording here is the run being retried.
     logEvent('ui.retry', `retrying run ${$run.id}`, { id: $run.id })
-    submit($run.request)
+    submit($run.request, {
+      preserve: true,
+      message: `Retrying: ${$run.request.intent}`,
+      model,
+      thinkingLevel,
+      quotaRpm,
+    })
+  }
+
+  function clarify(answer) {
+    if (!$run.request) return
+    submit($run.request, {
+      preserve: true,
+      message: answer,
+      clarification: answer,
+      model: $run.orchestratorModel || 'auto',
+      thinkingLevel: $run.thinkingLevel || 'auto',
+      quotaRpm: $run.quotaRpm || 'auto',
+    })
+  }
+
+  function editRequest() {
+    goTab('chat')
+    resetRun()
   }
 </script>
 
@@ -135,13 +198,7 @@
 
   <div class="body" data-testid="app-body">
     <main class="centre" data-testid="app-main">
-      {#if $run.phase === 'running'}
-        <RunProgress />
-        <PipelineFeed />
-      {:else if $run.phase === 'error'}
-        <ErrorPanel error={$run.error} onretry={retry} ondismiss={resetRun} />
-      {:else if $run.phase === 'done'}
-        {#if tab === 'schematic' && schematic}
+      {#if tab === 'schematic' && schematic}
           <div class="hint" data-testid="app-hint">
             {#if selectedFinding}
               <span class="lbl">{highlightedSchematicIds.length ? 'showing' : 'no schematic part for'}</span>
@@ -154,7 +211,7 @@
             {/if}
           </div>
           <SchematicWell {schematic} highlightedIds={highlightedSchematicIds} />
-        {:else if tab === 'board' && placements}
+      {:else if tab === 'board' && placements}
           <div class="hint" data-testid="app-hint">
             {#if selectedFinding}
               <span class="lbl">{highlightedRefs.length ? 'showing' : 'no placed part for'}</span>
@@ -167,7 +224,7 @@
             {/if}
           </div>
           <BoardWell {placements} {highlightedRefs} {pcb} />
-        {:else}
+      {:else if tab === 'review' && $run.phase === 'done' && $run.result}
           <ReviewResults
             result={$run.result}
             request={$run.request}
@@ -179,9 +236,17 @@
             onshowschematic={showOnSchematic}
             onshowboard={showOnBoard}
           />
-        {/if}
       {:else}
-        <IntentForm onsubmit={submit} initial={$run.request} />
+        <ConversationView
+          onsubmit={submit}
+          onclarify={clarify}
+          onretry={retry}
+          onedit={editRequest}
+          onnew={newBoard}
+          onopen={goTab}
+          {schematicEnabled}
+          {boardEnabled}
+        />
       {/if}
     </main>
 

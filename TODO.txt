@@ -19,12 +19,32 @@ NOTE: DEVPOST's agent section is being rewritten in ADK 2.0 vocabulary as part
 of the adoption — dynamic workflows and nodes, not the template agents of the
 1.x topology it described as the plan.
 
-[EXAMPLES of PROMPTS]
-- a 3.3 V LDO regulator board using an AMS1117-3.3 with input and output bulk capacitors
-- a 555 timer LED blinker at about 1 Hz on a 9 V supply
-- an STM32F030 breakout with a 3.3 V regulator, decoupling, and a reset button
-- a USB-powered dual LED driver with current-limit resistors
-- an attiny85 board with ISP header and power indicator LED (good for showing the reviewer flag missing decoupling)
+[EXAMPLES OF PROMPTS]
+These examples stay inside the emitter's current footprint set: SOT-223,
+SOIC, LQFP, and two-terminal chip passives. Until connector footprints are
+implemented, keep connectors, headers, switches, buttons, and test points out
+of demo requests.
+
+- A minimal 3.3 V LDO regulator using an AMS1117-3.3 in SOT-223, with a
+  10 uF input capacitor from VIN to GND and a 22 uF output capacitor from
+  +3V3 to GND. Use only the regulator and passive components; do not add
+  connectors, headers, switches, buttons, or test points.
+- A roughly 1 Hz LED blinker using an NE555D in SOIC-8 on a +9 V rail, with
+  astable timing resistors and capacitor, 100 nF supply decoupling, and one
+  LED with a series current-limiting resistor. Use only the SOIC IC and
+  two-terminal passives; do not add connectors, headers, or switches.
+- A minimal ATtiny85-20SU board in SOIC-8 on a +5 V rail, with a 100 nF VCC
+  decoupling capacitor, a 10 kOhm reset pull-up, and a status LED with a
+  series resistor on PB1. Do not add an ISP header, connectors, buttons, or
+  test points.
+- A buffered 2.5 V reference on a +5 V rail using an LM358D in SOIC-8: two
+  10 kOhm resistors form the divider, one amplifier is a voltage follower,
+  the unused amplifier is tied to a defined state, and the supply has a
+  100 nF decoupling capacitor. Do not add connectors or test points.
+- Reviewer demo: an AMS1117-3.3 regulator in SOT-223 with a 10 uF input
+  capacitor and a 22 uF ceramic output capacitor. Use only the regulator and
+  passive components, and preserve the ceramic output-capacitor choice so the
+  adversarial review can check it against the selected AMS1117 datasheet.
 
 FEATURES
 --------
@@ -88,6 +108,9 @@ feature is tracked under feature 12.
  ----- Grounding toggle on the intent form             [DONE]        sends "ground" only when a datasheet is given
  ----- Download the emitted .kicad_pcb                 [DONE]        from the board well and the review results
  ----- In-app debug console + log export               [DONE]        console/window capture; text + NDJSON
+ ----- Persistent chat transcript + artifact cards    [DONE]        friendly activity; raw prompts/responses expand
+ ----- Save/open versioned JSON sessions              [DONE]        transcript, trace, result and board artifact
+ ----- Retry/edit/switch-model recovery controls      [DONE]        failures stay in the transcript for comparison
  ----- data-testid sweep across every component        [DONE]        stable hooks for e2e and agent QA
  ----- Voice: spoken intent, findings read aloud       [NOT BUILT]   the last phase, by instruction; Whisper
  10  Service error taxonomy                            [OPEN]
@@ -105,6 +128,8 @@ feature is tracked under feature 12.
  ----- POST /generate/stream, NDJSON frames           [DONE]        service/app.py; run.done carries the one-shot body
  ----- Chat feed + live stage ticks + console mirror  [DONE]        PipelineFeed.svelte; src 'server' log entries
  ----- Raw model responses behind a "debug" flag      [DONE]        model.response frames, clipped at 16 kB
+ ----- Raw model requests + correlated call ids       [DONE]        system/user prompts, documents and settings
+ ----- POST /chat/stream, versioned agent events       [DONE]        one clarification or a terminal board result
  ----- Fallback must never rerun a started run        [OPEN]        PR #9 review (P2, genuine): generateStream falls
                                                                      back to one-shot on a 200 whose content type was
                                                                      rewritten or whose body is unreadable — but a 200
@@ -125,6 +150,8 @@ feature is tracked under feature 12.
  ----- R12 Dockerfile + setup gain the adk extra       [DONE]        image, CI and setup all install the extra
  ----- R10 default engine flips to adk                 [DONE]        gate passed 2026-08-30: live SPA run,
                                                                      optimal placement, failover observed
+ ----- LLM root orchestrator + generate_board tool     [DONE]        ADK LlmAgent decides clarification vs tool call
+ ----- Gemini models.list discovery + Auto policy     [DONE]        /models; server-filtered retry choices
  ----- R9 agents dir for adk web and /docs             [NOT BUILT]   a dev surface only, off the request path
  ----- R11 parallel reads via asyncio.gather           [NOT BUILT]   closes feature 2; needs an order-independent
                                                                      event test
@@ -179,6 +206,23 @@ feature is tracked under feature 12.
                                                                      the runners and installing one would dominate
                                                                      the job
 
+ 16  SPICE simulation as a verifier                    [PARTIAL]     passive-network verification is real; trusted
+                                                                     IC model sourcing and agent-loop use remain
+ ----- CircuitSpec -> SPICE netlist                   [DONE]        spice/deck.py; the caller supplies sources,
+                                                                     analysis and trusted behavioural models
+ ----- Declarative measurements + assertions          [DONE]        measured value and signed margin per clause
+ ----- ngspice runner, verified end to end            [DONE]        CI checks RC results against closed-form theory
+ ----- LTspice runner                                 [UNVERIFIED]  process launch has not run against LTspice;
+                                                                     real and complex binary RAW have offline fixtures
+ ----- MCP simulate_circuit + spice_capabilities      [DONE]        mcp/server.py; spice/spec.py is the JSON bridge
+ ----- Secure executable-deck boundary                [DONE]        typed MCP input only; directives rejected before
+                                                                     launch; runtime/output controls are bounded
+ ----- Windowed reference bandwidth alignment         [DONE]        numerator and reference use identical windowed
+                                                                     frequency samples; zero reference fails loudly
+ ----- Device models for ICs                          [OPEN]        use a trusted server-side model registry; never
+                                                                     execute raw model programs supplied over MCP
+ ----- Wire simulation into the agent loop            [OPEN]        future propose -> simulate -> repair feedback
+
 OPEN WORK, SUMMARISED
 ---------------------
 Everything actionable reduces to: feature 2 in full (parallel reads, now the
@@ -187,7 +231,8 @@ timeout under 5, feature 6 in full (confirmation gates), the deploy and smoke
 check under 7, the ops polish under 8, voice under 9, the error taxonomy under
 10 (from PR #5 review), and the stream-fallback tightening under 11 (from PR #9
 review). The board well shipped, so voice is all that is left of 9 and stays
-last. The [IDEA] rows under 4 and 5 are ideas, not commitments.
+last. Feature 16 still needs a trusted IC model registry and its place in the
+agent repair loop. The [IDEA] rows under 4 and 5 are ideas, not commitments.
 
 The ADK lane runs alongside that. Feature 12 is live and the flip is done: the
 default engine has been "adk" since the 2026-08-30 gate run, with

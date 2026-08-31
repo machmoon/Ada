@@ -37,7 +37,14 @@
   )
 </script>
 
-<footer class="bar" data-testid="status-bar">
+<footer class="bar" data-testid="status-bar" data-material="chrome">
+  <a
+    class="lbl tab"
+    class:current={tab === 'chat'}
+    href="#chat"
+    aria-current={tab === 'chat' ? 'page' : undefined}
+    data-testid="status-bar-tab-chat"
+  >Chat</a>
   <!-- Tabs are hash fragments, so a switch never reaches the server. Each
        drawing wakes up only when the current run carries its data contract. -->
   {#if schematicEnabled}
@@ -105,9 +112,6 @@
     height: var(--statusbar-h);
     border-top: 1px solid var(--rule);
     background: var(--well);
-    /* Inert under Drafting Table; the glass skin defines both. */
-    backdrop-filter: var(--glass-blur, none);
-    -webkit-backdrop-filter: var(--glass-blur, none);
     display: flex;
     align-items: center;
     flex-shrink: 0;

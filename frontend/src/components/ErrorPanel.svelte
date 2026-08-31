@@ -14,8 +14,8 @@
       circuit go through Gemini. Set the key where the service can see it, then restart it.
     </p>
     <ol class="steps" data-testid="error-panel-steps">
-      <li><code class="mono">cp .env.example .env</code></li>
-      <li>Put your key in the new file as <code class="mono">GOOGLE_API_KEY=…</code></li>
+      <li><code class="mono" data-material="tint">cp .env.example .env</code></li>
+      <li>Put your key in the new file as <code class="mono" data-material="tint">GOOGLE_API_KEY=…</code></li>
       <li>Restart the service so it picks the key up.</li>
     </ol>
     <p class="note" data-testid="error-panel-note">
@@ -63,7 +63,7 @@
       Nothing was produced. If you report this, quote the error id below — it is the only thing
       that ties your request to a line in the service log.
     </p>
-    {#if error.errorId}<div class="mono errid" data-testid="error-panel-error-id">{error.errorId}</div>{/if}
+    {#if error.errorId}<div class="mono errid" data-testid="error-panel-error-id" data-material="tint">{error.errorId}</div>{/if}
     <button type="button" class="primary" data-testid="error-panel-action" data-action="retry" onclick={onretry}>Try again</button>
 
   {:else}

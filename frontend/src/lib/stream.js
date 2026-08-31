@@ -91,6 +91,16 @@ const STAGE_DONE = {
 }
 
 const DESCRIBERS = {
+  'chat.accepted': (e) =>
+    `orchestrator started${text(e.model) ? ` with ${text(e.model)}` : ''}${text(e.thinking_level) ? ` · ${text(e.thinking_level)} thinking` : ''}${text(e.quota_rpm) && text(e.quota_rpm) !== 'auto' ? ` · ${text(e.quota_rpm)} RPM pace` : ''}`,
+
+  'quota.wait': (e) => {
+    const delay = seconds(e.delay_s)
+    const layer = text(e.layer) || 'Gemini'
+    const rpm = text(e.quota_rpm)
+    return `${layer} waiting for quota pace${delay ? `: ${delay} s` : ''}${rpm ? ` at ${rpm} RPM` : ''}`
+  },
+
   'run.accepted': () => 'request accepted, pipeline starting',
 
   'stage.start': (e) => stageSentence(STAGE_START, e, (stage) => `starting ${stage}…`),
@@ -123,6 +133,12 @@ const DESCRIBERS = {
     return `model call${stage}: ${answered}${chars === null ? '' : `, ${group(chars)} chars`}`
   },
 
+  'model.request': (e) => {
+    const layer = text(e.layer) || 'model'
+    const model = text(e.model)
+    return `${layer} prompt prepared${whereOf(e.stage)}${model ? ` for ${model}` : ''}`
+  },
+
   // Only ever present on a debug run; the text itself belongs to the feed, so
   // the sentence reports its size and whether there was more of it.
   'model.response': (e) => {
@@ -141,6 +157,15 @@ const DESCRIBERS = {
     return `provider${name ? ` ${name}` : ''} failed${why ? ` (${why})` : ''}${took ? ` after ${took} s` : ''}, trying next`
   },
 
+  'tool.start': (e) => `orchestrator called ${text(e.tool) || 'a tool'}...`,
+
+  'tool.done': (e) => `${text(e.tool) || 'tool'} finished`,
+
+  'tool.error': (e) => {
+    const why = clip(text(e.error), MAX_ERROR_CHARS)
+    return `${text(e.tool) || 'tool'} failed${why ? `: ${why}` : ''}`
+  },
+
   'ground.part': (e) => {
     const part = text(e.part)
     return `grounding${part ? ` ${part}` : ''} (${e.cached ? 'cached' : 'reading'} pages)`
@@ -152,6 +177,17 @@ const DESCRIBERS = {
     const status = num(e.status)
     const why = clip(text(e.error), MAX_ERROR_CHARS)
     return `run failed${status ? ` (${status})` : ''}${why ? `: ${why}` : ''}`
+  },
+
+  'assistant.message': () => 'orchestrator answered',
+
+  'chat.done': (e) =>
+    e.needs_clarification ? 'waiting for one clarification' : 'orchestrator turn complete',
+
+  'chat.error': (e) => {
+    const status = num(e.status)
+    const why = clip(text(e.error), MAX_ERROR_CHARS)
+    return `orchestrator failed${status ? ` (${status})` : ''}${why ? `: ${why}` : ''}`
   },
 
   'client.badframe': () => 'unparseable frame from server',
@@ -213,6 +249,7 @@ function counterOf(index, total) {
 }
 
 function budgetOf(value) {
+  if (value === null) return ' (no solver budget)'
   const n = num(value)
   return n === null ? '' : ` (${n} s solver budget)`
 }

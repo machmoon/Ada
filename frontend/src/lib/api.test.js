@@ -6,8 +6,10 @@ import {
   MAX_TIME_LIMIT_S,
   MIN_TIME_LIMIT_S,
   REQUEST_TIMEOUT_MS,
+  chatStream,
   generate,
   generateStream,
+  listModels,
   normalizeRequest,
   requestBytes,
 } from './api.js'
@@ -97,6 +99,14 @@ function happyFrames(result = OK_BODY) {
 /** The minimum a successful response needs; every field is optional to the normalizer. */
 const OK_BODY = { status: 'feasible', board_mm: [20, 30], parts: [{ ref: 'U1' }] }
 
+function happyChatFrames(result = OK_BODY) {
+  return [
+    '{"event":"chat.accepted","model":"gemini-auto","thinking_level":"high","quota_rpm":6}\n',
+    '{"event":"assistant.message","text":"Ready.","needs_clarification":false}\n',
+    `{"event":"chat.done","assistant":"Ready.","model":"gemini-auto","thinking_level":"high","quota_rpm":6,"needs_clarification":false,"result":${JSON.stringify(result)}}\n`,
+  ]
+}
+
 // The log buffer is a module singleton and appends are batched through a
 // microtask, so a read waits one turn before looking.
 async function recorded(event) {
@@ -158,7 +168,7 @@ describe('normalizeRequest', () => {
 
   it('keeps both ends of the accepted range', () => {
     expect(normalizeRequest({ time_limit_s: MIN_TIME_LIMIT_S }).time_limit_s).toBe(5)
-    expect(normalizeRequest({ time_limit_s: MAX_TIME_LIMIT_S }).time_limit_s).toBe(60)
+    expect(normalizeRequest({ time_limit_s: MAX_TIME_LIMIT_S }).time_limit_s).toBe(120)
   })
 
   it('clamps a solver budget below the floor up to five seconds', () => {
@@ -167,9 +177,9 @@ describe('normalizeRequest', () => {
     expect(normalizeRequest({ time_limit_s: -100 }).time_limit_s).toBe(5)
   })
 
-  it('clamps a solver budget above the ceiling down to sixty seconds', () => {
-    expect(normalizeRequest({ time_limit_s: 61 }).time_limit_s).toBe(60)
-    expect(normalizeRequest({ time_limit_s: 100000 }).time_limit_s).toBe(60)
+  it('clamps a solver budget above the ceiling down to 120 seconds', () => {
+    expect(normalizeRequest({ time_limit_s: 121 }).time_limit_s).toBe(120)
+    expect(normalizeRequest({ time_limit_s: 100000 }).time_limit_s).toBe(120)
   })
 
   it('rounds a fractional solver budget to a whole second', () => {
@@ -197,10 +207,23 @@ describe('normalizeRequest', () => {
     expect(normalizeRequest({ review: false }).review).toBe(false)
   })
 
-  it('emits exactly the four fields the service accepts, dropping anything else', () => {
+  it('defaults no-solver-budget on and preserves an explicit off choice', () => {
+    expect(normalizeRequest({}).no_solver_budget).toBe(true)
+    expect(normalizeRequest({ no_solver_budget: true }).no_solver_budget).toBe(true)
+    expect(normalizeRequest({ no_solver_budget: false }).no_solver_budget).toBe(false)
+    expect(normalizeRequest({ no_solver_budget: 'yes' }).no_solver_budget).toBe(false)
+  })
+
+  it('emits exactly the five fields the service accepts, dropping anything else', () => {
     const request = normalizeRequest({ intent: 'x', nonsense: 'drop me' })
 
-    expect(Object.keys(request).sort()).toEqual(['datasheets', 'intent', 'review', 'time_limit_s'])
+    expect(Object.keys(request).sort()).toEqual([
+      'datasheets',
+      'intent',
+      'no_solver_budget',
+      'review',
+      'time_limit_s',
+    ])
   })
 
   it('passes grounding through when it was asked for', () => {
@@ -224,6 +247,7 @@ describe('normalizeRequest', () => {
       'datasheets',
       'ground',
       'intent',
+      'no_solver_budget',
       'review',
       'time_limit_s',
     ])
@@ -641,6 +665,24 @@ describe('generate: transport failures', () => {
     await vi.advanceTimersByTimeAsync(REQUEST_TIMEOUT_MS - 1)
 
     expect(signal.aborted).toBe(false)
+  })
+
+  it('does not install the client timer when no solver budget was requested', async () => {
+    vi.useFakeTimers()
+    let signal
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((_url, init) => {
+        signal = init.signal
+        return new Promise(() => {})
+      }),
+    )
+
+    generate({ intent: 'x', no_solver_budget: true })
+    await vi.advanceTimersByTimeAsync(REQUEST_TIMEOUT_MS * 2)
+
+    expect(signal.aborted).toBe(false)
+    expect(vi.getTimerCount()).toBe(0)
   })
 
   it('clears the budget timer after a transport failure', async () => {
@@ -1069,5 +1111,107 @@ describe('generateStream: what it writes to the debug log', () => {
     const [entry] = await recorded('api.failed')
     expect(entry.level).toBe('error')
     expect(entry.data).toMatchObject({ events: 1, aborted: false })
+  })
+})
+
+describe('chatStream', () => {
+  it('returns the orchestrator outcome and forwards every frame', async () => {
+    const events = []
+    const fetch = stubFetch(streamResponse(happyChatFrames()))
+
+    const outcome = await chatStream(
+      { intent: 'a regulator', session_id: 's1', model: 'gemini-3.1-pro-preview', thinking_level: 'high', quota_rpm: '6' },
+      (event) => events.push(event),
+    )
+
+    expect(fetch).toHaveBeenCalledWith(
+      '/chat/stream',
+      expect.objectContaining({ method: 'POST' }),
+    )
+    expect(JSON.parse(fetch.mock.calls[0][1].body)).toMatchObject({
+      intent: 'a regulator',
+      session_id: 's1',
+      model: 'gemini-3.1-pro-preview',
+      thinking_level: 'high',
+      quota_rpm: '6',
+      debug: true,
+    })
+    expect(events.map((event) => event.event)).toEqual([
+      'chat.accepted',
+      'assistant.message',
+      'chat.done',
+    ])
+    expect(outcome).toMatchObject({
+      assistant: 'Ready.',
+      needsClarification: false,
+      model: 'gemini-auto',
+      thinkingLevel: 'high',
+      quotaRpm: '6',
+      result: { status: 'feasible', parts: [{ ref: 'U1' }] },
+    })
+  })
+
+  it('returns a clarification without inventing a board result', async () => {
+    stubFetch(
+      streamResponse([
+        '{"event":"assistant.message","text":"Which input voltage?","needs_clarification":true}\n',
+        '{"event":"chat.done","assistant":"Which input voltage?","needs_clarification":true,"model":"gemini-auto","result":null}\n',
+      ]),
+    )
+
+    await expect(chatStream({ intent: 'a regulator' }, () => {})).resolves.toEqual({
+      assistant: 'Which input voltage?',
+      needsClarification: true,
+      model: 'gemini-auto',
+      thinkingLevel: 'auto',
+      quotaRpm: 'auto',
+      result: null,
+    })
+  })
+
+  it('never falls back to another paid endpoint when its stream is malformed', async () => {
+    const fetch = stubFetch(streamResponse([], { type: 'text/html' }))
+
+    await expect(chatStream({ intent: 'x' }, () => {})).rejects.toMatchObject({
+      kind: 'internal',
+    })
+    expect(fetch).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('listModels', () => {
+  it('normalizes the server-filtered model catalog', async () => {
+    stubFetch(
+      jsonResponse(200, {
+        default: 'auto',
+        auto_model: 'gemini-auto',
+        source: 'gemini',
+        models: [
+          {
+            id: 'gemini-debug',
+            name: 'Gemini Debug',
+            input_token_limit: 1000000,
+            thinking: true,
+          },
+        ],
+      }),
+    )
+
+    await expect(listModels()).resolves.toEqual({
+      default: 'auto',
+      auto_model: 'gemini-auto',
+      source: 'gemini',
+      warning: '',
+      models: [
+        {
+          id: 'gemini-debug',
+          name: 'Gemini Debug',
+          description: '',
+          input_token_limit: 1000000,
+          output_token_limit: null,
+          thinking: true,
+        },
+      ],
+    })
   })
 })

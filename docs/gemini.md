@@ -20,12 +20,13 @@ Silkscreen depends on.
 The short answer is that it satisfies the model-version half cleanly and the call-surface
 half only through the Gemini API, not Vertex AI.
 
-Every model call in the repository funnels through a single class. `GeminiModel` in
-`engine/silkscreen/agents/model.py:103` imports `google.genai`, constructs a client, and
-issues one `generate_content` request per call at `model.py:163`. Nothing else in the
-codebase talks to a vendor SDK for text generation. The one other place that reaches Google
-is `GeminiEmbedder` in `engine/silkscreen/agents/retrieval.py:121`, which calls
-`embed_content` at `retrieval.py:150` for the datasheet retrieval index.
+Worker-stage generation funnels through `GeminiModel` in
+`engine/silkscreen/agents/model.py`: it imports `google.genai`, constructs a client, and
+issues one `generate_content` request per call. The presentation path adds a genuine ADK
+`LlmAgent` in `engine/silkscreen/agents/adk/orchestrator.py`; ADK owns that root Gemini call
+and exposes its model and tool callbacks. `GeminiEmbedder` in
+`engine/silkscreen/agents/retrieval.py` separately calls `embed_content` for the datasheet
+retrieval index, and `service/models.py` uses `models.list` for read-only UI discovery.
 
 The agent stages sit above that seam and never see the SDK. The datasheet reader calls
 `model.generate` at `engine/silkscreen/agents/datasheet.py:109`, the circuit proposer at
@@ -98,15 +99,13 @@ newer" version scheme and does not affect the requirement either way.
 
 ### Changing the model
 
-There are three places to change, depending on scope. Passing `--model` on the command line
-overrides it for one run; the flag is declared at `engine/silkscreen/cli.py:44` and its value
-is handed straight to `GeminiModel` at `cli.py:63`. Constructing `GeminiModel("some-model-id")`
-directly overrides it for one call site, which is what `service/app.py:92` does for both
-providers in the fallback chain. Editing `DEFAULT_MODEL` or `CHEAP_MODEL` at `model.py:30`
-and `model.py:33` changes it everywhere at once, since the CLI default, `default_model` at
-`model.py:212`, and the service's `build_model` at `service/app.py:88` all read those
-constants. There is no environment variable for the model ID, so a deployment cannot change
-models without a code change or an explicit `--model` argument.
+Passing `--model` on the command line overrides the worker model for one CLI run.
+`DEFAULT_MODEL` and `CHEAP_MODEL` define the service's worker fallback chain. The web chat
+starts in **Auto**: `GET /models` calls `client.models.list()`, keeps models advertising
+`generateContent`, and the service accepts only one of those advertised IDs for an explicit
+or retry selection. `SILKSCREEN_ORCHESTRATOR_MODEL` controls which root model Auto resolves
+to without changing the worker chain. If discovery is unavailable, the response is clearly
+marked as a fallback catalog containing the configured worker IDs.
 
 ## Gemini API versus Vertex AI
 

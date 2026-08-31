@@ -78,6 +78,11 @@
   --statusbar-h: 28px;
   --rail-w: 312px;
   --radius: 2px;           /* buttons only; every other corner is square */
+  /* Material behavior is explicit even in the paper skin. Components opt in
+     with data-material, while tint and canvas surfaces remain unfiltered. */
+  --material-filter: none;
+  --panel-radius: 0;
+  --sticky-surface: var(--paper);
   --sev-bar-w: 3px;
   --mic-slot: 44px;
 

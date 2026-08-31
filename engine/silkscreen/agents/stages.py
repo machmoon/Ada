@@ -132,7 +132,7 @@ def propose_stage(
 def place_stage(
     spec: CircuitSpec,
     *,
-    time_limit_s: float,
+    time_limit_s: float | None,
     emit: Emit,
     enter: Enter,
 ) -> BoardResult:
@@ -142,7 +142,9 @@ def place_stage(
         {
             "event": "stage.start",
             "stage": "place",
-            "time_limit_s": float(time_limit_s),
+            "time_limit_s": (
+                None if time_limit_s is None else float(time_limit_s)
+            ),
         }
     )
     board = build_board(spec, time_limit_s=time_limit_s)

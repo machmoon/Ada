@@ -51,7 +51,7 @@
   }
 </script>
 
-<header class="bar" data-testid="title-bar">
+<header class="bar" data-testid="title-bar" data-material="chrome">
   <div class="brand" data-testid="title-bar-brand">
     <Icon name="brand" size={17} />
     <span class="wordmark">silkscreen</span>
@@ -87,9 +87,6 @@
     border-bottom: 1px solid var(--rule);
     background: var(--surface);
     flex-shrink: 0;
-    /* Inert under Drafting Table; the glass skin defines both. */
-    backdrop-filter: var(--glass-blur, none);
-    -webkit-backdrop-filter: var(--glass-blur, none);
   }
 
   .brand {
@@ -132,4 +129,9 @@
   .chip[aria-pressed='true'] { color: var(--ink); }
   /* The global ring sits 1 px outside the element, which the bar clips. */
   .chip:focus-visible { outline-offset: -2px; }
+
+  @media (max-width: 720px) {
+    .meta { display: none; }
+    .chip { padding: 0 11px; }
+  }
 </style>
