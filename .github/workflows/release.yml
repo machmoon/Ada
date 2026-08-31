@@ -1,0 +1,109 @@
+name: release
+
+# Cutting a release is `git tag vX.Y.Z && git push origin vX.Y.Z`. Everything
+# below is downstream of that tag; nothing here bumps a version or writes to the
+# repo. See docs/release.md.
+on:
+  push:
+    tags: ["v*"]
+  # Dry run: builds every artifact and skips only the publish job, so a broken
+  # release workflow is found before a tag exists rather than after.
+  workflow_dispatch:
+
+# Least privilege by default; each job below opts into exactly what it needs.
+permissions: {}
+
+jobs:
+  # sdist + wheel. Same Python as ci.yml's test matrix.
+  python-dist:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: python -m pip install --upgrade build
+      - run: python -m build
+      # A wheel that does not install is a broken release. ci.yml only ever
+      # installs the source tree with `pip install -e .`, so nothing else in the
+      # repo exercises a built distribution at all.
+      - name: Smoke-test the wheel
+        run: |
+          python -m venv /tmp/wheelcheck
+          /tmp/wheelcheck/bin/pip install dist/*.whl
+          /tmp/wheelcheck/bin/python -c "import silkscreen; print(silkscreen.__file__)"
+
+      # `packages.find` searches engine/, which holds engine/tests as well as
+      # engine/silkscreen. Without pyproject.toml's `include = ["silkscreen*"]`
+      # the wheel ships a top-level `tests` package that lands in the
+      # installer's site-packages and collides with theirs. An editable install
+      # never reveals this; only a built distribution does, and a published
+      # wheel is public and permanent in a way an editable install is not.
+      - name: Assert the wheel ships only the silkscreen package
+        run: |
+          python - <<'PY'
+          import glob, sys, zipfile
+          whl = glob.glob("dist/*.whl")[0]
+          tops = {n.split("/")[0] for n in zipfile.ZipFile(whl).namelist()}
+          stray = sorted(t for t in tops if not t.startswith("silkscreen"))
+          if stray:
+              sys.exit(f"{whl} would install stray top-level packages: {stray}")
+          print("wheel top-level:", sorted(tops))
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: python-dist
+          path: dist/
+          if-no-files-found: error
+
+  # The built review UI, zipped, so someone can serve the web UI without ever
+  # installing Node: unzip into frontend/dist (or point SILKSCREEN_WEB_DIST at
+  # it) and service/app.py serves it same-origin.
+  web-dist:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: npm ci
+        working-directory: frontend
+      - run: npm run build
+        working-directory: frontend
+      - name: Zip the bundle
+        run: |
+          mkdir -p dist-zip
+          # Zip the directory itself, so the archive unpacks to ./dist/.
+          (cd frontend && zip -r ../dist-zip/silkscreen-web-${{ github.ref_name }}.zip dist)
+      - uses: actions/upload-artifact@v4
+        with:
+          name: web-dist
+          path: dist-zip/
+          if-no-files-found: error
+
+  publish:
+    needs: [python-dist, web-dist]
+    runs-on: ubuntu-latest
+    # Only a real tag publishes; workflow_dispatch stops after the builds above.
+    if: startsWith(github.ref, 'refs/tags/v')
+    permissions:
+      contents: write # create the GitHub Release and upload its assets
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+      - run: ls -la artifacts
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: artifacts/*
+          generate_release_notes: true
+          # A tag containing a hyphen (v0.2.0-rc1) is a prerelease.
+          prerelease: ${{ contains(github.ref_name, '-') }}
+          fail_on_unmatched_files: true

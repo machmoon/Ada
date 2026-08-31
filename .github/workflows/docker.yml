@@ -1,0 +1,73 @@
+name: docker
+
+# Publishes the runtime image to GitHub Container Registry:
+#   docker pull ghcr.io/<owner>/silkscreen:latest
+#
+# Kept separate from release.yml because the triggers differ -- every push to
+# main republishes :main and :sha so the tip is always pullable, while only a
+# version tag produces :X.Y.Z and moves :latest. ci.yml's `docker build .` still
+# owns proving the Dockerfile builds on pull requests; this workflow never runs
+# on a PR, because a fork PR cannot be given registry write access.
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions: {}
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write # push to ghcr.io
+    steps:
+      - uses: actions/checkout@v4
+
+      # QEMU is what makes the linux/arm64 leg possible on an amd64 runner.
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            # v1.2.3 -> :1.2.3, :1.2, :1
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=semver,pattern={{major}}
+            # Every build is addressable by commit, tagged or not.
+            type=sha,format=long
+            # Branch name for main pushes (:main).
+            type=ref,event=branch
+            # :latest moves only on a final version tag -- never on a main push,
+            # and never on a prerelease like v0.2.0-rc1 (hyphen = prerelease,
+            # the same rule release.yml uses).
+            type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/v') && !contains(github.ref_name, '-') }}
+
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          # amd64+arm64 on a tag: the release image should run on Apple Silicon
+          # as well as Cloud Run. amd64 only on a main push, because the
+          # Dockerfile deliberately omits the --platform=$BUILDPLATFORM pin (see
+          # its comment), so the arm64 leg re-runs the whole Node build under
+          # QEMU -- worth several minutes on a release, not on every merge.
+          platforms: ${{ startsWith(github.ref, 'refs/tags/v') && 'linux/amd64,linux/arm64' || 'linux/amd64' }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
