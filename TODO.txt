@@ -249,6 +249,36 @@ feature is tracked under feature 12.
  ----- Integrated placement view and JSON download    [DONE]        generated boards, receipts and session export
  ----- Synthetic behavior-cloning trajectory export  [DONE]        no trained checkpoint claimed
 
+ 18  Slack integration                                 [DONE, unverified live]
+ ----- Signed events + slash commands, threaded runs  [DONE]        slackbot/app.py; HMAC before parse, event_id dedup
+ ----- design / place / review verbs over the pipeline[DONE]        slackbot/runner.py; calls generate_pcb unchanged
+ ----- Board preview + .kicad_pcb into the thread     [DONE]        slackbot/render.py; SVG always, PNG with Pillow
+ ----- Prepared fabrication order, never submitted    [DONE]        slackbot/order.py. DELIBERATE BOUNDARY: the bot
+                                                                     prepares an order and stops. No vendor call, no
+                                                                     submission, no payment path exists, and
+                                                                     test_order.py enforces it by import (only
+                                                                     slack.py may import a network module). A human
+                                                                     confirms before money is spent. If ordering is
+                                                                     ever taken further, that gate is the design, not
+                                                                     an obstacle to route around.
+ ----- Test against a real Slack workspace            [OPEN]        Built against the API and never run against a
+                                                                     live workspace: no app was created and no token
+                                                                     requested. Request construction is covered by
+                                                                     tests against a recorded transport, but a scope
+                                                                     or payload detail could still be wrong on the
+                                                                     first real run.
+ ----- Promote the placements geometry serializer     [OPEN]        slackbot/render.py imports the private
+                                                                     service.app._placements_dict rather than
+                                                                     duplicating the rotation and pad-offset maths.
+                                                                     Duplicating it is the board-destroying bug class,
+                                                                     so importing was right, but it wants to be public
+                                                                     on the engine or a shared module. Left alone
+                                                                     because another session was in the engine.
+ ----- Persist run records across a restart           [OPEN]        Runs are remembered per thread in memory, so
+                                                                     review/order forget after a restart (the bot says
+                                                                     so rather than acting on the wrong board). A
+                                                                     second replica would need a real store.
+
 OPEN WORK, SUMMARISED
 ---------------------
 Everything actionable reduces to: feature 2 in full (parallel reads, now the
@@ -256,9 +286,11 @@ R11 rung under 12), finding-level hallucination filtering under 4, the request
 timeout under 5, feature 6 in full (confirmation gates), the deploy and smoke
 check under 7, the ops polish under 8, voice under 9, the error taxonomy under
 10 (from PR #5 review), and the stream-fallback tightening under 11 (from PR #9
-review). The board well shipped, so voice is all that is left of 9 and stays
-last. Feature 16 still needs a trusted IC model registry and its place in the
-agent repair loop. The [IDEA] rows under 4 and 5 are ideas, not commitments.
+review), and the three open rows under 18 (Slack: live-workspace test,
+serializer promotion, run persistence). The board well shipped, so voice is
+all that is left of 9 and stays last. Feature 16 still needs a trusted IC
+model registry and its place in the agent repair loop. The [IDEA] rows under
+4 and 5 are ideas, not commitments.
 
 The ADK lane runs alongside that. Feature 12 is live and the flip is done: the
 default engine has been "adk" since the 2026-08-30 gate run, with
