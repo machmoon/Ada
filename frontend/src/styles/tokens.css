@@ -47,6 +47,13 @@
   --guide-ring: light-dark(#A5157E, #FF4FE0);
   --guide-glow: light-dark(rgba(165, 21, 126, .28), rgba(255, 79, 224, .32));
 
+  /* the guided pointer (docs/guided-cursor.md §5). The halo lands on the
+     paper chrome and on the always-dark board well alike, so it cannot come
+     from the ink ramp — it borrows the courtyard magenta family, deepened
+     for daylight so it reads as an overlay and not a severity. */
+  --guide-ring: light-dark(#A5157E, #FF4FE0);
+  --guide-glow: light-dark(rgba(165, 21, 126, .28), rgba(255, 79, 224, .32));
+
   /* KiCad symbol colours, as ink: dark on paper, lifted off the dark ground */
   --oxblood: light-dark(#840000, #D9736A);
   --teal: light-dark(#006464, #5FB8B0);
