@@ -100,7 +100,7 @@ Every stage is a real KiCad file you can open and inspect on its own, so you can
 where a design went wrong instead of only seeing the last artifact.
 
 ```
-785 tests collected — no network, no API key, no KiCad install
+797 tests collected — no network, no API key, no KiCad install
 ```
 
 **Next:** [full install guide and troubleshooting](docs/install.md) ·
@@ -371,7 +371,7 @@ treats the board file as the interface.
 | Requires KiCad running | Yes | **No** |
 | Headless / CI | Hard | **Native** |
 | Platform lock | KiCad's plugin loader | **None — pure Python** |
-| Testable without KiCad | No | **Yes, all 785 tests** |
+| Testable without KiCad | No | **Yes, all 797 tests** |
 
 ### What it reads
 
@@ -752,7 +752,7 @@ engine/
       adk/          ADK dynamic workflow over the same stage bodies
     audit/        optional visual review of a finished board
     constraints/  datasheet PDF -> versioned, provenance-carrying constraints
-  tests/          785 tests — no network, no API keys, no KiCad
+  tests/          797 tests — no network, no API keys, no KiCad
     fixtures/     ref.kicad_pcb -- 11-footprint board fixture
 scripts/
   demo.py         end-to-end: read -> place -> write -> verify
@@ -840,7 +840,7 @@ docker build .                                      # the `docker` job
 
 ### Expected output
 
-**1. Test suite** — 785 tests (live-model and local-simulator cases skip when
+**1. Test suite** — 797 tests (live-model and local-simulator cases skip when
 their optional dependency is unavailable):
 
 ```
