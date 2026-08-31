@@ -1,6 +1,13 @@
 <script>
   import Icon from './Icon.svelte'
   import { formatCount, formatDuration, joinDot } from '../lib/format.js'
+  import {
+    readStored as readSkin,
+    resolveSkin,
+    skinAttribute,
+    toggleSkin,
+    writeStored as writeSkin,
+  } from '../lib/skin.js'
   import { prefersDark, readStored, resolveTheme, toggleTheme, writeStored } from '../lib/theme.js'
 
   let { intent = '', result = null } = $props()
@@ -26,6 +33,22 @@
     writeStored(globalThis.localStorage, choice)
     document.documentElement.dataset.theme = choice
   }
+
+  // The material, orthogonal to the light above it: paper is the drafting
+  // table, glass is the overlay surface. Stored the same way, written the
+  // same way, and read back from the same one attribute.
+  let skinChoice = $state(readSkin(globalThis.localStorage))
+  const skin = $derived(resolveSkin(skinChoice))
+
+  function flipSkin() {
+    skinChoice = toggleSkin(skin)
+    writeSkin(globalThis.localStorage, skinChoice)
+    const attr = skinAttribute(skinChoice)
+    // The default skin is the absence of the attribute, not a value that
+    // spells it -- glass.css keys on [data-skin='glass'] and nothing else.
+    if (attr) document.documentElement.dataset.skin = attr
+    else delete document.documentElement.dataset.skin
+  }
 </script>
 
 <header class="bar" data-testid="title-bar">
@@ -38,7 +61,16 @@
   {#if meta}<span class="mono meta" data-testid="title-bar-meta">{meta}</span>{/if}
   <button
     type="button"
-    class="lbl theme"
+    class="lbl chip"
+    aria-pressed={skin === 'glass'}
+    aria-label="Glass skin"
+    onclick={flipSkin}
+    data-testid="title-bar-skin"
+    data-skin-choice={skin}
+  >Glass</button>
+  <button
+    type="button"
+    class="lbl chip"
     aria-pressed={theme === 'dark'}
     aria-label="Night mode"
     onclick={flipTheme}
@@ -55,6 +87,9 @@
     border-bottom: 1px solid var(--rule);
     background: var(--surface);
     flex-shrink: 0;
+    /* Inert under Drafting Table; the glass skin defines both. */
+    backdrop-filter: var(--glass-blur, none);
+    -webkit-backdrop-filter: var(--glass-blur, none);
   }
 
   .brand {
@@ -80,8 +115,9 @@
   .spacer { flex-grow: 1; }
   .meta { font-size: var(--fs-mono-sm); color: var(--ink-soft); padding: 0 16px; }
 
-  /* The brand rule, hung off the other edge of the bar. */
-  .theme {
+  /* The brand rule, hung off the other edge of the bar. Two of them now:
+     the material, then the light it is read under. */
+  .chip {
     display: flex;
     align-items: center;
     height: 100%;
@@ -91,9 +127,9 @@
     background: transparent;
     color: var(--ink-faint);
   }
-  .theme:hover { color: var(--ink); }
-  /* Lit like a current tab, because pressed here means the app is dark. */
-  .theme[aria-pressed='true'] { color: var(--ink); }
+  .chip:hover { color: var(--ink); }
+  /* Lit like a current tab: pressed means that reading is the one showing. */
+  .chip[aria-pressed='true'] { color: var(--ink); }
   /* The global ring sits 1 px outside the element, which the bar clips. */
-  .theme:focus-visible { outline-offset: -2px; }
+  .chip:focus-visible { outline-offset: -2px; }
 </style>

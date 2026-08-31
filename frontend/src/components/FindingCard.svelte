@@ -73,6 +73,10 @@
   .card {
     background: var(--surface);
     border: 1px solid var(--rule-soft);
+    /* Inert under Drafting Table; the glass skin defines both. */
+    backdrop-filter: var(--glass-blur, none);
+    -webkit-backdrop-filter: var(--glass-blur, none);
+    border-radius: var(--panel-radius, 0);
     border-left: var(--sev-bar-w) solid var(--sev-note-rule);
     padding: 15px 18px;
   }

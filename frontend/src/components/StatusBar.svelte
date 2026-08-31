@@ -105,6 +105,9 @@
     height: var(--statusbar-h);
     border-top: 1px solid var(--rule);
     background: var(--well);
+    /* Inert under Drafting Table; the glass skin defines both. */
+    backdrop-filter: var(--glass-blur, none);
+    -webkit-backdrop-filter: var(--glass-blur, none);
     display: flex;
     align-items: center;
     flex-shrink: 0;

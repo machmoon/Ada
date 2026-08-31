@@ -387,6 +387,9 @@
     min-height: 0;
     background: var(--well);
     border-top: 1px solid var(--rule);
+    /* Inert under Drafting Table; the glass skin defines both. */
+    backdrop-filter: var(--glass-blur, none);
+    -webkit-backdrop-filter: var(--glass-blur, none);
   }
 
   /* Pulled up over the drawer's top border, so the hairline someone aims at is

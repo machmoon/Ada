@@ -187,7 +187,10 @@
     padding: 12px 14px;
     background: var(--surface);
     border: 1px solid var(--rule-soft);
-    border-radius: 0;
+    border-radius: var(--panel-radius, 0);
+    /* Inert under Drafting Table; the glass skin defines both. */
+    backdrop-filter: var(--glass-blur, none);
+    -webkit-backdrop-filter: var(--glass-blur, none);
     font-size: var(--fs-body);
     line-height: 1.55;
     resize: none;
@@ -214,6 +217,10 @@
     padding: 9px 10px;
     background: var(--surface);
     border: 1px solid var(--rule-soft);
+    border-radius: var(--panel-radius, 0);
+    /* Inert under Drafting Table; the glass skin defines both. */
+    backdrop-filter: var(--glass-blur, none);
+    -webkit-backdrop-filter: var(--glass-blur, none);
   }
   .preset-copy { display: flex; flex-direction: column; min-width: 0; }
   .preset-part { color: var(--ink); }
