@@ -21,8 +21,8 @@ describe('parseTab', () => {
     expect(parseTab(null)).toBe('')
   })
 
-  it('knows the five tabs the status bar shows', () => {
-    expect(TABS).toEqual(['chat', 'schematic', 'placement', 'board', 'review'])
+  it('knows the six tabs the status bar shows', () => {
+    expect(TABS).toEqual(['chat', 'schematic', 'placement', 'board', 'case', 'review'])
   })
 })
 
@@ -48,6 +48,12 @@ describe('resolveTab', () => {
   it('falls back to chat when there is no schematic to show', () => {
     expect(resolveTab('#schematic', { schematic: false, board: true })).toBe('chat')
     expect(resolveTab('#schematic')).toBe('chat')
+  })
+
+  it('shows the case tab only after a run finished', () => {
+    expect(resolveTab('#case', { case: true })).toBe('case')
+    expect(resolveTab('#case', { case: false, board: true })).toBe('chat')
+    expect(resolveTab('#case')).toBe('chat')
   })
 
   it('shows review only after a result exists', () => {

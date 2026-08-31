@@ -30,7 +30,137 @@ def _load_dotenv(path: Path) -> None:
         os.environ.setdefault(key.strip(), value.strip().strip('"').strip("'"))
 
 
+def _print_fit_receipt(fit) -> None:
+    """The verified-fit receipt: signed per-axis margins, then warnings."""
+    margins = ", ".join(
+        f"{axis} {fit.margins_nm[axis] / 1_000_000:+.3f} mm" for axis in ("x", "y", "z")
+    )
+    print(f"Case fit: {margins} (negative = collision)")
+    for warning in fit.warnings:
+        print(f"  note: {warning}", file=sys.stderr)
+
+
+def _case_main(argv: list[str]) -> int:
+    """``silkscreen case board.kicad_pcb`` -- retrofit a case onto a board.
+
+    ``--no-model`` emits the deterministic default-spec case with no API call
+    at all: default :func:`parse_enclosure_spec` dict + measured board
+    envelope + deterministic emitter, fully offline.
+    """
+    parser = argparse.ArgumentParser(
+        prog="silkscreen case",
+        description="Generate a 3D-printable OpenSCAD case for an existing "
+        "KiCad board.",
+    )
+    parser.add_argument("board", help="the .kicad_pcb to fit a case around")
+    parser.add_argument("-o", "--output", default="enclosure.scad",
+                        help="where to write the .scad (default: %(default)s)")
+    parser.add_argument("--intent", default="",
+                        metavar="TEXT",
+                        help="natural-language case intent, e.g. "
+                             "'rounded corners, USB cutout left'")
+    parser.add_argument("--stl", action="store_true",
+                        help="additionally render enclosure.stl via the local "
+                             "openscad binary")
+    parser.add_argument("--no-model", action="store_true",
+                        help="emit the deterministic default case with no "
+                             "model call (fully offline)")
+    args = parser.parse_args(argv)
+
+    from .enclosure.board_shape import board_envelope
+    from .enclosure.emit import emit_scad
+    from .enclosure.errors import EnclosureError, RenderUnavailable
+    from .enclosure.ir import parse_enclosure_spec
+    from .enclosure.verify import verify_fit
+
+    try:
+        envelope = board_envelope(args.board)
+    except (OSError, ValueError, EnclosureError) as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+
+    if args.no_model:
+        if args.intent:
+            print("note: --no-model ignores --intent (deterministic default "
+                  "case)", file=sys.stderr)
+        spec = parse_enclosure_spec({})
+        repair_rounds = 0
+    else:
+        _load_dotenv(Path.cwd() / ".env")
+        try:
+            from .agents.enclosure import propose_enclosure
+            from .agents.model import CHEAP_MODEL
+        except ImportError as exc:
+            print(
+                "error: model-driven case generation is not available in this "
+                f"build ({exc}); use --no-model for the deterministic default "
+                "case",
+                file=sys.stderr,
+            )
+            return 2
+        try:
+            model = GeminiModel(CHEAP_MODEL)
+        except ModelError as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            return 2
+        try:
+            spec, repair_rounds = propose_enclosure(
+                model, envelope, style_hint=args.intent
+            )
+        except Exception as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            return 1
+
+    try:
+        fit = verify_fit(spec, envelope)
+        scad = emit_scad(spec, envelope)
+    except EnclosureError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+
+    out = Path(args.output)
+    out.write_text(scad, encoding="utf-8")
+    print(f"wrote {out}")
+    _print_fit_receipt(fit)
+    if repair_rounds:
+        print(f"  repair rounds: {repair_rounds}", file=sys.stderr)
+
+    if args.stl:
+        import importlib
+
+        try:
+            render = importlib.import_module("silkscreen.enclosure.render")
+        except ImportError as exc:
+            print(
+                f"error: STL rendering is not available in this build ({exc})",
+                file=sys.stderr,
+            )
+            return 2
+        stl_path = out.with_suffix(".stl")
+        try:
+            render.render_stl(scad, stl_path)
+        except RenderUnavailable as exc:
+            print(
+                f"error: {exc.executable!r} not found on PATH; install "
+                "OpenSCAD to render an STL (the .scad above is complete "
+                "without it)",
+                file=sys.stderr,
+            )
+            return 2
+        except EnclosureError as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            return 1
+        print(f"wrote {stl_path}")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
+    argv = list(sys.argv[1:] if argv is None else argv)
+    # A tiny subcommand dispatch, kept out of argparse so the historical
+    # ``silkscreen "an ldo board"`` form keeps working unchanged.
+    if argv and argv[0] == "case":
+        return _case_main(argv[1:])
+
     parser = argparse.ArgumentParser(
         prog="silkscreen",
         description="Generate a placed KiCad PCB from a description, and review it.",
@@ -53,6 +183,12 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--board-only", action="store_true",
                         help="write only the routed .kicad_pcb, no schematic, "
                              "project file or pre-routing board")
+    parser.add_argument("--case", action="store_true",
+                        help="also generate a 3D-printable case; writes "
+                             "enclosure.scad beside the output")
+    parser.add_argument("--case-style", default="", metavar="TEXT",
+                        help="natural-language case intent, e.g. "
+                             "'rounded corners, USB cutout left'")
     args = parser.parse_args(argv)
 
     _load_dotenv(Path.cwd() / ".env")
@@ -73,6 +209,14 @@ def main(argv: list[str] | None = None) -> int:
     for part in datasheets:
         print(f"reading datasheet: {part}", file=sys.stderr)
 
+    # Opt-in only, so a run without --case makes the exact call it always
+    # made (the plan's both-drivers-identical-by-default rule).
+    case_kwargs = (
+        {"enclosure": True, "enclosure_style": args.case_style}
+        if args.case
+        else {}
+    )
+
     try:
         result = generate_pcb(
             model,
@@ -84,6 +228,7 @@ def main(argv: list[str] | None = None) -> int:
             review=not args.no_review,
             route=not args.no_route,
             emit_stages=not args.board_only,
+            **case_kwargs,
         )
     except Exception as exc:
         print(f"error: {exc}", file=sys.stderr)
@@ -115,6 +260,19 @@ def main(argv: list[str] | None = None) -> int:
         print(f"Routing: {result.route.summary()}")
         for net, reason in sorted(result.route.unrouted.items()):
             print(f"  unrouted {net}: {reason}")
+
+    # The case's verified-fit receipt, or its honest absence: an exhausted
+    # enclosure repair budget degrades to no case, never to a failed run.
+    if args.case:
+        case = getattr(result, "enclosure", None)
+        print()
+        if case is None:
+            print("case: generation failed; the board is delivered without one",
+                  file=sys.stderr)
+        else:
+            _print_fit_receipt(case.fit)
+            if case.repair_rounds:
+                print(f"  repair rounds: {case.repair_rounds}", file=sys.stderr)
 
     for w in result.board.warnings:
         print(f"  note: {w}", file=sys.stderr)

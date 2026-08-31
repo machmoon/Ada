@@ -24,6 +24,12 @@ jobs:
       - name: install ngspice (linux)
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y ngspice
+      # Same convention for the enclosure render gate in
+      # engine/tests/test_enclosure_agent.py / test_scad_emit.py: openscad on
+      # Linux only (macOS brew is slow and flaky; Windows skips like ngspice).
+      - name: install openscad (linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get install -y openscad
       - name: install ngspice (macos)
         if: runner.os == 'macOS'
         run: brew install ngspice

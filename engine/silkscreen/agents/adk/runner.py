@@ -36,7 +36,7 @@ from ..model import Model
 from ..pipeline import PipelineResult, _finish, _wire_events
 from ..propose import ProposalAttempt
 from ..review import Finding
-from ..stages import NO_ARTIFACTS, SchematicArtifacts
+from ..stages import NO_ARTIFACTS, EnclosureResult, SchematicArtifacts
 
 __all__ = ["generate_pcb_adk"]
 
@@ -74,6 +74,8 @@ class _RunContext:
     placement_model: Model | None
     placement_fallback_model: Model | None
     placement_max_turns: int
+    enclosure: bool = False
+    enclosure_style: str = ""
     facts: list[PartFacts] = field(default_factory=list)
     spec: CircuitSpec | None = None
     attempts: list[ProposalAttempt] = field(default_factory=list)
@@ -81,6 +83,7 @@ class _RunContext:
     placement: GeneratedPlacement | None = None
     artifacts: SchematicArtifacts = NO_ARTIFACTS
     route_result: RouteResult | None = None
+    enclosure_result: EnclosureResult | None = None
     findings: list[Finding] = field(default_factory=list)
     error: BaseException | None = None
     # The chain as it stood at the raise site. ADK re-raises the original
@@ -228,6 +231,8 @@ def generate_pcb_adk(
     placement_model: Model | None = None,
     placement_fallback_model: Model | None = None,
     placement_max_turns: int = 8,
+    enclosure: bool = False,
+    enclosure_style: str = "",
 ) -> PipelineResult:
     """Run the stages as an ADK workflow. See :func:`silkscreen.agents.generate_pcb`.
 
@@ -264,6 +269,8 @@ def generate_pcb_adk(
         placement_model=placement_model,
         placement_fallback_model=placement_fallback_model,
         placement_max_turns=placement_max_turns,
+        enclosure=enclosure,
+        enclosure_style=enclosure_style,
     )
     token = secrets.token_hex(8)
     _RUNS[token] = run
@@ -296,4 +303,5 @@ def generate_pcb_adk(
         route=run.route_result,
         artifacts=run.artifacts,
         placement=run.placement,
+        enclosure=run.enclosure_result,
     )

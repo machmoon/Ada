@@ -10,6 +10,7 @@
     schematicEnabled = false,
     placementEnabled = false,
     boardEnabled = false,
+    caseEnabled = false,
     debugOpen = false,
     ondebug = null,
   } = $props()
@@ -89,6 +90,20 @@
     >Board</a>
   {:else}
     <span class="lbl tab" aria-disabled="true" title="Run a board to see it placed" data-testid="status-bar-tab-board" data-enabled="false">Board</span>
+  {/if}
+  <!-- Enabled once any run finished: a run without a case still gets the tab,
+       whose honest empty state explains why nothing is there. -->
+  {#if caseEnabled}
+    <a
+      class="lbl tab"
+      class:current={tab === 'case'}
+      href="#case"
+      aria-current={tab === 'case' ? 'page' : undefined}
+      data-testid="status-bar-tab-case"
+      data-enabled="true"
+    >Case</a>
+  {:else}
+    <span class="lbl tab" aria-disabled="true" title="Run a board to see its case" data-testid="status-bar-tab-case" data-enabled="false">Case</span>
   {/if}
   <a
     class="lbl tab"

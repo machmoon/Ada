@@ -29,7 +29,9 @@ from .propose import ProposalAttempt
 from .review import Finding, Severity
 from .stages import (
     NO_ARTIFACTS,
+    EnclosureResult,
     SchematicArtifacts,
+    enclosure_stage,
     place_stage,
     placement_repair_stage,
     propose_stage,
@@ -39,7 +41,7 @@ from .stages import (
     schematic_stage,
 )
 
-__all__ = ["PipelineResult", "generate_pcb"]
+__all__ = ["PipelineResult", "EnclosureResult", "generate_pcb"]
 
 #: Event strings are capped so a stream stays a progress signal, never a
 #: payload. No event may carry board text or datasheet text, and none carries
@@ -73,6 +75,9 @@ class PipelineResult:
     placed_board_path: Path | None = None
     #: Verifier-grounded placement receipt when integrated repair is enabled.
     placement: GeneratedPlacement | None = None
+    #: The generated case, or None -- when it was not requested, and also when
+    #: it failed: enclosure failure never fails the run (plan decision 5).
+    enclosure: EnclosureResult | None = None
 
     @property
     def artifacts(self) -> list[Path]:
@@ -320,6 +325,7 @@ def _finish(
     route: RouteResult | None = None,
     artifacts: SchematicArtifacts = NO_ARTIFACTS,
     placement: GeneratedPlacement | None = None,
+    enclosure: EnclosureResult | None = None,
 ) -> PipelineResult:
     """Write the board if asked, then assemble the result. Emits nothing.
 
@@ -345,6 +351,7 @@ def _finish(
         project_path=artifacts.project_path,
         placed_board_path=artifacts.placed_board_path,
         placement=placement,
+        enclosure=enclosure,
     )
 
 
@@ -368,6 +375,8 @@ def _generate_pcb_sdk(
     placement_model: Model | None = None,
     placement_fallback_model: Model | None = None,
     placement_max_turns: int = 8,
+    enclosure: bool = False,
+    enclosure_style: str = "",
 ) -> PipelineResult:
     """Run the stages as a straight line. See :func:`generate_pcb`."""
     emit, agent_model, enter, observe = _wire_events(
@@ -419,6 +428,15 @@ def _generate_pcb_sdk(
         enter=enter,
     )
     route_result = route_stage(board, route=route, emit=emit, enter=enter)
+    enclosure_result = enclosure_stage(
+        agent_model,
+        board,
+        enclosure=enclosure,
+        enclosure_style=enclosure_style,
+        output=output,
+        emit=emit,
+        enter=enter,
+    )
     findings = review_stage(
         agent_model, spec, facts=facts, review=review, emit=emit, enter=enter
     )
@@ -434,6 +452,7 @@ def _generate_pcb_sdk(
         route=route_result,
         artifacts=artifacts,
         placement=placement,
+        enclosure=enclosure_result,
     )
 
 
@@ -457,6 +476,8 @@ def generate_pcb(
     placement_model: Model | None = None,
     placement_fallback_model: Model | None = None,
     placement_max_turns: int = 8,
+    enclosure: bool = False,
+    enclosure_style: str = "",
     engine: str = "",
 ) -> PipelineResult:
     """Generate a placed board from a natural-language intent.
@@ -501,6 +522,15 @@ def generate_pcb(
         placement_model: Proposal model for a non-deterministic placement policy.
         placement_fallback_model: Recovery model used by the hybrid policy.
         placement_max_turns: Bounded number of placement proposal turns.
+        enclosure: Additionally propose, verify and emit an OpenSCAD case for
+            the finished board. Opt-in; the stage runs after routing and its
+            failure never fails the run -- ``result.enclosure`` is ``None``
+            and a visible ``enclosure.failed`` event says why, but the board
+            is still delivered (plan decision 5). With ``output`` set,
+            ``enclosure.scad`` is written beside the project.
+        enclosure_style: Natural-language case intent ("rounded corners, USB
+            cutout left"), handed to the proposal prompt as a style hint.
+            Ignored when ``enclosure`` is off.
         engine: Which driver runs the stages -- ``"sdk"`` for the straight line
             in this module, ``"adk"`` for the Google ADK workflow in
             :mod:`silkscreen.agents.adk`. Both call the same stage bodies and
@@ -537,6 +567,8 @@ def generate_pcb(
             placement_model=placement_model,
             placement_fallback_model=placement_fallback_model,
             placement_max_turns=placement_max_turns,
+            enclosure=enclosure,
+            enclosure_style=enclosure_style,
         )
     if chosen == "adk":
         # Imported here, never at module scope: a base install has no google.adk,
@@ -566,6 +598,8 @@ def generate_pcb(
             placement_model=placement_model,
             placement_fallback_model=placement_fallback_model,
             placement_max_turns=placement_max_turns,
+            enclosure=enclosure,
+            enclosure_style=enclosure_style,
         )
     # RuntimeError, not ValueError: the service answers a pipeline ValueError as
     # a 400 with the raw message, and a bad engine name is not a client's fault.
