@@ -101,7 +101,7 @@ Every stage is a real KiCad file you can open and inspect on its own, so you can
 where a design went wrong instead of only seeing the last artifact.
 
 ```
-998 tests collected — no network, no API key, no KiCad install
+1023 tests collected — no network, no API key, no KiCad install
 ```
 
 **Next:** [full install guide and troubleshooting](docs/install.md) ·
@@ -175,7 +175,7 @@ Platform-by-platform commands are in [docs/install.md](docs/install.md#kicad-opt
 | `order.py` — order options, manufacturability preflight | **Working** · blocks an unrouted board |
 | `mcp/` — MCP server over stdio | **Working** · 43 tests |
 | `audit/` — optional visual design review | **Working** · 52 tests |
-| `service/` — Cloud Run + Firestore cache | **Working** · 146 tests · live at <https://silkscreen-vqdj4x5qbq-uc.a.run.app> |
+| `service/` — Cloud Run + Firestore cache | **Working** · 171 tests · live at <https://silkscreen-vqdj4x5qbq-uc.a.run.app> |
 | `slackbot/` — Slack bot over the pipeline | **Working** · untested against a live workspace |
 | `frontend/` — Svelte review UI, served by the service | **Working** · persistent orchestrator chat, expandable traces, session JSON, review, schematic, placement and board tabs |
 | `engine/silkscreen/placement/` — verifier-grounded repair and company profiles | **Working** · deterministic and Gemini policies; experimental providers are opt-in |
@@ -438,7 +438,7 @@ treats the board file as the interface.
 | Requires KiCad running | Yes | **No** |
 | Headless / CI | Hard | **Native** |
 | Platform lock | KiCad's plugin loader | **None — pure Python** |
-| Testable without KiCad | No | **Yes, all 998 tests** |
+| Testable without KiCad | No | **Yes, all 1023 tests** |
 
 ### What it reads
 
@@ -538,10 +538,19 @@ by unit tests, not by the number above.
 ### As a service
 
 ```bash
-gcloud run deploy silkscreen --source . --region us-central1 \
-  --set-secrets GOOGLE_API_KEY=google-api-key:latest \
-  --set-env-vars GOOGLE_CLOUD_PROJECT=your-project
+./scripts/deploy.sh --project your-project        # gcloud run deploy, via Cloud Build
+SILKSCREEN_ACCESS_TOKEN=... ./scripts/smoke.sh https://silkscreen-xxxx.run.app
 ```
+
+`scripts/deploy.sh` deploys from source with the Gemini key and the shared
+access token fed through Secret Manager (never `--set-env-vars`), and
+`scripts/smoke.sh` is the post-deploy check: liveness, then one real paid
+`/generate` asserting every field the client reads. Flags, sizing rationale,
+the two authentication gates (and why they cannot stack on one request), and
+troubleshooting live in [docs/deploy.md](docs/deploy.md). When
+`SILKSCREEN_ACCESS_TOKEN` is set in the service's environment, every POST route
+requires `Authorization: Bearer <token>`; unset, the service behaves exactly as
+before, which is what keeps every local workflow untouched.
 
 A live instance is running at
 <https://silkscreen-vqdj4x5qbq-uc.a.run.app> (deployed 2026-08-31, project
@@ -549,7 +558,8 @@ A live instance is running at
 `POST /generate` requires an access token, so browsing to it costs nobody
 anything). Probe liveness with `GET /`, not `/healthz` — Google's frontend
 intercepts `/healthz` on `run.app` domains at the edge and answers 404 before
-the request reaches the container.
+the request reaches the container; `smoke.sh` knows this and falls back on its
+own.
 
 `POST /generate` with `{"intent": "...", "datasheets": {"PART": "url"}}` returns
 the board, the emitted `.kicad_pcb`, and a versioned `schematic` topology block
@@ -862,7 +872,7 @@ engine/
       pipeline.py   prompt -> PCB
       adk/          ADK dynamic workflow over the same stage bodies
     audit/        optional visual review of a finished board
-  tests/          998 tests — no network, no API keys, no KiCad
+  tests/          1023 tests — no network, no API keys, no KiCad
     fixtures/     ref.kicad_pcb -- 11-footprint board fixture
 scripts/
   demo.py         end-to-end: read -> place -> write -> verify

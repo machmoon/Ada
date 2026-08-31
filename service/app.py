@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import contextlib
 import hashlib
+import hmac
 import json
 import math
 import os
@@ -87,7 +88,9 @@ from .models import (  # noqa: E402
 from .quota import GEMINI_REQUEST_PACER, RequestPacer  # noqa: E402
 
 __all__ = [
+    "ACCESS_TOKEN_ENV",
     "Handler",
+    "access_token",
     "build_embedder",
     "build_model",
     "build_ollama_model",
@@ -107,6 +110,32 @@ MAX_BODY_BYTES = 1 << 20
 DEFAULT_TIME_LIMIT = 20.0
 PAGES_COLLECTION = "datasheet_pages"
 MAX_GROUND_PARTS = 25
+
+
+#: Env var holding the shared token a deployment requires on its POST routes.
+ACCESS_TOKEN_ENV = "SILKSCREEN_ACCESS_TOKEN"
+
+
+def access_token() -> str | None:
+    """The token this process requires, or None when it requires none.
+
+    Unset means no gate, and that default is the load-bearing half: every local
+    workflow -- ``python -m service.app``, the demo, the whole test suite --
+    predates this check and must keep working without setting anything. A
+    deployment opts in by setting the var; nothing else changes behaviour.
+
+    Empty and whitespace-only both count as unset. A Cloud Run secret mounted
+    as an env var routinely arrives with a trailing newline, and an empty value
+    is what an unfilled ``--set-env-vars`` leaves behind; treating either as a
+    real token would gate the service behind a secret nobody can type.
+
+    Read per request rather than captured at import, so the value cannot be
+    frozen into a module that was imported before the environment was set --
+    the failure mode ``SILKSCREEN_WEB_DIST`` already has, and one that would
+    read here as a gate that silently is not there.
+    """
+    token = (os.getenv(ACCESS_TOKEN_ENV) or "").strip()
+    return token or None
 
 
 def page_cache_key(part: str, url: str) -> str:
@@ -1091,6 +1120,7 @@ class Handler(BaseHTTPRequestHandler):
         payload: dict[str, Any],
         *,
         cache_control: str | None = None,
+        extra_headers: dict[str, str] | None = None,
     ) -> None:
         try:
             body = json.dumps(payload, allow_nan=False).encode()
@@ -1108,6 +1138,8 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Content-Length", str(len(body)))
         if cache_control:
             self.send_header("Cache-Control", cache_control)
+        for name, value in (extra_headers or {}).items():
+            self.send_header(name, value)
         self.end_headers()
         self.wfile.write(body)
 
@@ -1222,7 +1254,72 @@ class Handler(BaseHTTPRequestHandler):
 
         self._send(404, {"error": f"no route {self.path}"})
 
+    def _authorized(self) -> bool:
+        """True if this request may spend a model call.
+
+        Only ``Authorization: Bearer <token>`` is accepted -- not a query
+        parameter, which would land the token in every access log and proxy
+        history on the way here.
+
+        The compare is hmac.compare_digest, not ``==``: a plain comparison
+        returns as soon as two bytes differ, so an attacker who can time
+        requests recovers the token one character at a time. Both sides are
+        encoded first because compare_digest rejects a str with any non-ASCII
+        character in it -- a header full of UTF-8 must be a refusal, not a
+        TypeError that becomes a 500.
+        """
+        expected = access_token()
+        if expected is None:
+            return True
+        scheme, _, presented = (self.headers.get("Authorization") or "").partition(" ")
+        if scheme.lower() != "bearer":
+            return False
+        return hmac.compare_digest(presented.strip().encode(), expected.encode())
+
+    def _reject_unauthorized(self) -> None:
+        """Answer 401 before any work, and before any body is streamed.
+
+        The body says only "unauthorized": echoing back what was presented, or
+        how it differed from the token, would put the secret (or a hint at it)
+        into the caller's hands and into any log that keeps error bodies. The
+        token is likewise never written to stderr -- log_message only ever sees
+        the request line.
+
+        The request body is drained first. This server speaks HTTP/1.0 and
+        closes after the response, and closing a socket with unread bytes still
+        in it is what turns a clean 401 into a connection reset on the client,
+        which reads as an outage rather than a refusal.
+        """
+        with contextlib.suppress(ValueError, OSError):
+            length = int(self.headers.get("Content-Length") or 0)
+            if 0 < length <= MAX_BODY_BYTES:
+                self.rfile.read(length)
+        self._send(
+            401,
+            {"error": "unauthorized"},
+            extra_headers={"WWW-Authenticate": 'Bearer realm="silkscreen"'},
+        )
+
     def do_POST(self) -> None:
+        # Every POST route spends model calls, so the gate sits above routing
+        # rather than inside each handler: it cannot then be forgotten on a
+        # route added later, a 401 is identical on every POST route, and the
+        # streaming routes refuse here -- before their 200 and first frame --
+        # so a rejection is plain JSON and never an NDJSON apology after the
+        # run has apparently been accepted.
+        #
+        # It also runs before _read_payload, so an unauthenticated caller
+        # cannot reach the ValueError-to-400 path that known issue 10 tracks.
+        #
+        # GET is deliberately not gated. /healthz must answer unauthenticated
+        # or Cloud Run's own probe fails the revision and no deploy ever goes
+        # live, and the static bundle is HTML and JS that costs nothing to
+        # serve and holds no secrets -- gating it would break the browser path
+        # (a <script> tag cannot carry an Authorization header) while the API
+        # calls that actually spend money stay gated either way.
+        if not self._authorized():
+            self._reject_unauthorized()
+            return
         if self.path == "/placement/repair":
             self._placement_repair()
             return
