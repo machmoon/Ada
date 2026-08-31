@@ -17,10 +17,14 @@ export interface CustomizableState {
   };
 }
 
+// Autostart is off until asked for. Adding ourselves to the login items on
+// first run is a decision the user makes, not one the installer makes for
+// them, and the window is always-on-top and off the taskbar — a combination
+// nobody should end up with unknowingly.
 export const DEFAULT_CUSTOMIZABLE_STATE: CustomizableState = {
   appIcon: { isVisible: true },
   alwaysOnTop: { isEnabled: false },
-  autostart: { isEnabled: true },
+  autostart: { isEnabled: false },
   cursor: { type: "invisible" },
 };
 

@@ -1,5 +1,10 @@
 # Silkscreen
 
+[![CI](https://github.com/machmoon/silkscreen/actions/workflows/ci.yml/badge.svg)](https://github.com/machmoon/silkscreen/actions/workflows/ci.yml)
+[![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-blue)](https://www.python.org/downloads/)
+[![KiCad 7–8](https://img.shields.io/badge/KiCad-7--8%20file%20format-brightgreen)](https://www.kicad.org/download/)
+[![License: MIT](https://img.shields.io/badge/license-MIT-black)](LICENSE)
+
 **End-to-end PCB design. Describe a board in plain language, get a placed KiCad
 layout back — with the reasoning shown and every claim cited.**
 
@@ -12,9 +17,75 @@ you what it thinks is wrong.
 is a viewer for what it produced, and is the less-supported path — see
 [Which interface](#which-interface).
 
+<!-- SCREENSHOTS WANTED — do not uncomment until the files exist under docs/img/:
+     docs/img/review.png    the review pane with findings and citations
+     docs/img/board.png     the Board tab: courtyards, pads, silkscreen refs
+     docs/img/schematic.png the Schematic tab
+-->
+
+---
+
+## Quickstart
+
+Python 3.11 or newer. **No KiCad install, no API key, and no network access are needed
+to install it or to run the whole test suite.**
+
+**One command.** It finds a Python 3.11+, creates `.venv`, installs the engine editable
+with its extras, and builds the web UI if Node 22+ is on your PATH (skipped, not fatal,
+if it isn't). Nothing is written outside the repo and it never uses `sudo`:
+
 ```bash
-python -m silkscreen "a 3.3V motor driver around an STM32F103" -o board.kicad_pcb
+git clone https://github.com/machmoon/silkscreen && cd silkscreen
+./scripts/install.sh                                           # macOS / Linux
+powershell -ExecutionPolicy Bypass -File scripts\install.ps1   # Windows
 ```
+
+Then, optionally, one command to configure a key and one to open the app:
+
+```bash
+./.venv/bin/silkscreen setup    # writes .env; never echoes the key back
+./.venv/bin/silkscreen serve    # starts the API + UI and opens a browser
+```
+
+<details>
+<summary><b>Or install by hand</b> (three lines, same result)</summary>
+
+```bash
+python3 -m venv .venv
+./.venv/bin/pip install -e ".[dev,agents,cloud,adk]"   # Windows: .venv\Scripts\pip
+./.venv/bin/python -m pytest -q                    # offline; no keys required
+```
+</details>
+
+<details>
+<summary><b>Or run the web UI in Docker</b> (no Python or Node on your machine)</summary>
+
+```bash
+docker build -t silkscreen .
+docker run -p 8080:8080 -e GOOGLE_API_KEY=... silkscreen   # http://localhost:8080
+```
+
+The image builds the Svelte bundle in a Node stage and serves it from the Python
+service, same origin as the API.
+</details>
+
+Then place a board — no API key, nothing to configure, and it finishes in about
+20 seconds:
+
+```bash
+./.venv/bin/python scripts/demo.py
+```
+
+To go from a prompt to a board you need a Gemini key (`GOOGLE_API_KEY`); everything
+else works without one:
+
+```bash
+./.venv/bin/silkscreen setup    # or: cp .env.example .env, and edit it
+./.venv/bin/silkscreen "a 3.3V motor driver around an STM32F103" -o board.kicad_pcb
+```
+
+`setup` and `serve` are the only subcommands; any other argument is the plain-language
+intent, so `silkscreen "..."` and `python -m silkscreen "..."` are the same generator.
 
 One run leaves you a KiCad project, one file per stage:
 
@@ -29,8 +100,15 @@ Every stage is a real KiCad file you can open and inspect on its own, so you can
 where a design went wrong instead of only seeing the last artifact.
 
 ```
-706 tests collected — no network, no API key, no KiCad install
+745 tests collected — no network, no API key, no KiCad install
 ```
+
+**Next:** [full install guide and troubleshooting](docs/install.md) ·
+[contributing](CONTRIBUTING.md) · [how it works](#prompt-to-pcb)
+
+**Download:** [tagged releases](https://github.com/machmoon/silkscreen/releases) carry the
+Python wheel, the built web UI, and the **Kaleo** desktop app (macOS `.dmg`,
+Apple Silicon, ad-hoc signed — right-click → Open on first launch).
 
 ---
 
@@ -74,6 +152,7 @@ work you do in KiCad. Install it unless you have a specific reason not to.
 
 Skip KiCad if you are running Silkscreen in CI, on a server, or inside another tool
 that consumes the file. Install it if you are a person who wants to see a board.
+Platform-by-platform commands are in [docs/install.md](docs/install.md#kicad-optional-but-recommended).
 
 ---
 
@@ -81,12 +160,12 @@ that consumes the file. Install it if you are a person who wants to see a board.
 
 | Component | State |
 |---|---|
-| `kicad.py` — `.kicad_pcb` read/write | **Working** · 28 tests |
+| `kicad.py` — `.kicad_pcb` read/write | **Working** · 33 tests |
 | `packing.py` — CP-SAT placer | **Working** · 44 tests |
 | `netlist.py` — validated circuit IR | **Working** · 21 tests |
 | `schematic.py` — `.kicad_sch` + `.kicad_pro` emission | **Working** · 22 tests · KiCad ERC clean |
 | `routing.py` — two-layer grid autorouter | **Working, partial by design** · 20 tests — see below |
-| `footprints.py` + `board.py` — land patterns, board emission | **Working** · 20 tests |
+| `footprints.py` + `board.py` — land patterns, board emission | **Working** · 23 tests |
 | `agents/` — datasheet, propose, review, pipeline | **Working** · 34 tests |
 | `agents/adk/` — ADK dynamic-workflow driver for the pipeline | **Working** · 18 tests |
 | `agents/retrieval.py` — page-cited datasheet retrieval | **Working** · 15 tests |
@@ -95,40 +174,14 @@ that consumes the file. Install it if you are a person who wants to see a board.
 | `order.py` — order options, manufacturability preflight | **Working** · blocks an unrouted board |
 | `mcp/` — MCP server over stdio | **Working** · 43 tests |
 | `audit/` — optional visual design review | **Working** · 52 tests |
-| `service/` — Cloud Run + Firestore cache | **Working** · 108 tests |
+| `service/` — Cloud Run + Firestore cache | **Working** · 108 tests · not deployed anywhere yet; no live URL |
 | `frontend/` — Svelte review UI, served by the service | **Working** · persistent orchestrator chat, expandable model/tool traces, session JSON, review, schematic and board tabs |
+| Voice / talk input | Not built |
 | Overlay UI, guided cursor | Not built (mockups only) |
 
----
-
-## Install
-
-**1. Silkscreen itself** — Python 3.11+, no KiCad required:
-
-```bash
-git clone https://github.com/machmoon/silkscreen && cd silkscreen
-python3 -m venv .venv
-./.venv/bin/pip install -e ".[dev,agents,adk]"
-```
-
-**2. A Gemini key**, for the prompt-to-PCB path. The engine and the whole test suite
-run without one; only the agents need it.
-
-```bash
-cp .env.example .env      # then put your GOOGLE_API_KEY in it
-```
-
-**3. KiCad** — recommended, so you can open the result:
-
-| Platform | Command |
-|---|---|
-| macOS | `brew install --cask kicad` |
-| Windows | `winget install KiCad.KiCad` |
-| Debian/Ubuntu | `sudo add-apt-repository ppa:kicad/kicad-8.0-releases && sudo apt install kicad` |
-| Fedora / any Linux | `flatpak install flathub org.kicad.KiCad` |
-
-Or download from [kicad.org/download](https://www.kicad.org/download/). Then open the
-output with **File → Open** in the PCB Editor, or `pcbnew placed.kicad_pcb`.
+Every module above is covered by tests that run with no network, no API key, and no
+KiCad install. The count is deliberately not quoted here — it drifts, and
+`scripts/check_docs.py` fails CI when a quoted one goes stale.
 
 ---
 
@@ -158,6 +211,10 @@ intent ─► datasheets ─► propose ─► validate/repair ─► .kicad_sch
 | Placement | `packing.py` | `.placed.kicad_pcb` |
 | Copper routing | `routing.py` | `.kicad_pcb` |
 | Adversarial review | `agents/review.py` | |
+
+Useful flags: `--no-route` stops after placement, `--no-review` skips the adversarial
+pass, `--board-only` writes just the routed `.kicad_pcb`, `--time-limit` sets the
+solver budget, `--repairs` how many times a bad proposal goes back to the model.
 
 The schematic and the board are drawn by two emitters from one `CircuitSpec`, and both
 take their reference designators from `CircuitSpec.assign_refs()` — so `C1` on the
@@ -317,7 +374,7 @@ treats the board file as the interface.
 | Requires KiCad running | Yes | **No** |
 | Headless / CI | Hard | **Native** |
 | Platform lock | KiCad's plugin loader | **None — pure Python** |
-| Testable without KiCad | No | **Yes, all 706 tests** |
+| Testable without KiCad | No | **Yes, all 745 tests** |
 
 ### What it reads
 
@@ -395,8 +452,8 @@ motor-driver fixture in `engine/tests/fixtures/`:
 ```
 11 footprints, 6 nets
 status     : feasible
-board size : 19.60 x 15.05 mm  (295.0 mm²)
-HPWL       : 52.4 mm
+board size : 18.25 x 18.00 mm  (328.5 mm²)
+HPWL       : 53.0 mm
 placed 11/11 -> placed.kicad_pcb  (~43.9 kB, reparses clean)
 ```
 
@@ -420,6 +477,9 @@ by unit tests, not by the number above.
 gcloud run deploy silkscreen --source . --region us-central1 \
   --set-env-vars GOOGLE_API_KEY=...,GOOGLE_CLOUD_PROJECT=your-project
 ```
+
+Nothing in this repo performs a deploy and no instance is running anywhere — that
+command is the recipe, not a description of something live.
 
 `POST /generate` with `{"intent": "...", "datasheets": {"PART": "url"}}` returns
 the board, the emitted `.kicad_pcb`, and a versioned `schematic` topology block
@@ -451,10 +511,10 @@ cd frontend && npm run build  # writes frontend/dist/
 python -m service.app         # http://localhost:8080 serves the UI and the API
 ```
 
-The UI has its own suite, which CI runs before the build:
+The UI has its own Vitest suite, which CI runs before the build:
 
 ```bash
-cd frontend && npm test  # Vitest over frontend/src/lib
+cd frontend && npm test
 ```
 
 A run stays in the **Chat** tab as a persistent transcript. Friendly activity summaries
@@ -483,6 +543,11 @@ not claim to be a native `.kicad_sch` or a library-accurate sheet. **Board** dra
 placement the service actually produced — courtyard outlines, pads, and part refs — while
 **Review** shows the grounded findings. Selecting a finding highlights the parts it names,
 and the board and review panes offer the emitted `.kicad_pcb` as a download.
+
+`silkscreen serve` does both of those for you — it loads `.env`, starts the service on
+`--port` (or `PORT`), and opens the browser. Running `python -m service.app` directly
+does **not** read `.env`; only the CLIs do, so export the key first. See
+[docs/install.md](docs/install.md#the-env-caveat).
 
 ### As an MCP server
 
@@ -656,7 +721,7 @@ engine/
       pipeline.py   prompt -> PCB
       adk/          ADK dynamic workflow over the same stage bodies
     audit/        optional visual review of a finished board
-  tests/          706 tests — no network, no API keys, no KiCad
+  tests/          745 tests — no network, no API keys, no KiCad
     fixtures/     ref.kicad_pcb -- 11-footprint board fixture
 scripts/
   demo.py         end-to-end: read -> place -> write -> verify
@@ -672,9 +737,16 @@ vendor/
   mudriknow/      third-party (MIT), reference only -- not imported, not tested
 ```
 
+Top-level `mcp/`, `pcb/`, `packing/`, `footprint/`, `frontend-archive/`, `lcsc.py` and
+`test_skidl.py` are pre-rewrite hackathon code, kept for reference and not part of the
+layout above. They are name-collision traps — see [CONTRIBUTING.md](CONTRIBUTING.md).
+
 ---
 
 ## Troubleshooting
+
+Install and environment problems are in [docs/install.md](docs/install.md#troubleshooting).
+Problems with a run:
 
 | Symptom | Cause |
 |---|---|
@@ -723,7 +795,7 @@ Then run the same four Python checks CI runs, in the same order:
 ```
 
 Check 3 re-counts the suite and fails if any number quoted in this README or in
-`DEVPOST.md` has gone stale, so the figures below cannot drift from the code.
+`DEVPOST.md` has gone stale, so those figures cannot drift from the code.
 
 On Windows, use `.venv\Scripts\python.exe` in place of `./.venv/bin/python`.
 
@@ -737,7 +809,7 @@ docker build .                                      # the `docker` job
 
 ### Expected output
 
-**1. Test suite** — 706 tests (live-model and local-simulator cases skip when
+**1. Test suite** — 745 tests (live-model and local-simulator cases skip when
 their optional dependency is unavailable):
 
 ```
@@ -783,7 +855,7 @@ All checks passed!
 **3. Doc drift** — re-counts the suite and checks every figure quoted in the docs:
 
 ```
-docs ok: 20 claim(s) across 2 files match a suite of 703
+docs ok: 20 claim(s) across 2 files match a suite of 706
 ```
 
 **4. End-to-end demo** — reads the 11-footprint fixture board, places it, writes a
@@ -793,15 +865,15 @@ real `.kicad_pcb`, and re-parses it to prove the round-trip:
 3. Solve (OR-Tools CP-SAT)
 --------------------------------------------------------------
   status     : feasible
-  board size : 19.60 x 15.05 mm  (295.0 mm^2)
-  HPWL       : 52.4 mm
+  board size : 18.25 x 18.00 mm  (328.5 mm^2)
+  HPWL       : 53.0 mm
   solve time : 20.00 s
   warning    : Time limit reached; solution is feasible but not proven
-               optimal (gap bound 669000 vs 1740000).
+               optimal (gap bound 696000 vs 1785000).
 
 4. Write a real .kicad_pcb
 --------------------------------------------------------------
-  placed 11/11 -> placed.kicad_pcb  (43,933 bytes)
+  placed 11/11 -> placed.kicad_pcb  (43,936 bytes)
 
 5. Prove the round-trip
 --------------------------------------------------------------
@@ -838,6 +910,12 @@ and `docker` builds the container image, which is the only thing that exercises 
 `Dockerfile`.
 
 ---
+
+## Contributing
+
+`CONTRIBUTING.md` has the setup, the checks to run before opening a PR, and the
+conventions that are easy to violate by accident — the integer-nanometre rule, the
+Y-up/Y-down coordinate boundary, and which top-level directories are dead code.
 
 ## License
 

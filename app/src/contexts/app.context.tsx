@@ -131,7 +131,13 @@ export const AppProvider = ({ children }: { children: ReactNode }) => {
   const [customizable, setCustomizable] = useState<CustomizableState>(
     DEFAULT_CUSTOMIZABLE_STATE
   );
-  const [hasActiveLicense, setHasActiveLicense] = useState<boolean>(false);
+  // Upstream gated features behind a paid Pluely licence, revalidated on every
+  // launch by POSTing a hardware fingerprint, licence key and instance id to
+  // the vendor. That whole stack is gone, so there is no licence to check and
+  // nothing to gate: the fork is unconditionally "licensed" and every formerly
+  // paywalled feature is simply available. Kept as state (rather than inlined)
+  // because `IContextType` still declares the setter.
+  const [hasActiveLicense, setHasActiveLicense] = useState<boolean>(true);
   const [supportsImages, setSupportsImagesState] = useState<boolean>(() => {
     const stored = safeLocalStorage.getItem(STORAGE_KEYS.SUPPORTS_IMAGES);
     return stored === null ? true : stored === "true";
@@ -143,35 +149,15 @@ export const AppProvider = ({ children }: { children: ReactNode }) => {
     safeLocalStorage.setItem(STORAGE_KEYS.SUPPORTS_IMAGES, String(value));
   };
 
-  // Pluely API State
-  const [pluelyApiEnabled, setPluelyApiEnabledState] = useState<boolean>(
-    safeLocalStorage.getItem(STORAGE_KEYS.PLUELY_API_ENABLED) === "true"
-  );
-
-  const getActiveLicenseStatus = async () => {
-    const response: { is_active: boolean; is_dev_license: boolean } =
-      await invoke("validate_license_api");
-    setHasActiveLicense(response.is_active);
-
-    if (response?.is_dev_license) {
-      setPluelyApiEnabled(false);
-    }
-
-    // Check if the auto configs are enabled
-    const autoConfigsEnabled = localStorage.getItem("auto-configs-enabled");
-    if (response.is_active && !autoConfigsEnabled) {
-      setScreenshotConfiguration({
-        mode: "auto",
-        autoPrompt: "Analyze the screenshot and provide insights",
-        enabled: false,
-      });
-      // Set the flag to true so that we don't change the mode again
-      localStorage.setItem("auto-configs-enabled", "true");
-    }
-  };
+  // No-op retained only because `IContextType` still declares it: there is no
+  // licence server to ask any more.
+  const getActiveLicenseStatus = async () => {};
 
   useEffect(() => {
-    const syncLicenseState = async () => {
+    // `set_license_status` is local — it lives in shortcuts.rs and only flips
+    // the in-process flag that gates move-window shortcut registration. It
+    // talks to nothing off-machine, so it survives the SaaS removal.
+    const syncShortcutGate = async () => {
       try {
         await invoke("set_license_status", {
           hasLicense: hasActiveLicense,
@@ -180,11 +166,11 @@ export const AppProvider = ({ children }: { children: ReactNode }) => {
         const config = getShortcutsConfig();
         await invoke("update_shortcuts", { config });
       } catch (error) {
-        console.error("Failed to synchronize license state:", error);
+        console.error("Failed to synchronize shortcut gate:", error);
       }
     };
 
-    syncLicenseState();
+    syncShortcutGate();
   }, [hasActiveLicense]);
 
   // Function to load AI, STT, system prompt and screenshot config data from storage
@@ -276,14 +262,6 @@ export const AppProvider = ({ children }: { children: ReactNode }) => {
       }
     }
 
-    // Load Pluely API enabled state
-    const savedPluelyApiEnabled = safeLocalStorage.getItem(
-      STORAGE_KEYS.PLUELY_API_ENABLED
-    );
-    if (savedPluelyApiEnabled !== null) {
-      setPluelyApiEnabledState(savedPluelyApiEnabled === "true");
-    }
-
     // Load selected audio devices
     const savedAudioDevices = safeLocalStorage.getItem(
       STORAGE_KEYS.SELECTED_AUDIO_DEVICES
@@ -326,24 +304,11 @@ export const AppProvider = ({ children }: { children: ReactNode }) => {
     }
   };
 
-  // Load data on mount
+  // Load data on mount. Upstream also validated the licence and phoned PostHog
+  // with a stable per-install id here; both are gone, so launch touches the
+  // network not at all.
   useEffect(() => {
-    const initializeApp = async () => {
-      // Load license and data
-      await getActiveLicenseStatus();
-
-      // Upstream phoned PostHog here with a stable per-install id on every
-      // launch. Kaleo sends no telemetry: no consent surface exists, so no
-      // capture. (`analytics.ts` itself goes in the Pluely-removal pass.)
-      try {
-        // nothing to track
-      } catch (error) {
-        console.debug("Failed to track app start:", error);
-      }
-    };
-    // Load data
     loadData();
-    initializeApp();
   }, []);
 
   // Handle customizable settings on state changes
@@ -374,8 +339,10 @@ export const AppProvider = ({ children }: { children: ReactNode }) => {
         );
 
         // Only apply autostart on the very first launch
+        // Default off: launching at login is the user's call to make, not a
+        // default to inherit. (Upstream defaulted this to `true`.)
         if (!autostartInitialized) {
-          const autostartEnabled = customizable?.autostart?.isEnabled ?? true;
+          const autostartEnabled = customizable?.autostart?.isEnabled ?? false;
 
           if (autostartEnabled) {
             await enable();
@@ -448,43 +415,20 @@ export const AppProvider = ({ children }: { children: ReactNode }) => {
     return () => window.removeEventListener("storage", handleStorageChange);
   }, []);
 
-  // Check if the current AI provider/model supports images
+  // Check if the current AI provider/model supports images. The Pluely-hosted
+  // branch (which read the selected vendor model out of `secure_storage_get`)
+  // is gone with the rest of the SaaS client; only user-configured providers
+  // remain, and those declare image support through their curl template.
   useEffect(() => {
-    const checkImageSupport = async () => {
-      if (pluelyApiEnabled) {
-        // For Pluely API, check the selected model's modality
-        try {
-          const storage = await invoke<{
-            selected_pluely_model?: string;
-          }>("secure_storage_get");
-
-          if (storage.selected_pluely_model) {
-            const model = JSON.parse(storage.selected_pluely_model);
-            const hasImageSupport = model.modality?.includes("image") ?? false;
-            setSupportsImages(hasImageSupport);
-          } else {
-            // No model selected, assume no image support
-            setSupportsImages(false);
-          }
-        } catch (error) {
-          setSupportsImages(false);
-        }
-      } else {
-        // For custom AI providers, check if curl contains {{IMAGE}}
-        const provider = allAiProviders.find(
-          (p) => p.id === selectedAIProvider.provider
-        );
-        if (provider) {
-          const hasImageSupport = provider.curl?.includes("{{IMAGE}}") ?? false;
-          setSupportsImages(hasImageSupport);
-        } else {
-          setSupportsImages(true);
-        }
-      }
-    };
-
-    checkImageSupport();
-  }, [pluelyApiEnabled, selectedAIProvider.provider]);
+    const provider = allAiProviders.find(
+      (p) => p.id === selectedAIProvider.provider
+    );
+    if (provider) {
+      setSupportsImages(provider.curl?.includes("{{IMAGE}}") ?? false);
+    } else {
+      setSupportsImages(true);
+    }
+  }, [selectedAIProvider.provider]);
 
   // Sync selected AI to localStorage
   useEffect(() => {
@@ -531,15 +475,11 @@ export const AppProvider = ({ children }: { children: ReactNode }) => {
     }
 
     // Update supportsImages immediately when provider changes
-    if (!pluelyApiEnabled) {
-      const selectedProvider = allAiProviders.find((p) => p.id === provider);
-      if (selectedProvider) {
-        const hasImageSupport =
-          selectedProvider.curl?.includes("{{IMAGE}}") ?? false;
-        setSupportsImages(hasImageSupport);
-      } else {
-        setSupportsImages(true);
-      }
+    const selectedProvider = allAiProviders.find((p) => p.id === provider);
+    if (selectedProvider) {
+      setSupportsImages(selectedProvider.curl?.includes("{{IMAGE}}") ?? false);
+    } else {
+      setSupportsImages(true);
     }
 
     setSelectedAIProvider((prev) => ({
@@ -612,43 +552,11 @@ export const AppProvider = ({ children }: { children: ReactNode }) => {
     loadData();
   };
 
-  const setPluelyApiEnabled = async (enabled: boolean) => {
-    setPluelyApiEnabledState(enabled);
-    safeLocalStorage.setItem(STORAGE_KEYS.PLUELY_API_ENABLED, String(enabled));
-
-    if (enabled) {
-      try {
-        const storage = await invoke<{
-          selected_pluely_model?: string;
-        }>("secure_storage_get");
-
-        if (storage.selected_pluely_model) {
-          const model = JSON.parse(storage.selected_pluely_model);
-          const hasImageSupport = model.modality?.includes("image") ?? false;
-          setSupportsImages(hasImageSupport);
-        } else {
-          // No model selected, assume no image support
-          setSupportsImages(false);
-        }
-      } catch (error) {
-        console.debug("Failed to check Pluely model image support:", error);
-        setSupportsImages(false);
-      }
-    } else {
-      // Switching to regular provider - check if curl contains {{IMAGE}}
-      const provider = allAiProviders.find(
-        (p) => p.id === selectedAIProvider.provider
-      );
-      if (provider) {
-        const hasImageSupport = provider.curl?.includes("{{IMAGE}}") ?? false;
-        setSupportsImages(hasImageSupport);
-      } else {
-        setSupportsImages(true);
-      }
-    }
-
-    loadData();
-  };
+  // The Pluely-hosted AI backend is gone: there is no vendor endpoint, no
+  // vendor key and no vendor model list left to switch to. The flag is
+  // permanently off and the setter is inert; both remain only to satisfy
+  // `IContextType`, which is outside this change's blast radius.
+  const setPluelyApiEnabled = async (_enabled: boolean) => {};
 
   // Create the context value (extend IContextType accordingly)
   const value: IContextType = {
@@ -669,7 +577,7 @@ export const AppProvider = ({ children }: { children: ReactNode }) => {
     toggleAlwaysOnTop,
     toggleAutostart,
     loadData,
-    pluelyApiEnabled,
+    pluelyApiEnabled: false,
     setPluelyApiEnabled,
     hasActiveLicense,
     setHasActiveLicense,

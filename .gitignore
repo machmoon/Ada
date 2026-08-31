@@ -1,12 +1,24 @@
+# The repo root mixes the live tree (engine/, service/, frontend/, scripts/,
+# docs/) with retired pre-rewrite code and its build droppings. See
+# docs/repo-layout.md for what is alive and what is not. Rules here only stop
+# NEW junk from being committed -- nothing already tracked is affected by them.
+
 # Python
 __pycache__/
 *.py[cod]
 *.egg-info/
+*.egg-info
+build/
+dist/
 .venv/
 venv/
 .pytest_cache/
 .ruff_cache/
 .mypy_cache/
+.coverage
+.coverage.*
+htmlcov/
+.tox/
 
 # Secrets
 .env
@@ -14,11 +26,29 @@ venv/
 !.env.example
 
 # Node
+# frontend/dist/ stays ignored even though service/app.py serves it and the
+# Dockerfile depends on it: it is reproducible from frontend/src by
+# `npm run build`, and the Dockerfile's node stage builds it inside the image
+# rather than copying a committed one. Committing it would mean every UI change
+# carried a second, hand-synced copy of itself -- the classic way a served
+# bundle silently drifts from its source. Local `python -m service.app` needs a
+# build first; that is the documented workflow in CLAUDE.md.
 node_modules/
 frontend/dist/
 .next/
 out/
 *.tsbuildinfo
+npm-debug.log*
+yarn-error.log*
+.vite/
+
+# Editors / IDEs
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.eslintcache
 
 # SKiDL / KiCad generated artifacts -- all regenerable, none belong in git
 *.erc
@@ -43,8 +73,18 @@ C[0-9]*.json
 C[0-9]*.jpg
 adjacency_*.json
 
-# OS
+# OS junk. macOS writes .DS_Store into every browsed directory and ._* AppleDouble
+# forks onto non-HFS volumes; Windows writes Thumbs.db and Desktop.ini. Four
+# people on mixed machines push to main, so each of these has a real chance of
+# arriving in a commit from whichever OS is not yours.
 .DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+Thumbs.db
+ehthumbs.db
+Desktop.ini
 
 # Generated boards
 placed.kicad_pcb

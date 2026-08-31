@@ -10,10 +10,12 @@ import { useSilkscreenRun } from "@/contexts";
 import { VoiceToggle } from "./components/VoiceToggle";
 import {
   ActivityFeed,
+  DatasheetChips,
   PromptBar,
   RunFailure,
   RunProgress,
   RunSummary,
+  ViewingPastRun,
 } from "./components";
 
 /**
@@ -39,6 +41,12 @@ const Kaleo = () => {
   useRunVoice(run);
 
   const busy = !SETTLED.includes(run.status);
+
+  // The past run currently on screen, if the history list put one there. Null
+  // whenever the result block is showing the run that actually just happened.
+  const viewed = run.viewingId
+    ? run.history.find((entry) => entry.id === run.viewingId) ?? null
+    : null;
 
   // `start` takes an optional override, so it must never be handed straight to
   // onClick — React would pass the click event as the override.
@@ -87,6 +95,10 @@ const Kaleo = () => {
             <DragButton />
           </div>
 
+          {/* What is attached to the next run, under the box it will be sent
+              with. Renders nothing at all when nothing is attached. */}
+          <DatasheetChips disabled={busy} />
+
           {busy ? (
             <div className="flex flex-col gap-2 border-t border-input/40 pt-2">
               <RunProgress
@@ -99,18 +111,28 @@ const Kaleo = () => {
           ) : null}
 
           {run.status === "done" && run.result ? (
-            <div className="relative border-t border-input/40 pt-2">
-              {/* The mute control lives with the result it would narrate. */}
-              <VoiceToggle className="absolute right-0 top-1" />
-              <RunSummary
-                result={run.result}
-                // What this run was actually asked for, not what the form says
-                // now — the form is editable while the result is on screen.
-                reviewRequested={run.submitted?.review ?? true}
-                elapsedS={run.elapsedS}
-                onOpenReview={openDashboard}
-                onNewRun={() => run.reset()}
-              />
+            <div className="flex flex-col gap-2 border-t border-input/40 pt-2">
+              {/* A past run and a fresh one render the same summary, so the
+                  only thing telling them apart has to be said out loud. */}
+              {viewed ? (
+                <ViewingPastRun
+                  entry={viewed}
+                  onBack={() => run.selectRun(null)}
+                />
+              ) : null}
+              <div className="relative">
+                {/* The mute control lives with the result it would narrate. */}
+                <VoiceToggle className="absolute right-0 top-0" />
+                <RunSummary
+                  result={run.result}
+                  // What this run was actually asked for, not what the form
+                  // says now — the form is editable while the result is up.
+                  reviewRequested={run.submitted?.review ?? true}
+                  elapsedS={run.elapsedS}
+                  onOpenReview={openDashboard}
+                  onNewRun={() => run.reset()}
+                />
+              </div>
             </div>
           ) : null}
 

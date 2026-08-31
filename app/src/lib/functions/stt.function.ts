@@ -4,37 +4,9 @@ import {
   blobToBase64,
 } from "./common.function";
 import { fetch as tauriFetch } from "@tauri-apps/plugin-http";
-import { invoke } from "@tauri-apps/api/core";
 
 import { TYPE_PROVIDER } from "@/types";
 import curl2Json from "@bany/curl-to-json";
-import { shouldUsePluelyAPI } from "./pluely.api";
-
-// Pluely STT function
-async function fetchPluelySTT(audio: File | Blob): Promise<string> {
-  try {
-    // Convert audio to base64
-    const audioBase64 = await blobToBase64(audio);
-
-    // Call Tauri command
-    const response = await invoke<{
-      success: boolean;
-      transcription?: string;
-      error?: string;
-    }>("transcribe_audio", {
-      audioBase64,
-    });
-
-    if (response.success && response.transcription) {
-      return response.transcription;
-    } else {
-      return response.error || "Transcription failed";
-    }
-  } catch (error) {
-    const errorMessage = error instanceof Error ? error.message : String(error);
-    return `Pluely STT Error: ${errorMessage}`;
-  }
-}
 
 export interface STTParams {
   provider: TYPE_PROVIDER | undefined;
@@ -53,12 +25,6 @@ export async function fetchSTT(params: STTParams): Promise<string> {
 
   try {
     const { provider, selectedProvider, audio } = params;
-
-    // Check if we should use Pluely API instead
-    const usePluelyAPI = await shouldUsePluelyAPI();
-    if (usePluelyAPI) {
-      return await fetchPluelySTT(audio);
-    }
 
     if (!provider) throw new Error("Provider not provided");
     if (!selectedProvider) throw new Error("Selected provider not provided");
@@ -185,12 +151,13 @@ export async function fetchSTT(params: STTParams): Promise<string> {
       body = JSON.stringify(deepVariableReplacer(dataObj, allVariables));
     }
 
-    const fetchFunction = url?.includes("http") ? fetch : tauriFetch;
-
-    // Send request
+    // Always Tauri's fetch, never the webview's — same reason as
+    // `ai-response.function.ts`: only the Tauri client is bound by the
+    // capability allowlist, so audio leaves the machine only for an origin
+    // that allowlist permits.
     let response: Response;
     try {
-      response = await fetchFunction(url, {
+      response = await tauriFetch(url, {
         method: curlJson.method || "POST",
         headers: finalHeaders,
         body: curlJson.method === "GET" ? undefined : body,

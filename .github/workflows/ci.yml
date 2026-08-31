@@ -59,3 +59,116 @@ jobs:
       - uses: actions/checkout@v4
       # Nothing else exercises the Dockerfile; a build is the whole check.
       - run: docker build .
+
+  # app/ is the Kaleo desktop client: Tauri 2, React 19 + TypeScript over a Rust
+  # core. Until these two jobs it was the one large directory nothing in CI
+  # touched -- 217 vitest tests and the `tsc` half of `npm run build` ran only on
+  # developer machines, and the Rust never compiled in CI at all.
+  #
+  # Deliberately two jobs rather than one. The TypeScript half is
+  # platform-independent and belongs on a cheap ubuntu runner; the Rust half has
+  # to be macOS (see app-rust). Splitting keeps the failure signal honest -- a
+  # broken component test should not look like a Rust regression -- and lets the
+  # two-minute half report while the slower half is still going.
+  #
+  # Neither job is path-filtered, on purpose. GitHub only offers `paths:` on the
+  # workflow trigger, not per job, so filtering would mean changing `on:` for
+  # test/web/docker as well; doing it per job instead needs a third-party
+  # changed-files action and a gating job, which is more supply-chain surface
+  # than the runtime is worth. And a path-filtered job that is later marked a
+  # required check never reports on PRs that miss the filter, which blocks them
+  # forever. These jobs are minutes on runners that would otherwise sit idle
+  # while the macOS leg of `test` runs for the best part of an hour, so the wall
+  # clock does not move either way.
+  app:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: app/package-lock.json
+      # app/.npmrc sets force=true, which is what keeps this from failing on
+      # @ricky0123/vad-react declaring a peer of react-dom@18 against this
+      # tree's React 19. It downgrades that to a warning; do not "clean it up".
+      - run: npm ci
+        working-directory: app
+      # The `tsc` half of app/package.json's `build` script, on its own.
+      # app/tsconfig.json turns on strict, noUnusedLocals and noUnusedParameters,
+      # so this is a real gate rather than a formality.
+      - run: npx tsc --noEmit
+        working-directory: app
+      # vitest, configured by app/vitest.config.ts (node environment; the React
+      # component files opt into jsdom per file).
+      - run: npm test
+        working-directory: app
+
+  app-rust:
+    # macOS, not Linux, and not a three-OS matrix. In order of weight:
+    #
+    # 1. macOS is the only platform this crate can currently be checked on
+    #    without inventing a system-dependency list nobody has ever run.
+    #    src-tauri/Cargo.toml puts tauri-nspanel (a git dependency) and
+    #    tauri-plugin-macos-permissions behind cfg(target_os = "macos"), and
+    #    lib.rs/shortcuts.rs use them; 32 cfg(target_os = "macos") blocks sit
+    #    across the crate. A Linux check compiles none of that.
+    # 2. macOS needs no system packages whatsoever -- verified by running this
+    #    exact command against a clean copy of the tree. A Linux leg would need
+    #    the webkit2gtk/gtk/soup stack *and* libasound2-dev for cpal *and*
+    #    libpulse-dev for the libpulse-binding / libpulse-simple-binding crates
+    #    that Cargo.toml gates on cfg(target_os = "linux"), and that
+    #    configuration has never been built here. Adding it would land a red job,
+    #    not a gate.
+    # 3. The overlay window the app is built around is an NSPanel, so macOS is
+    #    where the load-bearing platform code lives.
+    #
+    # Linux (21 cfg blocks) and Windows (24, plus the wasapi dependency) stay
+    # uncovered. That is a real gap -- state it rather than letting a green tick
+    # imply the app builds everywhere.
+    runs-on: macos-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      # No toolchain action on purpose: the GitHub macOS image already ships a
+      # stable rustup toolchain, and every third-party action is supply-chain
+      # surface this repo goes out of its way to pin away. Printing the versions
+      # keeps that implicit dependency visible in the log, so if an image ever
+      # drops Rust the failure reads as "no cargo" instead of something obscure.
+      - run: rustc --version && cargo --version
+      # Caches ~/.cargo/registry, ~/.cargo/git and the target dir, keyed on the
+      # Cargo.lock/Cargo.toml hash plus the rustc version. Worth an action
+      # instead of a hand-rolled actions/cache: a cold run downloads 527 crates
+      # (~330 MB into CARGO_HOME) and leaves a 1.4 GB target dir, and rust-cache
+      # prunes that down before saving. Caching target/ naively would walk the
+      # repo into GitHub's 10 GB cache ceiling within a handful of runs.
+      #
+      # save-if limits *writes* to main. Cache entries created on a PR branch
+      # are visible only to that branch, so letting every PR save would spend
+      # the quota on entries no other PR can read; PRs restore from main's.
+      #
+      # Pinned to a commit rather than a tag to match release.yml and docker.yml:
+      # a major-version tag is mutable, and upstream can retarget it at any
+      # commit. Bump deliberately; the trailing comment names the version.
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          workspaces: app/src-tauri
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      # `check`, not `build`: this gate is for type and borrow errors, and check
+      # skips codegen and linking for ~480 crates.
+      #
+      # It also needs no frontend bundle. tauri::generate_context! only embeds
+      # app/dist when tauri's `custom-protocol` feature is on (tauri-macros
+      # computes `dev: cfg!(not(feature = "custom-protocol"))`), and only
+      # `tauri build` turns that on -- so this job never has to run npm, and the
+      # fact that app/dist is gitignored and absent from a fresh checkout does
+      # not matter. If this is ever upgraded to a real bundle, `npm ci && npm run
+      # build` in app/ has to come first or tauri-codegen panics with
+      # "The `frontendDist` configuration is set to ... but this path doesn't exist".
+      #
+      # --locked so a stale Cargo.lock fails the job instead of being rewritten.
+      - run: cargo check --locked
+        working-directory: app/src-tauri

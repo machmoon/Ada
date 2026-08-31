@@ -12,7 +12,6 @@
   "permissions": [
     "core:default",
     "opener:default",
-    "updater:default",
     "macos-permissions:default",
     "keychain:default",
     "keychain:allow-get-item",
@@ -23,6 +22,9 @@
     "global-shortcut:allow-unregister",
     "shell:allow-open",
     "core:window:allow-start-dragging",
+    "core:event:allow-listen",
+    "core:event:allow-unlisten",
+    "core:event:allow-emit",
     "sql:default",
     "sql:allow-execute",
     "autostart:allow-enable",

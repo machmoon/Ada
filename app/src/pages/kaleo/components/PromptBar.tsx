@@ -13,6 +13,8 @@ import { useSilkscreenRun, type RunRequestDraft } from "@/contexts";
 import { cn } from "@/lib/utils";
 import { RunOptions } from "./RunOptions";
 import { VoiceButton } from "./VoiceButton";
+import { AttachDatasheetButton } from "./DatasheetBar";
+import { RunHistoryPanel } from "./RunHistoryPanel";
 
 /**
  * The engine's state as one dot.
@@ -122,6 +124,12 @@ export const PromptBar = ({
           })
         }
       />
+
+      {/* One control cluster, in the order the panel is used: say it, attach
+          what backs it up, look at what was said before, tune the run. */}
+      <AttachDatasheetButton disabled={busy || hidden} />
+
+      <RunHistoryPanel busy={busy} />
 
       <Popover open={optionsOpen} onOpenChange={setOptionsOpen}>
         <PopoverTrigger asChild>

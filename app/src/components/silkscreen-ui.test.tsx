@@ -8,8 +8,10 @@
 import { cleanup, render, screen, within } from "@testing-library/react";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 
+import { ArtifactPanel } from "@/components/artifacts/ArtifactPanel";
 import { BoardView } from "@/components/board/BoardView";
 import { FindingCard, findingKey } from "@/components/review/FindingCard";
+import { OrderPanel } from "@/components/artifacts/OrderPanel";
 import { ReviewPanel } from "@/components/review/ReviewPanel";
 import { RunSummary } from "@/components/artifacts/RunSummary";
 import type { Finding, Placements, RunResult } from "@/lib/silkscreen/types";
@@ -193,6 +195,94 @@ describe("ReviewPanel", () => {
         (c) => c.getAttribute("data-severity-raw") === "someday-new-severity"
       )
     ).toBe(true);
+  });
+});
+
+// The three states `findingCount` alone cannot tell apart. The middle one is
+// the point: "the review ran and raised nothing" and "no review came back" are
+// different facts, and only the first is a result.
+describe("WhatWasChecked, through ReviewPanel", () => {
+  const counts = () => screen.getByTestId("what-was-checked-counts");
+  const ranLines = () =>
+    screen
+      .queryAllByTestId("what-was-checked-item")
+      .filter((el) => el.getAttribute("data-kind") === "ran")
+      .map((el) => el.textContent ?? "");
+  const notRunLines = () =>
+    screen
+      .queryAllByTestId("what-was-checked-item")
+      .filter((el) => el.getAttribute("data-kind") === "not-run")
+      .map((el) => el.textContent ?? "");
+
+  it("review ran with findings: the pass is claimed and the counts are the findings", () => {
+    render(<ReviewPanel findings={[WIRE_FINDING]} />);
+    expect(counts().getAttribute("data-review-ran")).toBe("true");
+    expect(counts().textContent).toContain("1 finding(s)");
+    expect(ranLines().some((l) => /adversarial model pass/.test(l))).toBe(true);
+  });
+
+  it("review ran with zero findings: the pass is claimed, and it raised nothing", () => {
+    render(<ReviewPanel findings={[]} />);
+    expect(counts().getAttribute("data-review-ran")).toBe("true");
+    expect(counts().textContent).toContain("This review raised nothing");
+    expect(ranLines().some((l) => /adversarial model pass/.test(l))).toBe(true);
+    // A review that ran is not the response that carried none.
+    expect(screen.queryByTestId("review-no-review")).toBeNull();
+  });
+
+  it("no review in the response: absent reads as absent, never as a clean pass", () => {
+    render(<ReviewPanel />);
+    // The defect: an undefined `findings` used to tick the adversarial pass
+    // and report "This review raised nothing" beside "carried no review at all".
+    expect(counts().getAttribute("data-review-ran")).toBe("false");
+    expect(counts().textContent).not.toMatch(/This review raised nothing/);
+    expect(counts().textContent).toMatch(/absence, not a clean result/);
+    expect(ranLines().some((l) => /adversarial model pass/.test(l))).toBe(false);
+    expect(notRunLines().some((l) => /no review block/.test(l))).toBe(true);
+  });
+
+  it("an explicitly skipped review still says it was turned off, not merely absent", () => {
+    render(<ReviewPanel reviewRequested={false} />);
+    expect(counts().getAttribute("data-review-ran")).toBe("false");
+    expect(ranLines().some((l) => /adversarial model pass/.test(l))).toBe(false);
+    expect(notRunLines().some((l) => /nothing checked it/.test(l))).toBe(true);
+  });
+});
+
+describe("OrderPanel routing report", () => {
+  it("names unrouted nets and their reasons with no order block in the response", () => {
+    // The app never asks for an `order`, so gating this on one hid it always.
+    render(
+      <ArtifactPanel
+        result={
+          {
+            kicad_pcb: "(kicad_pcb)",
+            routing: { unrouted: { VBUS: "no path on 2 layers" } },
+          } as unknown as RunResult
+        }
+      />
+    );
+    expect(screen.getByTestId("order-panel").getAttribute("data-state")).toBe("absent");
+    const routing = screen.getByTestId("order-routing");
+    expect(routing.getAttribute("data-present")).toBe("yes");
+    const net = screen.getByTestId("unrouted-net");
+    expect(net.getAttribute("data-ref")).toBe("VBUS");
+    expect(net.textContent).toContain("VBUS");
+    expect(net.textContent).toContain("no path on 2 layers");
+  });
+
+  it("distinguishes a routing report with nothing open from no report at all", () => {
+    render(<OrderPanel unroutedNets={{}} />);
+    const present = screen.getByTestId("order-routing");
+    expect(present.getAttribute("data-present")).toBe("yes");
+    expect(present.textContent).toContain("no unfinished nets");
+
+    cleanup();
+    render(<OrderPanel />);
+    const absent = screen.getByTestId("order-routing");
+    expect(absent.getAttribute("data-present")).toBe("no");
+    expect(absent.textContent).toContain("carried no");
+    expect(absent.textContent).not.toContain("no unfinished nets");
   });
 });
 

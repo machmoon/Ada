@@ -1,29 +1,28 @@
 import {
   Settings,
-  Code,
-  MessagesSquare,
-  WandSparkles,
   AudioLinesIcon,
   SquareSlashIcon,
-  MonitorIcon,
   HomeIcon,
   CircuitBoardIcon,
   CableIcon,
   TerminalIcon,
   PowerIcon,
-  MailIcon,
-  CoffeeIcon,
-  GlobeIcon,
   BugIcon,
-  MessageSquareTextIcon,
+  GlobeIcon,
 } from "lucide-react";
 import { invoke } from "@tauri-apps/api/core";
-import { useApp } from "@/contexts";
-import { XIcon, GithubIcon } from "@/components";
+import { GithubIcon } from "@/components";
 
+/**
+ * The dashboard sidebar.
+ *
+ * Only routes this app actually serves appear here. Upstream's chat, system
+ * prompt, response, screenshot and dev-space entries went with the SaaS stack,
+ * and so did the footer links that pointed at the upstream project's issue
+ * tracker, marketing site, donation page and author's social account — a fork
+ * must not route its users' bug reports or money to the project it forked.
+ */
 export const useMenuItems = () => {
-  const { hasActiveLicense } = useApp();
-
   const menu: {
     icon: React.ElementType;
     label: string;
@@ -51,29 +50,9 @@ export const useMenuItems = () => {
       href: "/dashboard",
     },
     {
-      icon: MessagesSquare,
-      label: "Chats",
-      href: "/chats",
-    },
-    {
-      icon: WandSparkles,
-      label: "System prompts",
-      href: "/system-prompts",
-    },
-    {
       icon: Settings,
       label: "App Settings",
       href: "/settings",
-    },
-    {
-      icon: MessageSquareTextIcon,
-      label: "Responses",
-      href: "/responses",
-    },
-    {
-      icon: MonitorIcon,
-      label: "Screenshot",
-      href: "/screenshot",
     },
     {
       icon: AudioLinesIcon,
@@ -85,32 +64,17 @@ export const useMenuItems = () => {
       label: "Cursor & Shortcuts",
       href: "/shortcuts",
     },
-
-    {
-      icon: Code,
-      label: "Dev space",
-      href: "/dev-space",
-    },
   ];
 
   const footerItems = [
-    ...(hasActiveLicense
-      ? [
-          {
-            icon: MailIcon,
-            label: "Contact Support",
-            href: "mailto:support@pluely.com",
-          },
-        ]
-      : []),
     {
       icon: BugIcon,
       label: "Report a bug",
-      href: "https://github.com/iamsrikanthnani/pluely/issues/new?template=bug-report.yml",
+      href: "https://github.com/machmoon/Kaleo/issues/new",
     },
     {
       icon: PowerIcon,
-      label: "Quit pluely",
+      label: "Quit Kaleo",
       action: async () => {
         await invoke("exit_app");
       },
@@ -123,24 +87,14 @@ export const useMenuItems = () => {
     link: string;
   }[] = [
     {
-      title: "Website",
-      icon: GlobeIcon,
-      link: "https://pluely.com",
-    },
-    {
       title: "Github",
       icon: GithubIcon,
-      link: "https://github.com/iamsrikanthnani/pluely",
+      link: "https://github.com/machmoon/Kaleo",
     },
     {
-      title: "Buy Me a Coffee",
-      icon: CoffeeIcon,
-      link: "https://buymeacoffee.com/srikanthnani",
-    },
-    {
-      title: "Follow on X",
-      icon: XIcon,
-      link: "https://x.com/srikanthnani",
+      title: "silkscreen",
+      icon: GlobeIcon,
+      link: "https://github.com/machmoon/silkscreen",
     },
   ];
 

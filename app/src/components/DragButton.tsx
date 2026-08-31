@@ -1,64 +1,23 @@
-import { useEffect, useState } from "react";
 import { GripVerticalIcon } from "lucide-react";
-import { useApp } from "@/contexts";
-import {
-  GetLicense,
-  Button,
-  Popover,
-  PopoverContent,
-  PopoverTrigger,
-} from "@/components";
-import { useWindowResize } from "@/hooks";
+import { Button } from "@/components";
 
+/**
+ * The overlay's drag handle.
+ *
+ * The window is undecorated, so this grip is the only thing the user can move
+ * it by. Upstream gated `data-tauri-drag-region` on an active licence and
+ * showed a purchase popover to everyone else, which left an unlicensed install
+ * unable to move its own window. Kaleo sells no licence, so the handle simply
+ * works.
+ */
 export const DragButton = () => {
-  const { hasActiveLicense } = useApp();
-  const [isOpen, setIsOpen] = useState(false);
-  const { resizeWindow } = useWindowResize();
-
-  useEffect(() => {
-    if (!hasActiveLicense) {
-      resizeWindow(isOpen);
-    }
-  }, [hasActiveLicense, isOpen, resizeWindow]);
-
-  if (!hasActiveLicense) {
-    return (
-      <Popover open={isOpen} onOpenChange={setIsOpen}>
-        <PopoverTrigger asChild className="border-none hover:bg-transparent">
-          <Button variant="ghost" size="icon" className={`-ml-[2px] w-fit`}>
-            <GripVerticalIcon className="h-4 w-4" />
-          </Button>
-        </PopoverTrigger>
-        <PopoverContent
-          align="start"
-          side="bottom"
-          className="w-fit select-none p-4 border overflow-hidden border-input/50"
-          sideOffset={8}
-        >
-          <div className="flex flex-col gap-2 w-116">
-            <div className="flex flex-col gap-1 pb-2">
-              <p className="text-md font-medium">
-                You need an active license to use this feature.
-              </p>
-              <p className="text-sm font-medium text-muted-foreground">
-                Once you complete your purchase, you'll receive a license key
-                via email. Paste in the Settings → Pluely Access section to
-                activate.
-              </p>
-            </div>
-            <GetLicense setState={setIsOpen} />
-          </div>
-        </PopoverContent>
-      </Popover>
-    );
-  }
-
   return (
     <Button
       variant="ghost"
       size="icon"
-      className={`-ml-[2px] w-fit`}
-      data-tauri-drag-region={hasActiveLicense}
+      className="-ml-[2px] w-fit"
+      data-tauri-drag-region
+      title="Drag to move the window"
     >
       <GripVerticalIcon className="h-4 w-4" />
     </Button>

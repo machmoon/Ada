@@ -1,5 +1,18 @@
 import { ShortcutAction } from "@/types";
 
+/**
+ * Actions that exist but are not armed on a fresh install.
+ *
+ * Screen capture and system-audio capture are inherited from the
+ * meeting-assistant upstream. A PCB tool has no business grabbing a global
+ * screenshot or tap-the-speakers hotkey before anyone has asked for it, so
+ * they ship bound-but-off and the user turns them on in Shortcuts settings.
+ */
+export const SHORTCUT_ACTIONS_DISABLED_BY_DEFAULT: readonly string[] = [
+  "screenshot",
+  "system_audio",
+];
+
 export const DEFAULT_SHORTCUT_ACTIONS: ShortcutAction[] = [
   {
     id: "toggle_dashboard",

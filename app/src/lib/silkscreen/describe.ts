@@ -489,6 +489,13 @@ function finishStage(
  * A stage still `pending` never started and now never will — that is observed,
  * not assumed. A stage still `running` is genuinely unaccounted for and says
  * so rather than being quietly ticked.
+ *
+ * `skipReason` deliberately plays no part here. A row is only `pending` if
+ * `planStages` included it, so the plan's reason for leaving a stage out
+ * cannot be why this one stayed silent — attaching it would tell someone whose
+ * run asked for review and then died at `propose` that they turned review off.
+ * Rows the plan really did rule out were marked `skipped` with their reason at
+ * `initialRunProgress` time and are never seen by this branch.
  */
 function settle(state: RunProgress): RunProgress {
   return {
@@ -496,7 +503,7 @@ function settle(state: RunProgress): RunProgress {
     currentStage: null,
     stages: state.stages.map((s): StageState => {
       if (s.status === "pending") {
-        return { ...s, status: "skipped", note: s.descriptor.skipReason ?? "did not run" };
+        return { ...s, status: "skipped", note: "did not run" };
       }
       if (s.status === "running") {
         return { ...s, status: "unreported", note: "the run ended before this stage reported back" };

@@ -141,6 +141,38 @@ describe("terminal-frame hostility", () => {
     expect(state.currentStage).toBeNull();
   });
 
+  // Regression: `settle` used to fall back to `descriptor.skipReason` for a
+  // pending row, so a run that ASKED for review and then died at propose told
+  // the user they had turned review off. Only `planStages` can leave a stage
+  // out, and rows it leaves out are never pending — so that reason is by
+  // construction the wrong explanation here.
+  it("a run that requested review and failed early never claims review was turned off", () => {
+    const state = reduceFrames(initialRunProgress({ review: true, datasheets: false }), [
+      { event: "run.accepted", t_s: 0 },
+      { event: "stage.start", stage: "propose", t_s: 0.2 },
+      { event: "run.error", t_s: 2, status: 502, error: "provider died" },
+    ]);
+    const review = stage(state, "review");
+    expect(review.status).toBe("skipped");
+    expect(review.note).toBe("did not run");
+    expect(review.note).not.toMatch(/turned off/);
+    // Every other row the plan included reads the same way.
+    expect(stage(state, "place").note).toBe("did not run");
+    expect(stage(state, "route").note).toBe("did not run");
+  });
+
+  it("a stage the plan really did rule out keeps the plan's reason", () => {
+    const state = reduceFrames(initialRunProgress({ review: false, datasheets: false }), [
+      { event: "run.accepted", t_s: 0 },
+      { event: "run.error", t_s: 1, error: "boom" },
+    ]);
+    // Marked at initialRunProgress time, never touched by settle.
+    expect(stage(state, "review").note).toBe("review was turned off for this run");
+    expect(stage(state, "read").note).toBe("no datasheets were supplied");
+    // ...while a planned-in row that simply never ran still says only that.
+    expect(stage(state, "place").note).toBe("did not run");
+  });
+
   it("run.error with no message still produces a message", () => {
     const state = run([{ event: "run.error" }]);
     expect(state.error?.message).toBe("The run failed.");

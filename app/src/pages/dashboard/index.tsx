@@ -1,66 +1,81 @@
-import { useCallback, useEffect, useState } from "react";
-import { invoke } from "@tauri-apps/api/core";
-import { GetLicense } from "@/components";
-import { PluelyApiSetup, Usage } from "./components";
+import { useNavigate } from "react-router-dom";
+import { CircuitBoardIcon, CableIcon, TerminalIcon } from "lucide-react";
 import { PageLayout } from "@/layouts";
-import { useApp } from "@/contexts";
+import { Button } from "@/components";
+
+/**
+ * The dashboard window's landing route, and where the sidebar logo points.
+ *
+ * Upstream filled this with a licence panel, a "Pluely API" key form and a
+ * token-usage chart fed by the vendor's `get_activity` endpoint. All three went
+ * with the SaaS stack; nothing here replaces them, because Kaleo sells nothing
+ * and meters nothing. What is left is a signpost to the surfaces that do work.
+ */
+const DESTINATIONS = [
+  {
+    icon: CircuitBoardIcon,
+    label: "Workbench",
+    href: "/workbench",
+    blurb: "The finished board, its review findings and its artifacts.",
+  },
+  {
+    icon: CableIcon,
+    label: "Engine",
+    href: "/engine",
+    blurb: "Point the app at a silkscreen engine and check it answers.",
+  },
+  {
+    icon: TerminalIcon,
+    label: "Console",
+    href: "/console",
+    blurb: "The raw log of what the engine did on the last run.",
+  },
+];
 
 const Dashboard = () => {
-  const { hasActiveLicense } = useApp();
-  const [activity, setActivity] = useState<any>(null);
-  const [loadingActivity, setLoadingActivity] = useState(false);
-
-  const fetchActivity = useCallback(async () => {
-    if (!hasActiveLicense) {
-      setActivity({ data: [], total_tokens_used: 0 });
-      return;
-    }
-    setLoadingActivity(true);
-    try {
-      const response = await invoke("get_activity");
-      const responseData: any = response;
-      if (responseData && responseData.success) {
-        setActivity(responseData);
-      } else {
-        setActivity({ data: [], total_tokens_used: 0 });
-      }
-    } catch (error) {
-      setActivity({ data: [], total_tokens_used: 0 });
-    } finally {
-      setLoadingActivity(false);
-    }
-  }, [hasActiveLicense]);
-
-  useEffect(() => {
-    if (hasActiveLicense) {
-      fetchActivity();
-    } else {
-      setActivity(null);
-    }
-  }, [fetchActivity, hasActiveLicense]);
-
-  const activityData =
-    activity && Array.isArray(activity.data) ? activity.data : [];
-  const totalTokens =
-    activity && typeof activity.total_tokens_used === "number"
-      ? activity.total_tokens_used
-      : 0;
+  const navigate = useNavigate();
 
   return (
     <PageLayout
-      title="Dashboard"
-      description="Pluely license to unlock faster responses, quicker support and premium features."
-      rightSlot={!hasActiveLicense ? <GetLicense /> : null}
+      title="Kaleo"
+      description="A desktop client for the silkscreen PCB engine. Describe a board in the overlay, and the run lands here."
     >
-      {/* Pluely API Setup */}
-      <PluelyApiSetup />
+      <div className="grid gap-3 sm:grid-cols-3">
+        {DESTINATIONS.map((destination) => (
+          <button
+            key={destination.href}
+            onClick={() => navigate(destination.href)}
+            className="flex flex-col items-start gap-2 rounded-xl border border-input/50 p-4 text-left transition-colors hover:bg-accent"
+          >
+            <destination.icon className="size-5 text-muted-foreground" />
+            <span className="text-sm font-medium">{destination.label}</span>
+            <span className="text-xs text-muted-foreground">
+              {destination.blurb}
+            </span>
+          </button>
+        ))}
+      </div>
 
-      <Usage
-        loading={loadingActivity}
-        onRefresh={fetchActivity}
-        data={activityData}
-        totalTokens={totalTokens}
-      />
+      <div className="rounded-md border border-input/50 p-4 text-xs text-muted-foreground space-y-2">
+        <p>
+          Runs start in the floating overlay, not here. Summon it with the
+          toggle shortcut, describe the board you want, and open the review
+          window when it finishes.
+        </p>
+        <p>
+          The app talks to a silkscreen engine you run yourself, on loopback.
+          Set its address on the{" "}
+          <Button
+            variant="link"
+            size="sm"
+            className="h-auto p-0 text-xs"
+            onClick={() => navigate("/engine")}
+          >
+            Engine
+          </Button>{" "}
+          page.
+        </p>
+      </div>
     </PageLayout>
   );
 };

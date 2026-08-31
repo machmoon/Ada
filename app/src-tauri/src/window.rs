@@ -1,6 +1,6 @@
 #[cfg(target_os = "macos")]
 use tauri::LogicalPosition;
-use tauri::{App, AppHandle, Manager, Runtime, WebviewWindow, WebviewWindowBuilder};
+use tauri::{App, AppHandle, Emitter, Manager, Runtime, WebviewWindow, WebviewWindowBuilder};
 
 // The offset from the top of the screen to the window
 const TOP_OFFSET: i32 = 54;
@@ -83,9 +83,32 @@ pub fn set_window_height(window: tauri::WebviewWindow, height: u32) -> Result<()
     Ok(())
 }
 
+/// The route the dashboard window opens on, and the one "open the review"
+/// means. The engine's finished board is reviewed here; Pluely's inherited
+/// `/chats` list is not what this window is for.
+const DASHBOARD_ROUTE: &str = "/workbench";
+
+/// The event the dashboard's router listens for. Frontend counterpart lives in
+/// `src/hooks/useRunBridge.ts` (`useNavigationRequests`).
+const NAVIGATE_EVENT: &str = "kaleo://navigate";
+
 #[tauri::command]
 pub fn open_dashboard(app: tauri::AppHandle) -> Result<(), String> {
-    show_dashboard_window(&app)
+    show_dashboard_window(&app)?;
+
+    // The window is built once and then hidden and shown rather than
+    // destroyed, so `WebviewUrl::App` only applies the first time. Asking for
+    // the review after browsing to Settings has to actually land on the
+    // review, so tell the dashboard's own router where to go. Targeted at the
+    // dashboard: a broadcast would also reach the overlay, which has no
+    // business navigating anywhere.
+    if let Err(e) = app.emit_to("dashboard", NAVIGATE_EVENT, DASHBOARD_ROUTE) {
+        // The window is already open and focused at this point; failing to
+        // steer it is not worth failing the command over.
+        eprintln!("Failed to route the dashboard to {}: {}", DASHBOARD_ROUTE, e);
+    }
+
+    Ok(())
 }
 
 #[tauri::command]
@@ -150,12 +173,15 @@ pub fn move_window(app: tauri::AppHandle, direction: String, step: i32) -> Resul
 pub fn create_dashboard_window<R: Runtime>(
     app: &AppHandle<R>,
 ) -> Result<WebviewWindow<R>, tauri::Error> {
-    let base_builder =
-        WebviewWindowBuilder::new(app, "dashboard", tauri::WebviewUrl::App("/chats".into()));
+    let base_builder = WebviewWindowBuilder::new(
+        app,
+        "dashboard",
+        tauri::WebviewUrl::App(DASHBOARD_ROUTE.into()),
+    );
 
     #[cfg(target_os = "macos")]
     let base_builder = base_builder
-        .title("Pluely - Dashboard")
+        .title("Kaleo")
         .center()
         .decorations(true)
         .inner_size(1200.0, 800.0)
@@ -168,7 +194,7 @@ pub fn create_dashboard_window<R: Runtime>(
 
     #[cfg(not(target_os = "macos"))]
     let base_builder = base_builder
-        .title("Pluely - Dashboard")
+        .title("Kaleo")
         .center()
         .decorations(true)
         .inner_size(800.0, 600.0)

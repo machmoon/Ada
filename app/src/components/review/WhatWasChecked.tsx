@@ -21,6 +21,14 @@ export interface WhatWasCheckedProps {
   warningCount?: number;
   /** The request's `review` flag, when the caller knows it. */
   reviewRequested?: boolean;
+  /**
+   * Whether the response actually carried a structured review block —
+   * `findings !== undefined` at the caller. Distinct from `findingCount === 0`,
+   * which cannot tell a review that raised nothing from a response that
+   * contained no review at all. Omit it only when the caller genuinely does not
+   * know; this component will then say so rather than pick a side.
+   */
+  hasStructuredReview?: boolean;
   /** `RunResult["datasheets"]` — what the design was actually informed by. */
   datasheets?: RunResult["datasheets"];
   /** True when the run asked for findings to be grounded in datasheet pages. */
@@ -56,6 +64,7 @@ export function WhatWasChecked({
   unattributedCount,
   warningCount = 0,
   reviewRequested,
+  hasStructuredReview,
   datasheets,
   grounded,
   rulesRun,
@@ -65,10 +74,19 @@ export function WhatWasChecked({
   const reviewSkipped = reviewRequested === false;
   const sheets = (datasheets ?? []).map(datasheetLabel);
 
+  // Three-valued on purpose. A review pass either provably ran, provably did
+  // not, or is unknown to this build — and only the first licenses a ✓. The
+  // old two-valued form treated "the caller did not say" as "it ran", which
+  // put a tick and a finding count on responses that carried no review.
+  // Findings on the page are their own proof: they cannot exist unless a pass
+  // produced them, whatever the flags say.
+  const reviewRan: boolean | null =
+    findingCount > 0 ? true : reviewSkipped ? false : (hasStructuredReview ?? null);
+
   const ran: string[] = [];
   if (modelPasses && modelPasses.length > 0) {
     for (const pass of modelPasses) ran.push(`Model pass: ${pass}.`);
-  } else if (!reviewSkipped) {
+  } else if (reviewRan === true) {
     // True of this engine: the review is one adversarial model pass over the
     // netlist plus whatever datasheet facts it was given. Naming it is not an
     // invention — it is the only pass `/generate` runs.
@@ -90,6 +108,14 @@ export function WhatWasChecked({
   if (reviewSkipped) {
     notRun.push(
       "The design review did not run — this board was placed from the netlist alone, and nothing checked it."
+    );
+  } else if (reviewRan === false) {
+    notRun.push(
+      "This response carried no review block, so no design review is known to have run on this board."
+    );
+  } else if (reviewRan === null) {
+    notRun.push(
+      "Whether a design review ran was not reported with this response, so this build cannot say that one did."
     );
   }
   if (!rulesRun || rulesRun.length === 0) {
@@ -116,10 +142,21 @@ export function WhatWasChecked({
         </CardTitle>
       </CardHeader>
       <CardContent className="px-4 text-xs">
-        <p data-testid="what-was-checked-counts" className="text-muted-foreground">
-          {findingCount === 0
-            ? "This review raised nothing."
-            : `${findingCount} finding(s): ${provenCount} proven by measurement, ${suggestedCount} suggested by a model, ${unattributedCount} unattributed.`}
+        <p
+          data-testid="what-was-checked-counts"
+          data-review-ran={reviewRan === null ? "unknown" : String(reviewRan)}
+          className="text-muted-foreground"
+        >
+          {/* A count only means something once a pass is known to have run.
+              "This review raised nothing" on a response with no review in it
+              is the exact sentence this component exists to prevent. */}
+          {reviewRan === true
+            ? findingCount === 0
+              ? "This review raised nothing."
+              : `${findingCount} finding(s): ${provenCount} proven by measurement, ${suggestedCount} suggested by a model, ${unattributedCount} unattributed.`
+            : reviewRan === false
+              ? "No review came back with this response, so there are no findings to count. That is an absence, not a clean result."
+              : "This build cannot tell whether a review ran, so it is not reporting a finding count."}
           {warningCount > 0 && ` ${warningCount} engine warning(s).`}
         </p>
 

@@ -21,6 +21,10 @@ import {
 } from "@/lib/silkscreen/describe";
 import type { RunPlan } from "@/lib/silkscreen/stages";
 import { useEngineHealth, type EngineHealth } from "@/hooks/useEngineHealth";
+import {
+  sharedRunHistoryStore,
+  type RunHistoryStore,
+} from "@/lib/silkscreen/history.store";
 import { logError, logEvent, logServer } from "@/lib/silkscreen/log";
 
 /**
@@ -69,6 +73,13 @@ export interface RunHistoryEntry {
   finishedAt: number;
   /** Wall clock, this app's measurement. `progress.elapsedS` is the engine's. */
   elapsedS: number;
+  /**
+   * This entry came back from the database, not from a run this session
+   * watched. Its `frames` are therefore `[]` — really empty, not "not loaded
+   * yet" — and the UI labels the row rather than implying the raw log is
+   * still there. Absent on a run that finished in this session.
+   */
+  restored?: boolean;
 }
 
 export interface SilkscreenRun {
@@ -121,6 +132,13 @@ export interface SilkscreenRun {
 
   history: RunHistoryEntry[];
   historyLimit: number;
+  /**
+   * The persisted runs have been read (or there was nothing to read from).
+   * False only during the first moments of a window's life — the difference
+   * between "no past runs" and "we have not looked yet", which the history
+   * list must not blur.
+   */
+  historyReady: boolean;
   viewingId: string | null;
   selectRun: (id: string | null) => void;
   clearHistory: () => void;
@@ -133,6 +151,31 @@ export interface UseSilkscreenRunOptions {
   /** How many finished runs stay in memory. Boards are large; keep it small. */
   historyLimit?: number;
   healthIntervalMs?: number;
+  /**
+   * Where finished runs are kept between restarts. Defaults to the shared
+   * SQLite store; `null` turns persistence off, which is what a test that is
+   * not testing persistence wants.
+   */
+  historyStore?: RunHistoryStore | null;
+}
+
+/**
+ * Fold restored rows into the runs this session already has.
+ *
+ * Newest first by the same clock both sides record (`finishedAt`), so a run
+ * that finishes while the database is still being read lands where it belongs
+ * rather than under everything. A run already in memory always wins over its
+ * stored copy: the in-memory one still has its stream frames.
+ */
+export function mergeHistory(
+  live: RunHistoryEntry[],
+  restored: RunHistoryEntry[],
+  limit: number
+): RunHistoryEntry[] {
+  const seen = new Set(live.map((entry) => entry.id));
+  const merged = [...live, ...restored.filter((entry) => !seen.has(entry.id))];
+  merged.sort((a, b) => b.finishedAt - a.finishedAt);
+  return merged.slice(0, limit);
 }
 
 export const DEFAULT_HISTORY_LIMIT = 8;
@@ -249,6 +292,15 @@ export function useSilkscreenRunState(
   const [history, setHistory] = useState<RunHistoryEntry[]>([]);
   const [viewingId, setViewingId] = useState<string | null>(null);
 
+  // Resolved once. `undefined` means "use the app's store"; an explicit `null`
+  // means "do not persist", which is a real configuration and not a fallback.
+  const [store] = useState<RunHistoryStore | null>(() =>
+    options.historyStore !== undefined
+      ? options.historyStore
+      : sharedRunHistoryStore()
+  );
+  const [historyReady, setHistoryReady] = useState(store === null);
+
   const mountedRef = useRef(true);
   const abortRef = useRef<AbortController | null>(null);
   // Set synchronously, unlike `status`, so a double-click cannot start two runs.
@@ -264,6 +316,40 @@ export function useSilkscreenRunState(
       inFlightRef.current = false;
     };
   }, []);
+
+  // Past runs come back from the database once, on mount. What arrives is
+  // merged rather than assigned: a run that finishes while this read is in
+  // flight must not be dropped, and a run already in memory keeps its frames.
+  // If the read finds nothing, history stays empty — an empty list is the
+  // honest rendering of an empty table.
+  useEffect(() => {
+    if (!store) return;
+    let live = true;
+    void store
+      .load(historyLimit)
+      .then((restored) => {
+        if (!live || !mountedRef.current) return;
+        if (restored.length > 0) {
+          setHistory((previous) =>
+            mergeHistory(previous, restored, historyLimit)
+          );
+        }
+      })
+      // The app's own store never rejects, but the hook must not depend on
+      // that: a store that throws leaves the session with no stored history,
+      // which is a state this app is allowed to be in.
+      .catch((error) => {
+        logError("history.restore", "Could not read stored runs.", {
+          detail: (error as Error)?.message ?? "",
+        });
+      })
+      .finally(() => {
+        if (live && mountedRef.current) setHistoryReady(true);
+      });
+    return () => {
+      live = false;
+    };
+  }, [store, historyLimit]);
 
   // The clock is independent of the event stream on purpose: if the engine goes
   // quiet for ninety seconds, the user should see ninety seconds pass, not a
@@ -420,6 +506,13 @@ export function useSilkscreenRunState(
           elapsedS: (finished - began) / 1000,
         };
         setHistory((previous) => [entry, ...previous].slice(0, historyLimit));
+        // Fire and forget, and swallowing its own failures: a board the engine
+        // really produced must not become an error because a disk write did.
+        void store?.save(entry, historyLimit).catch((error) => {
+          logError("history.save", "Could not store the finished run.", {
+            detail: (error as Error)?.message ?? "",
+          });
+        });
         logEvent("run.finished", `Run finished in ${entry.elapsedS.toFixed(1)} s.`);
       } catch (caught) {
         if (!mountedRef.current) return;
@@ -458,7 +551,7 @@ export function useSilkscreenRunState(
       }
     })();
     },
-    [baseUrl, token, historyLimit, request]
+    [baseUrl, token, historyLimit, request, store]
   );
 
   const cancel = useCallback(() => {
@@ -498,7 +591,14 @@ export function useSilkscreenRunState(
   const clearHistory = useCallback(() => {
     setHistory([]);
     setViewingId(null);
-  }, []);
+    // Clearing the list has to clear the store too, or the next launch would
+    // resurrect exactly the runs the user just asked to be rid of.
+    void store?.clear().catch((error) => {
+      logError("history.clear", "Could not clear stored runs.", {
+        detail: (error as Error)?.message ?? "",
+      });
+    });
+  }, [store]);
 
   const viewed = useMemo(
     () => (viewingId ? history.find((h) => h.id === viewingId) ?? null : null),
@@ -544,6 +644,7 @@ export function useSilkscreenRunState(
 
     history,
     historyLimit,
+    historyReady,
     viewingId,
     selectRun,
     clearHistory,

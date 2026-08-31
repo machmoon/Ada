@@ -13,15 +13,18 @@ import pytest
 from silkscreen.board import build_board, emit_kicad_pcb, write_board
 from silkscreen.footprints import (
     CHIP_SIZES,
+    Footprint,
     UnsupportedPackage,
     chip_passive,
     for_passive,
     lqfp,
+    silk_segments,
     soic,
+    sot23,
     sot223,
 )
 from silkscreen.netlist import parse_circuit_spec
-from silkscreen.units import to_mm
+from silkscreen.units import mm, to_mm
 
 
 def _spec():
@@ -105,6 +108,65 @@ def test_pads_are_inside_their_courtyard():
         for p in fp.pads:
             assert abs(p.x_nm) + p.w_nm // 2 <= fp.courtyard_w_nm + 1, fp.name
             assert abs(p.y_nm) + p.h_nm // 2 <= fp.courtyard_h_nm + 1, fp.name
+
+
+def test_silk_segments_stay_clear_of_every_pad():
+    """Regression: the emitters used to stroke the raw body rectangle, which
+    put 0.06 mm of ink (half the 0.12 mm pen) on every pad the body edge
+    touches. Independent math: widen each segment by the pen half-width and
+    measure axis-aligned separation from each pad's own rectangle.
+    """
+    pen_half = mm(0.12) // 2
+    clearance = mm(0.2)
+    fps = [chip_passive(size) for size in CHIP_SIZES]
+    fps += [sot23(), sot223(), soic(8), soic(16), lqfp(32), lqfp(48)]
+    for fp in fps:
+        for x0, y0, x1, y1 in silk_segments(fp):
+            sx0, sx1 = min(x0, x1) - pen_half, max(x0, x1) + pen_half
+            sy0, sy1 = min(y0, y1) - pen_half, max(y0, y1) + pen_half
+            for p in fp.pads:
+                gap_x = max(p.x_nm - p.w_nm // 2 - sx1, sx0 - p.x_nm - p.w_nm // 2)
+                gap_y = max(p.y_nm - p.h_nm // 2 - sy1, sy0 - p.y_nm - p.h_nm // 2)
+                assert max(gap_x, gap_y) >= clearance, (
+                    f"{fp.name}: silk ({x0}, {y0})..({x1}, {y1}) is within "
+                    f"{max(gap_x, gap_y)} nm of pad {p.number}"
+                )
+
+
+def test_silk_segments_lie_on_the_body_outline():
+    """Clipping cuts spans out of the four body edges; it never invents ink
+    somewhere else, and a body the pads swallow entirely (an 0603 is barely
+    wider than its own land pattern) legitimately gets no outline at all.
+    """
+    for fp in (sot23(), soic(8), lqfp(32), chip_passive("0805")):
+        segments = silk_segments(fp)
+        assert segments, f"{fp.name} has room for an outline"
+        bw, bh = fp.body_w_nm, fp.body_h_nm
+        for x0, y0, x1, y1 in segments:
+            lo_x, hi_x = min(x0, x1), max(x0, x1)
+            lo_y, hi_y = min(y0, y1), max(y0, y1)
+            on_h = y0 == y1 and abs(y0) == bh and -bw <= lo_x <= hi_x <= bw
+            on_v = x0 == x1 and abs(x0) == bw and -bh <= lo_y <= hi_y <= bh
+            assert on_h or on_v, f"{fp.name}: ({x0}, {y0})..({x1}, {y1})"
+    assert silk_segments(chip_passive("0603")) == []
+    assert silk_segments(Footprint(name="bodyless")) == []
+
+
+def test_emitted_board_reviews_clean_of_silk_over_pad(tmp_path):
+    """The finding that motivated the fix, checked by the checker that found
+    it: a freshly emitted board must produce zero silkscreen-over-pad findings
+    from the audit rule, which measures the file independently of the emitter.
+    """
+    from silkscreen.audit.effort import profile_for
+    from silkscreen.audit.geometry import load_audit_board
+    from silkscreen.audit.rules import run_rules
+
+    path = tmp_path / "silk.kicad_pcb"
+    write_board(build_board(_spec(), time_limit_s=10.0), path)
+    findings, ran = run_rules(load_audit_board(path), profile_for("standard"))
+    assert "silkscreen-over-pad" in ran, "the guarding rule must have run"
+    hits = [f for f in findings if f.rule == "silkscreen-over-pad"]
+    assert hits == [], [f.title for f in hits]
 
 
 def test_large_capacitor_gets_a_larger_package():

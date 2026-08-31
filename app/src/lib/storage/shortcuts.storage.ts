@@ -1,4 +1,8 @@
-import { STORAGE_KEYS, DEFAULT_SHORTCUT_ACTIONS } from "@/config";
+import {
+  STORAGE_KEYS,
+  DEFAULT_SHORTCUT_ACTIONS,
+  SHORTCUT_ACTIONS_DISABLED_BY_DEFAULT,
+} from "@/config";
 import {
   ShortcutsConfig,
   ShortcutBinding,
@@ -30,10 +34,13 @@ export const getDefaultShortcutsConfig = (): ShortcutsConfig => {
   const bindings: Record<string, ShortcutBinding> = {};
 
   DEFAULT_SHORTCUT_ACTIONS.forEach((action) => {
+    // The binding is still seeded for a default-off action, only disabled: the
+    // Rust side registers nothing unless `enabled` is true, and the settings
+    // toggle needs a binding to exist before the user can flip it on.
     bindings[action.id] = {
       action: action.id,
       key: getPlatformDefaultKey(action),
-      enabled: true,
+      enabled: !SHORTCUT_ACTIONS_DISABLED_BY_DEFAULT.includes(action.id),
     };
   });
 
@@ -246,14 +253,13 @@ export const formatShortcutKeyForDisplay = (key: string): string => {
 /**
  * Get all available actions (default + custom)
  */
-export const getAllShortcutActions = (
-  hasLicense: boolean
-): ShortcutAction[] => {
+export const getAllShortcutActions = (): ShortcutAction[] => {
   const config = getShortcutsConfig();
   const actions = [...DEFAULT_SHORTCUT_ACTIONS];
 
-  // Add custom actions if user has license
-  if (hasLicense && config.customActions) {
+  // Upstream hid custom actions behind a paid licence. There is no licence to
+  // check any more, so a user's own actions are simply listed.
+  if (config.customActions) {
     actions.push(...config.customActions);
   }
 
@@ -261,7 +267,7 @@ export const getAllShortcutActions = (
 };
 
 /**
- * Add a custom shortcut action (license required)
+ * Add a custom shortcut action
  */
 export const addCustomShortcutAction = (
   action: ShortcutAction

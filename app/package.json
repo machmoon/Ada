@@ -2,20 +2,26 @@
   "name": "kaleo",
   "private": false,
   "version": "0.2.2",
-  "description": "The Open Source Alternative to Cluely - A lightning-fast, privacy-first AI assistant that works seamlessly during meetings, interviews, and conversations without anyone knowing.",
+  "description": "Kaleo is a desktop client for the silkscreen PCB engine: describe a board in plain language, run placement and review against a silkscreen engine on loopback, and inspect the result.",
   "author": {
     "name": "Srikanth Nani",
     "email": "mail@srikanthnani.com",
     "url": "https://www.srikanthnani.com"
   },
+  "contributors": [
+    {
+      "name": "machmoon",
+      "url": "https://github.com/machmoon/Kaleo"
+    }
+  ],
   "license": "GPL-3.0",
-  "homepage": "https://github.com/iamsrikanthnani/pluely#readme",
+  "homepage": "https://github.com/machmoon/Kaleo#readme",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/iamsrikanthnani/pluely.git"
+    "url": "git+https://github.com/machmoon/Kaleo.git"
   },
   "bugs": {
-    "url": "https://github.com/iamsrikanthnani/pluely/issues"
+    "url": "https://github.com/machmoon/Kaleo/issues"
   },
   "keywords": [
     "ai-assistant",
@@ -61,9 +67,7 @@
     "@tauri-apps/plugin-global-shortcut": "^2.3.0",
     "@tauri-apps/plugin-http": "^2.5.2",
     "@tauri-apps/plugin-opener": "^2",
-    "@tauri-apps/plugin-process": "^2.3.0",
     "@tauri-apps/plugin-sql": "^2.3.0",
-    "@tauri-apps/plugin-updater": "^2.9.0",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
     "cmdk": "^1.1.1",
@@ -82,8 +86,7 @@
     "tailwind-merge": "^3.3.1",
     "tailwindcss": "^4.1.12",
     "tauri-plugin-keychain": "^2.0.1",
-    "tauri-plugin-macos-permissions-api": "^2.3.0",
-    "tauri-plugin-posthog-api": "^0.2.2"
+    "tauri-plugin-macos-permissions-api": "^2.3.0"
   },
   "devDependencies": {
     "@tauri-apps/cli": "^2",

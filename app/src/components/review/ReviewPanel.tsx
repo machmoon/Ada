@@ -219,6 +219,9 @@ export function ReviewPanel({
             unattributedCount={counts.origin.unattributed}
             warningCount={warnings?.length ?? 0}
             reviewRequested={reviewRequested}
+            // `rows.length` alone collapses "the review ran and found nothing"
+            // into "no review arrived"; this is the bit that tells them apart.
+            hasStructuredReview={hasStructured}
             datasheets={datasheets}
             grounded={grounded}
             rulesRun={rulesRun}

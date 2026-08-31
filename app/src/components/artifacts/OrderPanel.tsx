@@ -164,6 +164,56 @@ function IssueRow({ issue }: { issue: WireOrderIssue }) {
   );
 }
 
+/**
+ * The router's partial-completion report: every net it could not finish, by
+ * name, with the reason.
+ *
+ * Its own component because it is not part of the order block and must not be
+ * gated on one. `service/app.py` sends `routing` on every run and this app
+ * never asks for an `order`, so while this lived inside the order body the
+ * engine's honesty contract rendered on no run at all — the one place the
+ * output is allowed to be incomplete was the one place nothing was shown.
+ */
+function RoutingReport({
+  unroutedNets,
+}: {
+  unroutedNets?: Record<string, string> | null;
+}) {
+  const nets = unroutedNets ? Object.entries(unroutedNets) : [];
+  return (
+    <div
+      className="rounded-lg border border-border/60 px-3 py-2 flex flex-col gap-1"
+      data-testid="order-routing"
+      data-present={unroutedNets ? "yes" : "no"}
+    >
+      <span className="text-[11px] uppercase tracking-wide text-muted-foreground">
+        Routing
+      </span>
+      {nets.length > 0 ? (
+        <ul className="flex flex-col gap-1">
+          {nets.map(([net, reason]) => (
+            <li key={net} className="text-sm" data-testid="unrouted-net" data-ref={net}>
+              <span className="font-mono text-[12px]">{net}</span>
+              <span className="text-muted-foreground"> — {reason}</span>
+            </li>
+          ))}
+        </ul>
+      ) : unroutedNets ? (
+        <span className="text-sm text-muted-foreground">
+          The router reported no unfinished nets.
+        </span>
+      ) : (
+        <span className="text-sm text-muted-foreground">
+          This run's response carried no <span className="font-mono">routing</span>{" "}
+          block, so no net is named here either way. Silkscreen's router is
+          partial by design and names every net it cannot finish; do not read the
+          absence of a report as a fully routed board.
+        </span>
+      )}
+    </div>
+  );
+}
+
 function summaryRows(board: WireBoardSummary): { label: string; value: string }[] {
   const rows: { label: string; value: string }[] = [];
   const push = (label: string, value: unknown, suffix = "") => {
@@ -220,10 +270,12 @@ export interface OrderPanelProps {
 export function OrderPanel({ order, unroutedNets, className }: OrderPanelProps) {
   const wire = (order ?? null) as WireOrder | null;
 
+  // No order block is the normal case for this app, so the routing report has
+  // to survive it: it is the engine's report on its own output, not the fab's.
   if (!wire) {
     return (
       <section
-        className={cn("flex flex-col gap-2", className)}
+        className={cn("flex flex-col gap-3", className)}
         data-testid="order-panel"
         data-state="absent"
       >
@@ -232,6 +284,7 @@ export function OrderPanel({ order, unroutedNets, className }: OrderPanelProps) 
           This run did not ask for an order block, so no manufacturability
           check was run. That is not the same as passing one.
         </p>
+        <RoutingReport unroutedNets={unroutedNets} />
       </section>
     );
   }
@@ -312,45 +365,8 @@ export function OrderPanel({ order, unroutedNets, className }: OrderPanelProps) 
       )}
 
       {/* Routing honesty: the autorouter is partial by design and names what
-          it could not finish. The response has no structured field for that,
-          so we surface whatever we do have and never imply completeness. */}
-      <div
-        className="rounded-lg border border-border/60 px-3 py-2 flex flex-col gap-1"
-        data-testid="order-routing"
-        data-present={unroutedNets ? "yes" : "no"}
-      >
-        <span className="text-[11px] uppercase tracking-wide text-muted-foreground">
-          Routing
-        </span>
-        {unroutedNets && Object.keys(unroutedNets).length > 0 ? (
-          <ul className="flex flex-col gap-1">
-            {Object.entries(unroutedNets).map(([net, reason]) => (
-              <li
-                key={net}
-                className="text-sm"
-                data-testid="unrouted-net"
-                data-ref={net}
-              >
-                <span className="font-mono text-[12px]">{net}</span>
-                <span className="text-muted-foreground"> — {reason}</span>
-              </li>
-            ))}
-          </ul>
-        ) : unroutedNets ? (
-          <span className="text-sm text-muted-foreground">
-            The router reported no unfinished nets.
-          </span>
-        ) : (
-          <span className="text-sm text-muted-foreground">
-            This run's response carried no <span className="font-mono">routing</span>{" "}
-            block. Silkscreen's router is partial by design and names every net
-            it cannot finish; if any were left open, the{" "}
-            <span className="font-mono">unrouted-nets</span> blocker above
-            spells them out. Do not read the absence of a report as a fully
-            routed board.
-          </span>
-        )}
-      </div>
+          it could not finish, in `result.routing.unrouted`. */}
+      <RoutingReport unroutedNets={unroutedNets} />
 
       {rest.length > 0 && (
         <div className="flex flex-col gap-2" data-testid="order-notes">
