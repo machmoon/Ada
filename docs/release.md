@@ -5,6 +5,10 @@ Silkscreen ships three things: a **Python distribution** (sdist + wheel), a
 **container image** on GitHub Container Registry. All three come out of a single
 version tag; nothing is built by hand.
 
+The Ada Tauri host is not a release artifact yet. It runs from a checkout with
+a local `.venv`; keep bundling disabled until the Python sidecar, signing, and
+notarization pipeline are complete.
+
 The repository is `github.com/machmoon/silkscreen`, so the image is
 `ghcr.io/machmoon/silkscreen`.
 
@@ -13,8 +17,9 @@ The repository is `github.com/machmoon/silkscreen`, so the image is
 ## Cutting a release
 
 1. **Bump the version.** `version` in `pyproject.toml` is the single source of
-   truth, and no workflow writes it — bumping it is a deliberate commit on
-   `main`. The tag must match: `pyproject.toml` at `0.2.0` is tagged `v0.2.0`.
+   truth for the three published artifacts, and no workflow writes it —
+   bumping it is a deliberate commit on `main`. The tag must match:
+   `pyproject.toml` at `0.2.0` is tagged `v0.2.0`.
 
 2. **Land it on `main` and let CI go green.** `ci.yml` is the gate: ruff +
    pytest on Linux/macOS/Windows, `check_docs.py`, the Vitest + Vite `web` job,

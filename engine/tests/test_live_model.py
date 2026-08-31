@@ -24,6 +24,7 @@ import pytest
 from silkscreen.agents.model import (
     CHEAP_MODEL,
     DEFAULT_TIMEOUT_S,
+    GEMMA_MODEL,
     TIMEOUT_ENV_VAR,
     Document,
     GeminiModel,
@@ -118,6 +119,25 @@ def test_live_generate_returns_the_requested_marker(live_response):
     # The model may wrap JSON in a Markdown fence; parse_circuit_spec tolerates
     # that in production, so this test does too rather than failing on style.
     assert MARKER in strip_code_fence(live_response)
+
+
+@requires_api_key
+def test_live_gemma_rung_answers():
+    """One real call to the Gemma rung of the service fallback chain.
+
+    resilience.py's founding rule: a fallback that has never been executed is
+    a second bug waiting for the first one to happen. The Gemini tiers are
+    exercised by the fixture above; this is the same proof for the open-weights
+    last resort, including that Gemma accepts a system instruction.
+    """
+    model = GeminiModel(GEMMA_MODEL)
+    text = model.generate(
+        PROMPT,
+        system="You answer with exactly what is asked, nothing else.",
+        temperature=0.0,
+        max_output_tokens=512,
+    )
+    assert MARKER in strip_code_fence(text)
 
 
 # ---------------------------------------------- request deadline, no network

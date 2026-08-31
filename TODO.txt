@@ -88,14 +88,28 @@ feature is tracked under feature 12.
  ----- Request timeout so a hung primary fails over    [DONE]        60 s http_options deadline (SDK unit: ms) on
                                                                      GeminiModel + GeminiEmbedder clients; override
                                                                      SILKSCREEN_MODEL_TIMEOUT_S; timeout -> ModelError
+ ----- Gemma open-weights last-resort rung             [DONE]        gemma-4-31b-it as the third build_model
+                                                                     provider, one attempt; a different model family
+                                                                     is unlikely to share the Gemini tiers' outage
+                                                                     or quota pool. Key-gated live test exercises
+                                                                     the rung for real
  6   Confirmation gates on file writes                 [NOT BUILT]
  ----- Inventory write points, define the gate         [NOT BUILT]   save_board, CLI output, service response
  ----- CLI confirmation prompt before board write      [NOT BUILT]   with a --yes bypass
  ----- Service dry-run mode                            [NOT BUILT]   placement report without writing a board
  7   Cloud Run deployment                              [PARTIAL]
  ----- HTTP surface + Dockerfile, tested offline       [DONE]
- ----- The deploy itself, live URL in README           [NOT BUILT]   gcloud run deploy
- ----- Post-deploy smoke check                         [NOT BUILT]   healthz + one real /generate against live URL
+ ----- The deploy itself, live URL in README           [DONE]        2026-08-31: gcloud run deploy --source from a
+                                                                     clean main clone; project kaleo-hack-2026,
+                                                                     us-central1; key via Secret Manager, Firestore
+                                                                     db created, GOOGLE_CLOUD_PROJECT set
+ ----- Post-deploy smoke check                         [DONE]        /, /models and one real /generate verified
+                                                                     live 2026-08-31: the AMS1117 demo prompt came
+                                                                     back optimal, 5 parts, 3/3 nets routed, in
+                                                                     10.5 s. NOTE: Google's frontend intercepts
+                                                                     /healthz on run.app at the edge (404 before
+                                                                     the container); /readyz is the alias external
+                                                                     probes must use
  8   Firestore fact cache                              [DONE]
  ----- FactStore protocol + MemoryFactStore            [DONE]        service/cache.py; tests need no GCP project
  ----- Real write-back + preloaded_facts feed-in       [DONE]        commit 4249c5b
@@ -235,6 +249,75 @@ feature is tracked under feature 12.
  ----- Integrated placement view and JSON download    [DONE]        generated boards, receipts and session export
  ----- Synthetic behavior-cloning trajectory export  [DONE]        no trained checkpoint claimed
 
+ 18  Slack integration                                 [DONE, unverified live]
+ ----- Signed events + slash commands, threaded runs  [DONE]        slackbot/app.py; HMAC before parse, event_id dedup
+ ----- design / place / review verbs over the pipeline[DONE]        slackbot/runner.py; calls generate_pcb unchanged
+ ----- Board preview + .kicad_pcb into the thread     [DONE]        slackbot/render.py; SVG always, PNG with Pillow
+ ----- Prepared fabrication order, never submitted    [DONE]        slackbot/order.py. DELIBERATE BOUNDARY: the bot
+                                                                     prepares an order and stops. No vendor call, no
+                                                                     submission, no payment path exists, and
+                                                                     test_order.py enforces it by import (only
+                                                                     slack.py may import a network module). A human
+                                                                     confirms before money is spent. If ordering is
+                                                                     ever taken further, that gate is the design, not
+                                                                     an obstacle to route around.
+ ----- Test against a real Slack workspace            [OPEN]        Built against the API and never run against a
+                                                                     live workspace: no app was created and no token
+                                                                     requested. Request construction is covered by
+                                                                     tests against a recorded transport, but a scope
+                                                                     or payload detail could still be wrong on the
+                                                                     first real run.
+ ----- Promote the placements geometry serializer     [OPEN]        slackbot/render.py imports the private
+                                                                     service.app._placements_dict rather than
+                                                                     duplicating the rotation and pad-offset maths.
+                                                                     Duplicating it is the board-destroying bug class,
+                                                                     so importing was right, but it wants to be public
+                                                                     on the engine or a shared module. Left alone
+                                                                     because another session was in the engine.
+ ----- Persist run records across a restart           [OPEN]        Runs are remembered per thread in memory, so
+                                                                     review/order forget after a restart (the bot says
+                                                                     so rather than acting on the wrong board). A
+                                                                     second replica would need a real store.
+ 19  Google Meet front end (transcript -> board)       [PARTIAL]     meetings/; Meet REST API v2, read after the
+                                                                     conference ends
+ ----- Meet REST API v2 client, stdlib only            [DONE]        meet.py; conference records, transcripts and
+                                                                     entries, paging capped at 50 pages
+ ----- No headless browser, no fake participant        [DONE]        deliberate: every open-source meeting bot joins
+                                                                     as a bot; this reads the finished transcript
+ ----- Transport Protocol seam, offline tests          [DONE]        the one HTTP GET is behind a protocol, the same
+                                                                     seam as Model/ScriptedModel
+ ----- Config validated at construction                [DONE]        config.py: MEET_ACCESS_TOKEN, MEET_SPACES,
+                                                                     MEET_API_BASE, MEET_MAX_AGE_HOURS,
+                                                                     MEET_MAX_RUNS_PER_POLL; https api_base enforced
+ ----- Runner: transcript -> requests -> board         [DONE]        runner.py; generate_pcb imported lazily, and one
+                                                                     failing request never sinks the others
+ ----- Quoted-evidence and confidence gates            [DONE]        a request not quotable from the transcript is
+                                                                     dropped; below the 0.6 floor it is recorded, not
+                                                                     built
+ ----- Skipped requests always reported                [DONE]        MeetingReport.considered is separate from runs, so
+                                                                     a skipped request cannot go invisible
+ ----- Nothing is ever ordered from a meeting          [DONE]        a board a meeting merely implied is exactly the
+                                                                     wrong thing to spend money on
+ ----- meetings/intent.py (extract_requests)           [DONE]        intent.py; the model's answer is validated like
+                                                                     any other, and a request it cannot quote from
+                                                                     the transcript is dropped
+ ----- Tests for the package                           [DONE]        meetings/tests; all offline, against a recorded
+                                                                     transport and ScriptedModel
+ ----- Run against a real Workspace / live Meet        [OPEN]        unverified live: no call has ever left the
+                                                                     machine; every test drives a recorded transport
+ ----- OAuth token acquisition and refresh             [NOT BUILT]   deliberate: the host supplies MEET_ACCESS_TOKEN
+                                                                     with the read-only scope. An expired token
+                                                                     surfaces as a 401 with no recovery path
+ ----- Durable seen-conference store                   [OPEN]        poll_once mutates a caller-owned in-memory set;
+                                                                     honest for one process, obviously wrong for two
+ ----- Poll loop, entry point or scheduler             [OPEN]        poll_once exists; nothing calls it on a schedule
+                                                                     and there is no console script
+ ----- Live listening during a meeting                 [NOT BUILT]   would need the Meet Media API, a different and
+                                                                     much larger piece of work
+ ----- Transcription must be on for any of this        [NOT BUILT]   not fixable here: Meet stores no transcript unless
+                                                                     the organiser enabled it. The run says so rather
+                                                                     than reporting an empty meeting
+
 OPEN WORK, SUMMARISED
 ---------------------
 Everything actionable reduces to: feature 2 in full (parallel reads, now the
@@ -242,9 +325,11 @@ R11 rung under 12), finding-level hallucination filtering under 4, the request
 timeout under 5, feature 6 in full (confirmation gates), the deploy and smoke
 check under 7, the ops polish under 8, voice under 9, the error taxonomy under
 10 (from PR #5 review), and the stream-fallback tightening under 11 (from PR #9
-review). The board well shipped, so voice is all that is left of 9 and stays
-last. Feature 16 still needs a trusted IC model registry and its place in the
-agent repair loop. The [IDEA] rows under 4 and 5 are ideas, not commitments.
+review), and the three open rows under 18 (Slack: live-workspace test,
+serializer promotion, run persistence). The board well shipped, so voice is
+all that is left of 9 and stays last. Feature 16 still needs a trusted IC
+model registry and its place in the agent repair loop. The [IDEA] rows under
+4 and 5 are ideas, not commitments.
 
 The ADK lane runs alongside that. Feature 12 is live and the flip is done: the
 default engine has been "adk" since the 2026-08-30 gate run, with
@@ -257,6 +342,14 @@ Features 14 and 15 landed with PR #10 and changed what a run produces: a whole
 KiCad project rather than one placed board file. What is left of them is the
 web UI catching up (the SPA shows neither the schematic nor the tracks) and the
 router's two honest limits, rip-up-and-retry and fine-pitch packages.
+
+Feature 19, the Google Meet front end, is new: the REST client, the config, the
+intent extraction, the runner and its two gates are done and tested offline, but
+nothing calls poll_once on a schedule, the seen-conference set lives in memory,
+and there is no OAuth acquisition or refresh — the host supplies
+MEET_ACCESS_TOKEN. Most importantly it is unverified live: it has never run
+against a real Google Workspace account or the live Meet API, and it can only
+ever see meetings whose organiser enabled transcription, after they end.
 
 Worth knowing for anything touching the emitters: KiCad 8.0.9 is installed
 locally and `kicad-cli sch erc` / `pcb drc` are now the strongest check the

@@ -123,7 +123,7 @@
           <article class="message" class:user={entry.role === 'user'} class:assistant={entry.role === 'assistant'}>
             <div class="avatar mono" data-material="tint">{entry.role === 'user' ? 'YOU' : 'AI'}</div>
             <div class="message-body" data-material={entry.role === 'user' ? 'panel' : undefined}>
-              <div class="role lbl">{entry.role === 'user' ? 'You' : 'Silkscreen orchestrator'}</div>
+              <div class="role lbl">{entry.role === 'user' ? 'You' : 'Ada orchestrator'}</div>
               <p>{entry.text}</p>
               {#if entry.result}
                 <ArtifactCards
@@ -158,7 +158,7 @@
           <!-- Not an outage: an unkeyed clone is the ordinary first run. Setup
                instructions come first, and there is no retry button — retrying
                without the key cannot succeed. -->
-          <div class="lbl">Silkscreen has no Gemini key yet</div>
+          <div class="lbl">Ada has no Gemini key yet</div>
           <p>
             The engine and the placer run without any key, but reading datasheets and proposing a
             circuit go through Gemini. Set the key where the service can see it, then restart it.
