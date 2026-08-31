@@ -103,10 +103,13 @@ feature is tracked under feature 12.
                                                                      clean main clone; project kaleo-hack-2026,
                                                                      us-central1; key via Secret Manager, Firestore
                                                                      db created, GOOGLE_CLOUD_PROJECT set
- ----- Post-deploy smoke check                         [PARTIAL]     / and /models verified live. NOTE: Google's
-                                                                     frontend intercepts /healthz on run.app at the
-                                                                     edge (404 before the container); /readyz is
-                                                                     the alias external probes must use
+ ----- Post-deploy smoke check                         [DONE]        /, /models and one real /generate verified
+                                                                     live 2026-08-31: the AMS1117 demo prompt came
+                                                                     back optimal, 5 parts, 3/3 nets routed, in
+                                                                     10.5 s. NOTE: Google's frontend intercepts
+                                                                     /healthz on run.app at the edge (404 before
+                                                                     the container); /readyz is the alias external
+                                                                     probes must use
  8   Firestore fact cache                              [DONE]
  ----- FactStore protocol + MemoryFactStore            [DONE]        service/cache.py; tests need no GCP project
  ----- Real write-back + preloaded_facts feed-in       [DONE]        commit 4249c5b
