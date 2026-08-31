@@ -1,10 +1,13 @@
-import { useCallback } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { ErrorBoundary } from "react-error-boundary";
-import { LayoutDashboardIcon } from "lucide-react";
+import { ChevronDownIcon, ChevronRightIcon, LayoutDashboardIcon } from "lucide-react";
 import { Button, Card, DragButton } from "@/components";
+import { SaveBoardButton } from "@/components/artifacts/SaveBoardButton";
+import { boardFilename } from "@/components/artifacts/ArtifactPanel";
 import { ErrorLayout } from "@/layouts";
 import { useApp } from "@/hooks";
+import { useOverlayHeight } from "@/hooks/useOverlayHeight";
 import { useRunVoice } from "@/hooks/useRunVoice";
 import { useSilkscreenRun } from "@/contexts";
 import { VoiceToggle } from "./components/VoiceToggle";
@@ -40,6 +43,13 @@ const Kaleo = () => {
 
   const busy = !SETTLED.includes(run.status);
 
+  // The window is created 600×54 and cannot grow on its own; this keeps it as
+  // tall as the Card actually is, which is the whole fix for runs that used to
+  // render invisibly below the fold.
+  const overlayRef = useOverlayHeight<HTMLDivElement>();
+
+  const [feedOpen, setFeedOpen] = useState(false);
+
   // `start` takes an optional override, so it must never be handed straight to
   // onClick — React would pass the click event as the override.
   const submit = useCallback(() => run.start(), [run]);
@@ -52,6 +62,20 @@ const Kaleo = () => {
     }
   }, []);
 
+  // Open the dashboard once per completed LIVE run: the bridge has already
+  // handed it the result, so it opens populated, on the board — the moment
+  // worth surfacing. History browsing and failures never trigger this.
+  const openedRunRef = useRef<string | null>(null);
+  const latestRunId = run.history[0]?.id ?? null;
+  useEffect(() => {
+    if (run.status !== "done" || !run.result || run.viewingHistory) return;
+    if (!latestRunId || openedRunRef.current === latestRunId) return;
+    openedRunRef.current = latestRunId;
+    void openDashboard();
+  }, [run.status, run.result, run.viewingHistory, latestRunId, openDashboard]);
+
+  const engineDown = !busy && run.engine.lastCheckedAt !== null && !run.engine.ok;
+
   return (
     <ErrorBoundary
       fallbackRender={() => <ErrorLayout isCompact />}
@@ -62,6 +86,7 @@ const Kaleo = () => {
           isHidden ? "hidden pointer-events-none" : ""
         }`}
       >
+        <div ref={overlayRef} className="w-full">
         <Card className="w-full flex flex-col gap-2 p-2">
           <div className="flex w-full flex-row items-center gap-1.5">
             <PromptBar
@@ -87,6 +112,17 @@ const Kaleo = () => {
             <DragButton />
           </div>
 
+          {engineDown ? (
+            <p
+              className="text-[10px] leading-tight text-destructive/90"
+              data-testid="engine-down-reason"
+            >
+              Engine unreachable at <span className="font-mono">{run.baseUrl}</span>
+              {" — "}click the dot to re-check, or start it:{" "}
+              <span className="font-mono">PORT=8081 python -m service.app</span>
+            </p>
+          ) : null}
+
           {busy ? (
             <div className="flex flex-col gap-2 border-t border-input/40 pt-2">
               <RunProgress
@@ -94,7 +130,24 @@ const Kaleo = () => {
                 elapsedS={run.elapsedS}
                 onCancel={() => run.cancel()}
               />
-              <ActivityFeed lines={run.lines} className="max-h-40" />
+              {/* The checklist and the clock narrate the run; the raw feed is
+                  detail on demand, so the busy overlay stays compact. */}
+              <button
+                type="button"
+                className="flex items-center gap-1 self-start text-[10px] text-muted-foreground"
+                onClick={() => setFeedOpen((open) => !open)}
+                data-testid="activity-disclosure"
+              >
+                {feedOpen ? (
+                  <ChevronDownIcon className="size-3" />
+                ) : (
+                  <ChevronRightIcon className="size-3" />
+                )}
+                activity · {run.lines.length} lines
+              </button>
+              {feedOpen ? (
+                <ActivityFeed lines={run.lines} className="max-h-40" />
+              ) : null}
             </div>
           ) : null}
 
@@ -110,6 +163,14 @@ const Kaleo = () => {
                 elapsedS={run.elapsedS}
                 onOpenReview={openDashboard}
                 onNewRun={() => run.reset()}
+              />
+              <SaveBoardButton
+                className="mt-2"
+                content={run.result.kicad_pcb}
+                filename={boardFilename(run.submitted?.intent)}
+                label="Save .kicad_pcb"
+                variant="outline"
+                size="sm"
               />
             </div>
           ) : null}
@@ -142,6 +203,7 @@ const Kaleo = () => {
             </div>
           ) : null}
         </Card>
+        </div>
       </div>
     </ErrorBoundary>
   );

@@ -1,7 +1,7 @@
 {
   "name": "kaleo",
   "private": false,
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "Kaleo - the AI hardware engineer. A desktop overlay for the Silkscreen PCB engine: describe a circuit, watch it get designed, reviewed, and written out as a KiCad board.",
   "author": {
     "name": "Srikanth Nani",
@@ -52,6 +52,8 @@
     "@tailwindcss/vite": "^4.1.12",
     "@tauri-apps/api": "^2",
     "@tauri-apps/plugin-autostart": "^2.5.0",
+    "@tauri-apps/plugin-dialog": "2.4.0",
+    "@tauri-apps/plugin-fs": "2.4.2",
     "@tauri-apps/plugin-http": "^2.5.2",
     "@tauri-apps/plugin-opener": "^2",
     "class-variance-authority": "^0.7.1",

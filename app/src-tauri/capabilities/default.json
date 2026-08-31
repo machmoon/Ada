@@ -21,6 +21,16 @@
     "autostart:allow-enable",
     "autostart:allow-disable",
     "autostart:allow-is-enabled",
+    "dialog:default",
+    "fs:allow-write-text-file",
+    "fs:allow-read-text-file",
+    {
+      "identifier": "opener:allow-open-path",
+      "allow": [
+        { "path": "$HOME/**/*.kicad_pcb" },
+        { "path": "$HOME/*.kicad_pcb" }
+      ]
+    },
     {
       "identifier": "http:default",
       "allow": [

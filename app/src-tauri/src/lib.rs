@@ -33,6 +33,11 @@ pub fn run() {
         .manage(shortcuts::RegisteredShortcuts::default())
         .manage(shortcuts::MoveWindowState::default())
         .plugin(tauri_plugin_opener::init())
+        // fs before dialog: the dialog plugin extends the fs runtime scope
+        // (each user-picked path becomes writable), so it must find a managed
+        // fs scope when it initialises.
+        .plugin(tauri_plugin_fs::init())
+        .plugin(tauri_plugin_dialog::init())
         // The fork deliberately ships no updater: upstream's endpoint was
         // removed from tauri.conf.json so a build phones nobody. Registering
         // the plugin anyway makes it read a `plugins.updater` block that is

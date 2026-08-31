@@ -24,6 +24,13 @@ export const KALEO_STORAGE_KEYS = {
   VOICE_ENABLED: "silkscreen_voice_enabled",
   ELEVENLABS_KEY: "silkscreen_elevenlabs_key",
   ELEVENLABS_VOICE_ID: "silkscreen_elevenlabs_voice_id",
+  /**
+   * The most recently finished run, serialized for the other window. The
+   * overlay and the dashboard are separate webviews with separate providers;
+   * this key plus the `storage` event is how a finished run crosses between
+   * them — see `src/lib/silkscreen/bridge.ts`.
+   */
+  LAST_RUN: "silkscreen_last_run",
 } as const;
 
 /**

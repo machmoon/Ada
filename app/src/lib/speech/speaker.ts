@@ -28,6 +28,8 @@ export interface SpeakerDeps {
   /** Read fresh per utterance so a settings change applies to the next digest. */
   getSettings: () => VoiceSettings;
   makeBackend: (settings: VoiceSettings) => SpeechBackend;
+  /** The free voice a failed paid backend retries on. */
+  makeFallback: () => SpeechBackend;
   warn: (message: string) => void;
 }
 
@@ -51,6 +53,7 @@ function defaultMakeBackend(settings: VoiceSettings): SpeechBackend {
 export function createSpeaker(deps?: Partial<SpeakerDeps>): Speaker {
   const getSettings = deps?.getSettings ?? loadVoiceSettings;
   const makeBackend = deps?.makeBackend ?? defaultMakeBackend;
+  const makeFallback = deps?.makeFallback ?? createWebSpeechBackend;
   const warn =
     deps?.warn ?? ((message: string) => console.warn(`[kaleo voice] ${message}`));
 
@@ -89,13 +92,30 @@ export function createSpeaker(deps?: Partial<SpeakerDeps>): Speaker {
       try {
         await backend.speak(trimmed);
       } catch (error) {
-        // Degrade to silence. The message never carries the API key: the
-        // backends are written to throw status codes and API names only.
+        // The message never carries the API key: the backends are written to
+        // throw status codes and API names only.
         warn(
           `${backend.name} text-to-speech failed: ${
             (error as Error)?.message ?? "unknown"
           }`
         );
+        // A paid voice that fails must not take the free one down with it:
+        // retry the utterance once on the built-in voice — unless a newer
+        // utterance or stop() has claimed the mouth meanwhile, or the failed
+        // backend already was the built-in voice (then degrade to silence).
+        if (backend.name !== "webspeech" && ticket === mine) {
+          try {
+            const fallback = makeFallback();
+            current = fallback;
+            await fallback.speak(trimmed);
+          } catch (fallbackError) {
+            warn(
+              `webspeech fallback failed: ${
+                (fallbackError as Error)?.message ?? "unknown"
+              }`
+            );
+          }
+        }
       } finally {
         if (ticket === mine) {
           speaking = false;

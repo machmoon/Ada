@@ -89,6 +89,9 @@ async function finishRun(
 
 beforeEach(() => {
   mockGenerateStream.mockReset();
+  // The storage bridge publishes every finished run; without this, a run from
+  // one test would be adopted into the next test's fresh hook on mount.
+  localStorage.clear();
 });
 
 afterEach(() => {
