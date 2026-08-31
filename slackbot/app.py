@@ -20,10 +20,12 @@ Run it::
 
 from __future__ import annotations
 
+import contextlib
 import json
 import logging
 import sys
 import threading
+import time
 import urllib.parse
 from collections import OrderedDict
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -48,6 +50,12 @@ MAX_DRAIN_BYTES = 2 * MAX_BODY_BYTES
 #: Socket timeout for one request. Slack's own delivery timeout is three
 #: seconds, so nothing legitimate is anywhere near this.
 SOCKET_TIMEOUT_S = 15.0
+#: Wall-clock ceiling on draining one over-length body. The socket timeout
+#: restarts on every read, so on its own it bounds *silence*, not time: a
+#: client dribbling one byte per window could hold a handler thread for hours
+#: while staying inside MAX_DRAIN_BYTES. Past this deadline the connection is
+#: abandoned instead.
+DRAIN_DEADLINE_S = 30.0
 #: How long a queued run waits for a slot before the channel is told the bot is
 #: busy. Long enough to absorb one run ahead of it, short enough that nobody
 #: sits watching a thread that will never answer.
@@ -247,22 +255,47 @@ def make_handler(dispatcher: Dispatcher) -> type[BaseHTTPRequestHandler]:
                 # Bounded, though: this happens before authentication, and
                 # reading a declared 10 GB from an unauthenticated client
                 # would hand it a handler thread for as long as it cared to
-                # dribble bytes. Past the bound the connection is closed
-                # instead, which is the only safe answer to a body we are
-                # never going to read.
-                self._drain(min(length, MAX_DRAIN_BYTES))
+                # dribble bytes. Past the bound — in bytes or in wall-clock
+                # time — the connection is closed instead, which is the only
+                # safe answer to a body we are never going to read.
                 self.close_connection = True
-                self._send(413, "body too large")
+                if self._drain(min(length, MAX_DRAIN_BYTES)):
+                    self._send(413, "body too large")
                 return None
             return self.rfile.read(length) if length > 0 else b""
 
-        def _drain(self, length: int, chunk: int = 64 << 10) -> None:
+        def _drain(self, length: int, chunk: int = 64 << 10) -> bool:
+            """Consume up to ``length`` bytes; False when abandoned early.
+
+            Bounded in time as well as bytes. The per-socket timeout restarts
+            on every read, so a client dribbling a byte per window would stay
+            inside it for hours; DRAIN_DEADLINE_S caps the whole drain. Reads
+            go through ``read1`` where the stream offers it — one underlying
+            read per call — so the shrinking timeout genuinely bounds each
+            iteration rather than being restarted inside a buffered fill.
+            """
+            deadline = time.monotonic() + DRAIN_DEADLINE_S
+            connection = getattr(self, "connection", None)
+            read1 = getattr(self.rfile, "read1", self.rfile.read)
             remaining = length
-            while remaining > 0:
-                block = self.rfile.read(min(chunk, remaining))
-                if not block:
-                    return
-                remaining -= len(block)
+            try:
+                while remaining > 0:
+                    left = deadline - time.monotonic()
+                    if left <= 0:
+                        return False
+                    if connection is not None:
+                        connection.settimeout(min(SOCKET_TIMEOUT_S, left))
+                    block = read1(min(chunk, remaining))
+                    if not block:
+                        return True
+                    remaining -= len(block)
+                return True
+            except OSError:  # timeout or a client that gave up mid-dribble
+                return False
+            finally:
+                if connection is not None:
+                    with contextlib.suppress(OSError):
+                        connection.settimeout(SOCKET_TIMEOUT_S)
 
         def _verified_body(self) -> bytes | None:
             """Read the body and prove it came from Slack, or answer 401.

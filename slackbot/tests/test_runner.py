@@ -311,3 +311,45 @@ def test_follow_up_verbs_are_refused_outside_a_thread(setup):
     messages = posted(transport)
     assert "in the thread of a design run" in messages
     assert "Fabrication order" not in messages
+
+
+def test_a_failing_slash_run_reports_into_its_own_thread(setup, monkeypatch):
+    """Greptile P1 on PR #13, second round.
+
+    A slash design anchors its own thread on its first message, but the outer
+    error handler only knew the original empty thread_ts — a pipeline failure
+    became a top-level channel message while the anchored thread sat stuck on
+    its progress message forever.
+    """
+    transport, runner = setup
+
+    def boom(*args, **kwargs):
+        raise ModelError("upstream fell over")
+
+    monkeypatch.setattr(R, "generate_pcb", boom)
+    runner.handle(parse_command("design a rail"), channel="C1", thread_ts="")
+
+    calls = transport.calls("chat.postMessage")
+    assert "thread_ts" not in calls[0]  # the anchor stays top-level
+    anchor = "1700000000.000100"
+    # Every message after the anchor — the failure included — hangs off it.
+    assert [c.get("thread_ts") for c in calls[1:]] == [anchor] * (len(calls) - 1)
+    assert "The model call failed" in posted(transport)
+
+
+def test_a_failing_threaded_mention_still_reports_into_its_thread(
+    setup, monkeypatch
+):
+    """The anchored-failure fix must not swallow the mention path: a run that
+    already had a thread reports its failure there via the outer handler."""
+    transport, runner = setup
+
+    def boom(*args, **kwargs):
+        raise ModelError("upstream fell over")
+
+    monkeypatch.setattr(R, "generate_pcb", boom)
+    runner.handle(parse_command("design a rail"), channel="C1", thread_ts="42.1")
+
+    calls = transport.calls("chat.postMessage")
+    assert calls and all(c.get("thread_ts") == "42.1" for c in calls)
+    assert "The model call failed" in posted(transport)

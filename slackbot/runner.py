@@ -196,7 +196,8 @@ class Runner:
             f"silkscreen: working on “{command.intent[:120]}”",
             B.accepted_blocks(command.intent, user),
         )
-        if not thread_ts:
+        anchored = not thread_ts
+        if anchored:
             # A slash command had nothing to thread under, so this first
             # message becomes the anchor and the run hangs off it. Without
             # this every slash-command run in a channel shares the key
@@ -209,20 +210,33 @@ class Runner:
             self._client, channel, progress_ts, command.intent, started
         )
 
-        model = self._model_factory()
-        output = self._config.workdir / run_id / "board.kicad_pcb"
-        output.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            model = self._model_factory()
+            output = self._config.workdir / run_id / "board.kicad_pcb"
+            output.parent.mkdir(parents=True, exist_ok=True)
 
-        result = generate_pcb(
-            model,
-            command.intent,
-            datasheets=command.datasheets or None,
-            output=output,
-            max_repairs=self._config.max_repairs,
-            time_limit_s=self._config.time_limit_s,
-            review=command.review,
-            on_event=tracker.on_event,
-        )
+            result = generate_pcb(
+                model,
+                command.intent,
+                datasheets=command.datasheets or None,
+                output=output,
+                max_repairs=self._config.max_repairs,
+                time_limit_s=self._config.time_limit_s,
+                review=command.review,
+                on_event=tracker.on_event,
+            )
+        except SlackError:
+            raise
+        except Exception as exc:  # noqa: BLE001 - the thread must hear it
+            if not anchored:
+                raise
+            # An anchored run made its own thread above; ``handle``'s outer
+            # handler only knows the original empty thread_ts, so reporting
+            # from there would put the failure top-level in the channel while
+            # the anchored thread sat stuck on its progress message forever.
+            log.exception("run failed: %s", command.verb)
+            self._report_failure(channel, thread_ts, exc)
+            return
         duration = time.monotonic() - started
 
         artifacts = [p for p in (result.board_path,) if p]

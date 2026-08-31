@@ -320,3 +320,56 @@ def test_the_handler_sets_a_socket_timeout():
 
     handler = make_handler(Dispatcher(CONFIG, FakeRunner()))
     assert handler.timeout == SOCKET_TIMEOUT_S
+
+
+def test_a_dribbled_oversized_body_is_abandoned_on_a_deadline(monkeypatch):
+    """Greptile P1 on PR #13, second round.
+
+    Bounding the drained *bytes* left the drained *time* unbounded: the socket
+    timeout restarts on every read, so an unauthenticated client sending one
+    byte per window could hold a handler thread for hours while staying inside
+    MAX_DRAIN_BYTES. The drain now runs against a wall-clock deadline and
+    abandons the connection past it, without ever owing the client its 413.
+    """
+    from slackbot import app as A
+    from slackbot.app import Dispatcher as D
+
+    class _Clock:
+        def __init__(self):
+            self.now = 0.0
+
+        def monotonic(self):
+            self.now += 10.0  # every look at the clock costs ten seconds
+            return self.now
+
+    monkeypatch.setattr(A, "time", _Clock())
+
+    class _Dribbler(io.RawIOBase):
+        """One byte per read, forever — the slow-loris body."""
+
+        def __init__(self):
+            self.consumed = 0
+
+        def read(self, size=-1):
+            self.consumed += 1
+            return b"x"
+
+        def readable(self):
+            return True
+
+    handler_cls = make_handler(D(CONFIG, FakeRunner()))
+    handler = handler_cls.__new__(handler_cls)
+    reader = _Dribbler()
+    handler.rfile = reader
+    handler.headers = {"Content-Length": str(64 << 20)}
+    handler.close_connection = False
+    sent: list[int] = []
+    handler._send = lambda code, payload="", content_type="": sent.append(code)
+
+    assert handler._read_body() is None
+    assert handler.close_connection is True
+    # Abandoned mid-drain: a client that dribbled past the deadline was never
+    # going to read a 413, so none is sent.
+    assert sent == []
+    # A handful of reads, not two megabytes of one-byte reads.
+    assert reader.consumed < 16
