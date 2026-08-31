@@ -64,6 +64,37 @@ prerequisites). The machine this port was written on does not have one, so
 but no Tauri binary has been built or run. Treat the first successful
 `tauri dev` as an open task, not a formality.
 
+## Keys, and setting up a team
+
+The mechanics of the Gemini key live in
+[docs/install.md](../docs/install.md#google_api_key-what-it-is-for); this
+section is what is specific to Kaleo and to sharing a checkout with teammates.
+
+**Kaleo never sees the Gemini key.** The key belongs to the Python engine's
+process environment on each machine — the app is an HTTP client on loopback
+and has nowhere to put a key by design. Each teammate puts `GOOGLE_API_KEY`
+in their own repo-root `.env` (gitignored) and starts the engine as above. A
+missing key is a distinct error state in the UI ("setup", not "outage") that
+says exactly this.
+
+**Never commit a key.** `.env` is gitignored for a reason; a key that touches
+git history is burned even after deletion. Share a team key out-of-band (a
+password manager), or better, have each person cut their own free key.
+
+**Other providers' keys do nothing here.** The pipeline is Gemini through the
+engine's `Model` protocol, and the hackathon rules require Gemini via the
+Gemini API or Vertex — a Cerebras/OpenAI/etc. key has nothing to plug into.
+The custom-AI-provider screens still visible under the dashboard are
+leftover Pluely chat plumbing scheduled for removal, not a supported path;
+keys entered there configure a chat feature Kaleo does not use.
+
+**A deployed team engine** (Cloud Run, one shared instance) is gated by a
+shared access token rather than per-person Google keys — the service holds
+the Gemini key server-side and refuses requests without the token (service
+PR #21). Kaleo's Engine page takes an optional access token alongside the
+address; remote engines are accepted over HTTPS only, so the token never
+travels unencrypted, while plain-http stays loopback-only.
+
 ## State of the port
 
 Honestly: this is a fork mid-surgery. The silkscreen surfaces — the engine
