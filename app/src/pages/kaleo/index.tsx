@@ -2,7 +2,7 @@ import { useCallback } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { ErrorBoundary } from "react-error-boundary";
 import { LayoutDashboardIcon } from "lucide-react";
-import { Button, Card, DragButton, Updater } from "@/components";
+import { Button, Card, DragButton } from "@/components";
 import { ErrorLayout } from "@/layouts";
 import { useApp } from "@/hooks";
 import { useSilkscreenRun } from "@/contexts";
@@ -80,7 +80,6 @@ const Kaleo = () => {
             >
               <LayoutDashboardIcon className="size-4" />
             </Button>
-            <Updater />
             <DragButton />
           </div>
 

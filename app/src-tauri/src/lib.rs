@@ -36,7 +36,7 @@ pub fn run() {
     let mut builder = tauri::Builder::default()
         .plugin(
             tauri_plugin_sql::Builder::default()
-                .add_migrations("sqlite:pluely.db", db::migrations())
+                .add_migrations("sqlite:kaleo.db", db::migrations())
                 .build(),
         )
         .manage(AudioState::default())
@@ -48,7 +48,11 @@ pub fn run() {
         .manage(shortcuts::LicenseState::default())
         .manage(shortcuts::MoveWindowState::default())
         .plugin(tauri_plugin_opener::init())
-        .plugin(tauri_plugin_updater::Builder::new().build())
+        // The fork deliberately ships no updater: upstream's endpoint was
+        // removed from tauri.conf.json so a build phones nobody. Registering
+        // the plugin anyway makes it read a `plugins.updater` block that is
+        // no longer there, and its deserialiser panics on the null at
+        // startup -- so the app must not register what it does not configure.
         .plugin(tauri_plugin_http::init())
         .plugin(tauri_plugin_keychain::init())
         .plugin(tauri_plugin_shell::init()) // Add shell plugin

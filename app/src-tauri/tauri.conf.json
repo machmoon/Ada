@@ -47,7 +47,7 @@
     ],
     "resources": [
       "info.plist",
-      "pluely.desktop"
+      "kaleo.desktop"
     ],
     "macOS": {
       "minimumSystemVersion": "10.13"
@@ -56,7 +56,7 @@
   "plugins": {
     "sql": {
       "preload": [
-        "sqlite:pluely.db"
+        "sqlite:kaleo.db"
       ]
     }
   }
