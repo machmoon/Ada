@@ -53,6 +53,28 @@ jobs:
       - run: npm run build
         working-directory: frontend
 
+  # The desktop client. Its hardening tests read the shipped Tauri config and
+  # assert two properties that have each shipped broken once: that the http
+  # capability scope parses at all (one unparseable entry rejects the whole
+  # scope, blocking every request the app makes), and that no window is
+  # excluded from screen capture. Guards nothing catches locally are guards
+  # that rot, so they run here.
+  app:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: app/package-lock.json
+      - run: npm ci
+        working-directory: app
+      - run: npx tsc --noEmit
+        working-directory: app
+      - run: npx vitest run
+        working-directory: app
+
   docker:
     runs-on: ubuntu-latest
     steps:
