@@ -175,7 +175,7 @@ Platform-by-platform commands are in [docs/install.md](docs/install.md#kicad-opt
 | `order.py` — order options, manufacturability preflight | **Working** · blocks an unrouted board |
 | `mcp/` — MCP server over stdio | **Working** · 43 tests |
 | `audit/` — optional visual design review | **Working** · 52 tests |
-| `service/` — Cloud Run + Firestore cache | **Working** · 146 tests · live at <https://silkscreen-958855443063.us-central1.run.app> |
+| `service/` — Cloud Run + Firestore cache | **Working** · 146 tests · live at <https://silkscreen-vqdj4x5qbq-uc.a.run.app> |
 | `frontend/` — Svelte review UI, served by the service | **Working** · persistent orchestrator chat, expandable traces, session JSON, review, schematic, placement and board tabs |
 | `engine/silkscreen/placement/` — verifier-grounded repair and company profiles | **Working** · deterministic and Gemini policies; experimental providers are opt-in |
 | `constraints.py` — approved build contract and post-route receipt | **Working** · opt-in, fail-closed, and deterministically tested |
@@ -543,11 +543,12 @@ gcloud run deploy silkscreen --source . --region us-central1 \
 ```
 
 A live instance is running at
-<https://silkscreen-958855443063.us-central1.run.app> (deployed 2026-08-31 from
-`main`, project `kaleo-hack-2026`; the Gemini key comes from Secret Manager, the
-fact cache from Firestore). Probe it with `/readyz`, not `/healthz` — Google's
-frontend intercepts `/healthz` on `run.app` domains at the edge and answers 404
-before the request reaches the container.
+<https://silkscreen-vqdj4x5qbq-uc.a.run.app> (deployed 2026-08-31, project
+`project-e9121780-d00d-4f9b-8b5`; the Gemini key comes from Secret Manager and
+`POST /generate` requires an access token, so browsing to it costs nobody
+anything). Probe liveness with `GET /`, not `/healthz` — Google's frontend
+intercepts `/healthz` on `run.app` domains at the edge and answers 404 before
+the request reaches the container.
 
 `POST /generate` with `{"intent": "...", "datasheets": {"PART": "url"}}` returns
 the board, the emitted `.kicad_pcb`, and a versioned `schematic` topology block
