@@ -2,6 +2,7 @@
   import Citation from './Citation.svelte'
   import SeverityChip from './SeverityChip.svelte'
   import { formatParts } from '../lib/format.js'
+  import { findingGuideSteps, offerGuide } from '../lib/guide.js'
   import { severityInfo } from '../lib/severity.js'
 
   let {
@@ -23,6 +24,17 @@
   // Selecting a finding with no parts would highlight nothing, so the card
   // only becomes a control once there is something to point at.
   const selectable = $derived(Boolean(onselect) && parts.length > 0)
+
+  // The card offers the guide itself rather than threading a callback down
+  // through ReviewResults: everything the two steps need is already here.
+  // Selecting first keeps step one's selector honest — it scopes to the
+  // selected card, and asking for a guide is as deliberate a selection as a
+  // click on the title. Guarded so a re-tap cannot toggle the selection off
+  // and leave the guide pointing into an unselected card.
+  function guideMe() {
+    if (!selected && onselect) onselect()
+    offerGuide(findingGuideSteps(finding), `Walk through "${finding.title}"?`)
+  }
 </script>
 
 <article class="card" data-testid="finding-card" data-material="panel" data-sev={info.key} data-selected={selected} data-parts={parts.join(' ')} class:selected>
@@ -58,6 +70,9 @@
       {/if}
       {#if selectable && boardEnabled}
         <button type="button" class="view" data-testid="finding-card-show-board" onclick={onshowboard}>Show on board</button>
+        <!-- Inert secondary styling like the buttons beside it: the guide
+             points and narrates, it never applies anything. -->
+        <button type="button" class="view" data-testid="finding-card-guide" onclick={guideMe}>Guide me</button>
       {/if}
       <div class="spacer"></div>
       {#if fix}

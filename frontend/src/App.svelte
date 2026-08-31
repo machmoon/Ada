@@ -3,6 +3,7 @@
   import BoardWell from './components/BoardWell.svelte'
   import ConversationView from './components/ConversationView.svelte'
   import DebugConsole from './components/DebugConsole.svelte'
+  import GuidePointer from './components/GuidePointer.svelte'
   import ReviewResults from './components/ReviewResults.svelte'
   import SchematicWell from './components/SchematicWell.svelte'
   import SideRail from './components/SideRail.svelte'
@@ -10,6 +11,7 @@
   import TitleBar from './components/TitleBar.svelte'
   import { ApiError, chatStream, normalizeRequest } from './lib/api.js'
   import { highlightRefs, readPlacements } from './lib/board.js'
+  import { resetGuide } from './lib/guide.js'
   import { pcbText } from './lib/download.js'
   import { logEvent } from './lib/log.js'
   import {
@@ -41,6 +43,9 @@
   async function submit(raw, options = {}) {
     const request = normalizeRequest(raw)
     selected = -1
+    // Silently, not as a dismissal: the findings a running guide pointed
+    // into are about to be replaced, and its targets with them.
+    resetGuide()
     startRun(request, {
       preserve: options.preserve === true,
       message: options.message ?? request.intent,
@@ -152,6 +157,7 @@
 
   function newBoard() {
     selected = -1
+    resetGuide()
     logEvent('ui.new-board', 'started another board', {})
     goTab('chat')
     resetRun()
@@ -189,6 +195,7 @@
 
   function editRequest() {
     goTab('chat')
+    resetGuide()
     resetRun()
   }
 </script>
@@ -252,6 +259,11 @@
 
     <SideRail result={$run.result} {reviewed} />
   </div>
+
+  <!-- The guided pointer's overlay. Always mounted, renders nothing while
+       idle; a step that names a tab switches through goTab like any other
+       navigation, so the hash stays the single tab authority. -->
+  <GuidePointer ongoto={goTab} />
 
   <!-- A push drawer between the body and the bar, not an overlay: it takes its
        height out of the layout, so nothing is ever hidden behind it. -->
