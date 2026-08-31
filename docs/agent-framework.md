@@ -120,8 +120,8 @@ Gemini API documents support for PDFs up to 50 MB or 1000 pages at 258 tokens pe
 including interpretation of diagrams, charts, and tables
 ([ai.google.dev](https://ai.google.dev/gemini-api/docs/document-processing)). The
 `media_resolution` parameter, documented on the same page as a Gemini 3 control accepting
-low, medium, or high, is set to `high` by default in `GeminiModel.__init__` because
-datasheet pin tables are set in small type.
+low, medium, or high, is set to the API enum value `MEDIA_RESOLUTION_HIGH` by default in
+`GeminiModel.__init__` because datasheet pin tables are set in small type.
 
 ### Where the agent structure lives
 

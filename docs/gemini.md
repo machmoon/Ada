@@ -166,32 +166,18 @@ and no secret would need to be set.
 
 ## Things worth flagging
 
-The `media_resolution` value is probably wrong. `GeminiModel` defaults `media_resolution` to
-the string `"high"` at `model.py:111` and puts it in the request config at `model.py:160`.
-Google documents the accepted values as `MEDIA_RESOLUTION_LOW`, `MEDIA_RESOLUTION_MEDIUM`,
-`MEDIA_RESOLUTION_HIGH` and `MEDIA_RESOLUTION_UNSPECIFIED`
-([media resolution docs](https://ai.google.dev/gemini-api/docs/generate-content/media-resolution)),
-and the SDK's `MediaResolution` enum defines exactly those four names and values
-([`types.py`](https://raw.githubusercontent.com/googleapis/python-genai/main/google/genai/types.py),
-lines 661-671). That enum subclasses `CaseInSensitiveEnum`, whose `_missing_` hook tries the
-supplied value as an uppercased and then a lowercased member name
-([`_common.py`](https://raw.githubusercontent.com/googleapis/python-genai/main/google/genai/_common.py),
-lines 657-677). Neither `HIGH` nor `high` is a member name, so the lookup falls through to the
-branch that emits a "high is not a valid MediaResolution" warning and constructs an unknown
-enum member carrying the literal string, which is then what goes on the wire. I could not run
-this against the live API, because `google-genai` is not installed in this working copy, so I
-have not confirmed the server's response. The safe change is to pass `"MEDIA_RESOLUTION_HIGH"`,
-and the safest is to import `types.MediaResolution` and use the enum member. This matters more
-than it sounds, because the comment at `model.py:128` says high resolution is the lever that
-makes datasheet pin tables legible; if the value is being dropped, the pipeline is silently
-reading datasheets at the default resolution.
+The earlier `media_resolution="high"` bug is resolved. Google accepts
+`MEDIA_RESOLUTION_LOW`, `MEDIA_RESOLUTION_MEDIUM`, `MEDIA_RESOLUTION_HIGH` and
+`MEDIA_RESOLUTION_UNSPECIFIED`
+([media resolution docs](https://ai.google.dev/gemini-api/docs/generate-content/media-resolution));
+`GeminiModel` now sends `MEDIA_RESOLUTION_HIGH` for document requests. An offline regression
+test captures the generated request config, specifically covering the document-only branch
+that exposed the bug.
 
-There is no live-path test. Every test uses `ScriptedModel` or a stub, and nothing exercises
-`GeminiModel` against the real SDK, not even a skipped-by-default integration test gated on
-the presence of a key. The pattern already exists in the repo, since
-`engine/tests/test_kicad.py:29` uses a `pytestmark = pytest.mark.skipif(...)` guard, so a
-key-gated smoke test would fit existing conventions. As things stand, a typo in a model ID
-constant or a breaking SDK change would not be caught by CI.
+The live path now has a key-gated smoke test that calls the cheap model and verifies a marker
+in its response. It skips unless `GOOGLE_API_KEY` is set, so the default suite remains offline
+and free. The document request-config test is fully offline, which lets CI catch invalid enum
+values without uploading a PDF or spending a model call.
 
 The `generate_content` surface is being repositioned. Google's current documentation labels
 several `generate_content` pages as "Gemini Generate Content API (Legacy)" and shows a newer
@@ -220,6 +206,6 @@ The requirement is met on both counts as written. The models named in the code a
 `gemini-3.7-flash` and `gemini-3.5-flash-lite`, both newer than the 3.5 floor, and they are
 called through the Gemini API using the official `google-genai` SDK. The requirement offers
 Vertex AI as an alternative rather than an addition, so not supporting it is not a failure.
-The two things genuinely worth fixing are the `media_resolution` string, which looks like a
-real bug rather than a documentation gap, and the stale `GOOGLE_CLOUD_LOCATION` entry in
-`.env.example`, which implies a Vertex AI configuration path that does not exist.
+The stale `GOOGLE_CLOUD_LOCATION` entry in `.env.example` remains worth fixing because it
+implies a Vertex AI configuration path that does not exist. The invalid `media_resolution`
+string previously noted here has been corrected and covered by a regression test.

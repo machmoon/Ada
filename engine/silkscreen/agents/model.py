@@ -108,7 +108,7 @@ class GeminiModel:
         model: str = DEFAULT_MODEL,
         *,
         api_key: str | None = None,
-        media_resolution: str = "high",
+        media_resolution: str = "MEDIA_RESOLUTION_HIGH",
     ):
         try:
             from google import genai
@@ -125,8 +125,10 @@ class GeminiModel:
         self._genai = genai
         self._client = genai.Client(api_key=key)
         self.model = model
-        # Datasheet pin tables are small type; 'high' is the lever that makes
-        # them legible, at the cost of more image tokens per page.
+        # Datasheet pin tables are small type; high resolution is the lever
+        # that makes them legible, at the cost of more image tokens per page.
+        # Use the API enum value, not the display label "high": the latter is
+        # serialized verbatim by google-genai and rejected by the API.
         self.media_resolution = media_resolution
 
     def generate(

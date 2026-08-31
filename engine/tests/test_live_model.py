@@ -17,10 +17,13 @@ SDK response object that no longer carries ``.text``.
 from __future__ import annotations
 
 import os
+import sys
+from types import ModuleType, SimpleNamespace
 
 import pytest
 from silkscreen.agents.model import (
     CHEAP_MODEL,
+    Document,
     GeminiModel,
     ModelError,
     strip_code_fence,
@@ -42,6 +45,36 @@ def test_gemini_model_without_api_key_raises_model_error(monkeypatch):
         GeminiModel()
 
     assert "GOOGLE_API_KEY" in str(excinfo.value)
+
+
+def test_document_request_uses_valid_high_media_resolution(monkeypatch):
+    """Catch request-config errors without making a live Gemini call."""
+    captured = {}
+
+    class FakeModels:
+        def generate_content(self, **kwargs):
+            captured.update(kwargs)
+            return SimpleNamespace(text="ok")
+
+    class FakeClient:
+        def __init__(self, **_kwargs):
+            self.models = FakeModels()
+
+    fake_google = ModuleType("google")
+    fake_genai = ModuleType("google.genai")
+    fake_genai.Client = FakeClient
+    fake_google.genai = fake_genai
+    monkeypatch.setitem(sys.modules, "google", fake_google)
+    monkeypatch.setitem(sys.modules, "google.genai", fake_genai)
+
+    model = GeminiModel(api_key="test-key")
+    response = model.generate(
+        "read this datasheet",
+        documents=[Document(url="https://example.com/part.pdf")],
+    )
+
+    assert response == "ok"
+    assert captured["config"]["media_resolution"] == "MEDIA_RESOLUTION_HIGH"
 
 
 # ------------------------------------------------------------- live Gemini

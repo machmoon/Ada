@@ -86,7 +86,7 @@ ADK decision (reversed 2026-08-30): the team archived ADK adoption on 2026-08-29
 
 Found in a verification pass over the docs and recent commits; left open on purpose. Do not fix these as drive-bys — when one is addressed, do it deliberately, with tests, and remove it from this list.
 
-1. `engine/silkscreen/agents/model.py:111` passes `media_resolution="high"`, which matches no member of the SDK's `MediaResolution` enum (values are `MEDIA_RESOLUTION_HIGH` etc.), so high-resolution datasheet reading is likely silently not applied.
+1. ~~`GeminiModel` passed the invalid `media_resolution="high"`~~ — resolved: document requests now send the API enum value `MEDIA_RESOLUTION_HIGH`, with an offline regression test that inspects the request config.
 2. ~~The Firestore fact cache is a placeholder~~ — resolved in `4249c5b`: the write-back stores real facts and cache hits feed `preloaded_facts` into the pipeline, with service tests.
 3. `.env.example` documents `GOOGLE_CLOUD_LOCATION`, which nothing reads (no Vertex AI path exists); `USE_FIRESTORE` is read by `service/app.py` but documented nowhere (documentation half now tracked as the ops-polish row under TODO.txt feature 8).
 4. ~~No test, even a key-gated one, exercises the live `GeminiModel`~~ — resolved by `engine/tests/test_live_model.py`: one gated call to `CHEAP_MODEL` asserts the response is non-empty text carrying a requested marker, plus an ungated test that construction without `GOOGLE_API_KEY` raises `ModelError`. The live tests skip unless `GOOGLE_API_KEY` is set, so the default suite stays offline and free.
