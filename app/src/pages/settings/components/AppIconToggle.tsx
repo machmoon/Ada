@@ -15,8 +15,8 @@ export const AppIconToggle = ({ className }: AppIconToggleProps) => {
   return (
     <div id="app-icon" className={`space-y-2 ${className}`}>
       <Header
-        title="App Icon Stealth Mode"
-        description="Control dock/taskbar icon visibility when window is hidden for maximum discretion"
+        title="Dock Icon"
+        description="Kaleo lives in the floating bar, so its Dock icon is optional. Hide it to keep the Dock uncluttered; the app stays fully visible on screen and in screen shares either way."
         isMainTitle
       />
       <div className="flex items-center justify-between">

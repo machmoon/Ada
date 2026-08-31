@@ -140,7 +140,7 @@ export const Warning = ({ isVadMode }: WarningProps) => {
           <div className="text-[10px] text-muted-foreground space-y-1 pt-2 border-t border-border/50">
             <p>
               <strong>Tip:</strong> Use Auto-detect for hands-free operation
-              during interviews.
+              for hands-free capture.
             </p>
             <p>
               <strong>Tip:</strong> Use Manual mode when you need precise
