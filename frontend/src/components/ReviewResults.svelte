@@ -44,7 +44,7 @@
   <!-- Gated on the list, not on the status: the placer attaches a warning to
        every FEASIBLE solve, which is the ordinary outcome on a real board. -->
   {#if result.warnings.length}
-    <ul class="warnings" data-testid="review-results-warnings" class:fallback={result.status === 'fallback'}>
+    <ul class="warnings" data-testid="review-results-warnings" data-material="panel" class:fallback={result.status === 'fallback'}>
       {#each result.warnings as warning, i (i)}
         <li data-testid="review-results-warning">{warning}</li>
       {/each}
@@ -73,7 +73,7 @@
   <div class="rule last"></div>
 
   {#if skipped}
-    <div class="state" data-testid="review-results-state" data-state="skipped">
+    <div class="state" data-testid="review-results-state" data-state="skipped" data-material="panel">
       <div class="state-title" data-testid="review-results-state-title">Review was skipped</div>
       <p class="state-body" data-testid="review-results-state-body">
         This run was submitted with the review turned off, so the board was placed but nothing
@@ -81,7 +81,7 @@
       </p>
     </div>
   {:else if findings.length === 0}
-    <div class="state" data-testid="review-results-state" data-state="clean">
+    <div class="state" data-testid="review-results-state" data-state="clean" data-material="panel">
       <div class="state-title" data-testid="review-results-state-title">Nothing to flag</div>
       <p class="state-body" data-testid="review-results-state-body">
         The reviewer found no blockers, marginal choices, or notes worth raising against the

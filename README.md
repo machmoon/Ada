@@ -29,7 +29,7 @@ Every stage is a real KiCad file you can open and inspect on its own, so you can
 where a design went wrong instead of only seeing the last artifact.
 
 ```
-703 tests collected — no network, no API key, no KiCad install
+706 tests collected — no network, no API key, no KiCad install
 ```
 
 ---
@@ -82,7 +82,7 @@ that consumes the file. Install it if you are a person who wants to see a board.
 | Component | State |
 |---|---|
 | `kicad.py` — `.kicad_pcb` read/write | **Working** · 28 tests |
-| `packing.py` — CP-SAT placer | **Working** · 43 tests |
+| `packing.py` — CP-SAT placer | **Working** · 44 tests |
 | `netlist.py` — validated circuit IR | **Working** · 21 tests |
 | `schematic.py` — `.kicad_sch` + `.kicad_pro` emission | **Working** · 22 tests · KiCad ERC clean |
 | `routing.py` — two-layer grid autorouter | **Working, partial by design** · 20 tests — see below |
@@ -95,7 +95,7 @@ that consumes the file. Install it if you are a person who wants to see a board.
 | `order.py` — order options, manufacturability preflight | **Working** · blocks an unrouted board |
 | `mcp/` — MCP server over stdio | **Working** · 43 tests |
 | `audit/` — optional visual design review | **Working** · 52 tests |
-| `service/` — Cloud Run + Firestore cache | **Working** · 106 tests |
+| `service/` — Cloud Run + Firestore cache | **Working** · 108 tests |
 | `frontend/` — Svelte review UI, served by the service | **Working** · persistent orchestrator chat, expandable model/tool traces, session JSON, review, schematic and board tabs |
 | Overlay UI, guided cursor | Not built (mockups only) |
 
@@ -317,7 +317,7 @@ treats the board file as the interface.
 | Requires KiCad running | Yes | **No** |
 | Headless / CI | Hard | **Native** |
 | Platform lock | KiCad's plugin loader | **None — pure Python** |
-| Testable without KiCad | No | **Yes, all 703 tests** |
+| Testable without KiCad | No | **Yes, all 706 tests** |
 
 ### What it reads
 
@@ -470,6 +470,12 @@ controls remain beside the failed or incomplete turn. **Save session** exports a
 JSON snapshot containing the transcript, trace, result, and board artifact; **Open session**
 restores it locally. Treat that debug export as sensitive if a prompt contains private
 design information.
+
+Appearance stays local to the browser. **Glass** in the title bar switches the whole
+rendered interface from the opaque Drafting Table skin to a translucent material, while
+**Night** independently selects its light or dark reading. Both choices persist across
+reloads; reduced-transparency system settings replace blur with opaque surfaces, and the
+PCB canvas keeps its fixed KiCad colours in every combination.
 
 The compact artifact cards open the existing views. **Schematic** draws the validated
 circuit as generic symbols with physical pin numbers and net-labelled connections; it does
@@ -650,7 +656,7 @@ engine/
       pipeline.py   prompt -> PCB
       adk/          ADK dynamic workflow over the same stage bodies
     audit/        optional visual review of a finished board
-  tests/          703 tests — no network, no API keys, no KiCad
+  tests/          706 tests — no network, no API keys, no KiCad
     fixtures/     ref.kicad_pcb -- 11-footprint board fixture
 scripts/
   demo.py         end-to-end: read -> place -> write -> verify
@@ -660,7 +666,7 @@ frontend/
   src/
     lib/          api client, run store, severity + format helpers
     components/   title bar, intent form, progress, findings, side rail
-    styles/       the Drafting Table design tokens
+    styles/       paper/glass material and light/dark design tokens
   dist/           built bundle -- service/app.py serves it at /
 vendor/
   mudriknow/      third-party (MIT), reference only -- not imported, not tested
@@ -731,7 +737,7 @@ docker build .                                      # the `docker` job
 
 ### Expected output
 
-**1. Test suite** — 703 tests (live-model and local-simulator cases skip when
+**1. Test suite** — 706 tests (live-model and local-simulator cases skip when
 their optional dependency is unavailable):
 
 ```

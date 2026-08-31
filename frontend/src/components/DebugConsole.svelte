@@ -257,6 +257,7 @@
   aria-label="Debug console"
   style:height="{height}px"
   data-testid="debug-console"
+  data-material="chrome"
 >
   <!-- A focusable separator is the ARIA window-splitter pattern, and the one
        role aria-valuenow is defined on; Svelte's checker reads every separator

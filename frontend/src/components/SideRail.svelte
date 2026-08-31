@@ -33,7 +33,7 @@
   )
 </script>
 
-<aside class="rail" data-testid="side-rail">
+<aside class="rail" data-testid="side-rail" data-material="chrome">
   <!-- A skipped review checked nothing, so the heading and the net row have to
        say what actually ran instead. -->
   <div class="lbl heading" data-testid="side-rail-heading">{reviewed ? 'What was checked' : 'What ran'}</div>

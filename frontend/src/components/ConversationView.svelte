@@ -114,8 +114,8 @@
       {#each entries as entry (entry.id)}
         {#if entry.type === 'message'}
           <article class="message" class:user={entry.role === 'user'} class:assistant={entry.role === 'assistant'}>
-            <div class="avatar mono">{entry.role === 'user' ? 'YOU' : 'AI'}</div>
-            <div class="message-body">
+            <div class="avatar mono" data-material="tint">{entry.role === 'user' ? 'YOU' : 'AI'}</div>
+            <div class="message-body" data-material={entry.role === 'user' ? 'panel' : undefined}>
               <div class="role lbl">{entry.role === 'user' ? 'You' : 'Silkscreen orchestrator'}</div>
               <p>{entry.text}</p>
               {#if entry.result}
@@ -135,15 +135,15 @@
     </div>
 
     {#if $run.phase === 'clarification'}
-      <form class="reply" onsubmit={clarify}>
+      <form class="reply" onsubmit={clarify} data-material="sticky">
         <label class="lbl" for="clarification">Your clarification</label>
         <div>
-          <textarea id="clarification" rows="2" bind:value={answer} placeholder="Add the missing electrical constraint…"></textarea>
+          <textarea id="clarification" rows="2" bind:value={answer} placeholder="Add the missing electrical constraint…" data-material="tint"></textarea>
           <button type="submit" disabled={!answer.trim()}>Send</button>
         </div>
       </form>
     {:else if $run.phase === 'error'}
-      <section class="recovery" data-testid="chat-recovery">
+      <section class="recovery" data-testid="chat-recovery" data-material="panel">
         <div class="lbl">Run failed</div>
         <p>{$run.error?.message || 'The run did not complete.'}</p>
         <div class="actions">
@@ -197,7 +197,7 @@
   .user .message-body { padding: 10px 12px; background: var(--well); border: 1px solid var(--rule-soft); }
   .role { margin-bottom: 6px; }
   .message p { white-space: pre-wrap; overflow-wrap: anywhere; color: var(--ink); font-size: var(--fs-body); line-height: 1.6; }
-  .reply { position: sticky; bottom: 0; padding: 12px 0 3px; background: var(--paper); border-top: 1px solid var(--rule); }
+  .reply { position: sticky; bottom: 0; padding: 12px 0 3px; background: var(--sticky-surface); border-top: 1px solid var(--rule); }
   .reply > div { display: flex; gap: 8px; margin-top: 7px; }
   .reply textarea { min-width: 0; flex-grow: 1; resize: vertical; padding: 10px 11px; background: var(--surface); border: 1px solid var(--rule); line-height: 1.5; }
   .reply button, .primary { padding: 0 16px; border: 0; background: var(--accent); color: var(--accent-ink); }

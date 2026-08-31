@@ -11,17 +11,17 @@
 </script>
 
 <div class="artifacts" data-testid="chat-artifacts">
-  <button type="button" disabled={!schematicEnabled} onclick={() => onopen?.('schematic')}>
+  <button type="button" disabled={!schematicEnabled} onclick={() => onopen?.('schematic')} data-material="panel">
     <span class="lbl">Schematic</span>
     <strong>{schematicEnabled ? 'Validated topology' : 'Unavailable'}</strong>
     <span>Open drawing →</span>
   </button>
-  <button type="button" disabled={!boardEnabled} onclick={() => onopen?.('board')}>
+  <button type="button" disabled={!boardEnabled} onclick={() => onopen?.('board')} data-material="panel">
     <span class="lbl">PCB</span>
     <strong>{parts} placed parts</strong>
     <span>Open board →</span>
   </button>
-  <button type="button" onclick={() => onopen?.('review')}>
+  <button type="button" onclick={() => onopen?.('review')} data-material="panel">
     <span class="lbl">Review</span>
     <strong>{findings} findings</strong>
     <span>Open details →</span>

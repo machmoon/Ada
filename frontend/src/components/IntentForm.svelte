@@ -121,6 +121,7 @@
     rows="3"
     placeholder="an STM32F030 board with a 3.3 V regulator and a motor driver"
     data-testid="intent-form-intent"
+    data-material="panel"
   ></textarea>
 
   <div class="counter" class:over={tooLarge} data-testid="intent-form-counter">
@@ -136,7 +137,7 @@
     <div class="presets" data-testid="intent-form-datasheet-presets">
       <div class="preset-heading lbl">available to use</div>
       {#each DATASHEET_PRESETS as preset (preset.part)}
-        <div class="preset" data-testid="intent-form-datasheet-preset">
+        <div class="preset" data-testid="intent-form-datasheet-preset" data-material="panel">
           <div class="preset-copy">
             <span class="mono preset-part">{preset.part}</span>
             <span class="preset-maker">{preset.manufacturer}</span>
@@ -163,15 +164,15 @@
     <div class="sheet-rows">
       {#each rows as row, i (i)}
         <div class="sheet-row" data-testid="intent-form-datasheet-row">
-          <input class="mono part" bind:value={row.part} placeholder="U1" aria-label="Part reference" data-testid="intent-form-datasheet-part" />
-          <input class="mono url" bind:value={row.url} placeholder="https://…/STM32F030C8.pdf" aria-label="Datasheet URL" data-testid="intent-form-datasheet-url" />
+          <input class="mono part" bind:value={row.part} placeholder="U1" aria-label="Part reference" data-testid="intent-form-datasheet-part" data-material="panel" />
+          <input class="mono url" bind:value={row.url} placeholder="https://…/STM32F030C8.pdf" aria-label="Datasheet URL" data-testid="intent-form-datasheet-url" data-material="panel" />
         </div>
       {/each}
       <button type="button" class="add" data-testid="intent-form-add-datasheet" onclick={addRow}>Add another datasheet</button>
     </div>
   </details>
 
-  <section class="orchestrator" data-testid="intent-form-orchestrator">
+  <section class="orchestrator" data-testid="intent-form-orchestrator" data-material="panel">
     <div class="orchestrator-heading">
       <span class="lbl">orchestrator</span>
       <span class="orchestrator-note">Chooses clarification and calls the board generator</span>
@@ -179,7 +180,7 @@
     <div class="orchestrator-controls">
       <label class="orchestrator-control">
         <span>Model</span>
-        <select bind:value={orchestratorModel} data-testid="intent-form-orchestrator-model">
+        <select bind:value={orchestratorModel} data-testid="intent-form-orchestrator-model" data-material="tint">
           {#each ORCHESTRATOR_MODELS as option (option.id)}
             <option
               value={option.id}
@@ -194,7 +195,7 @@
 
       <label class="orchestrator-control">
         <span>Reasoning effort</span>
-        <select bind:value={thinkingLevel} data-testid="intent-form-thinking-level">
+        <select bind:value={thinkingLevel} data-testid="intent-form-thinking-level" data-material="tint">
           <option value="auto">Auto · model default</option>
           <option value="low">Fast · low</option>
           <option value="medium">Standard · medium</option>
@@ -205,7 +206,7 @@
 
       <label class="orchestrator-control">
         <span>Request pace</span>
-        <select bind:value={quotaRpm} data-testid="intent-form-quota-rpm">
+        <select bind:value={quotaRpm} data-testid="intent-form-quota-rpm" data-material="tint">
           <option value="auto">Auto · no app limit</option>
           <option value="15">Fast · 15 RPM</option>
           <option value="6">Demo-safe · 6 RPM</option>
@@ -231,6 +232,7 @@
         max={MAX_TIME_LIMIT_S}
         step="1"
         data-testid="intent-form-budget"
+        data-material="panel"
       />
       <span class="unit">{noSolverBudget ? 'unlimited' : 'seconds'}</span>
       <button
@@ -278,7 +280,6 @@
     padding: 12px 14px;
     background: var(--surface);
     border: 1px solid var(--rule-soft);
-    border-radius: 0;
     font-size: var(--fs-body);
     line-height: 1.55;
     resize: none;

@@ -89,7 +89,7 @@
 </script>
 
 <figure class="board" data-testid="board-well">
-  <div class="frame">
+  <div class="frame" data-material="canvas">
     <div class="lbl well-label" data-testid="board-well-label">{layerCaption(placements.parts)}</div>
 
     <div class="scroll" data-testid="board-well-scroll" bind:clientWidth={availableW} bind:clientHeight={availableH}>
@@ -179,7 +179,7 @@
         </ul>
 
         {#if tip}
-          <div class="tip" data-testid="board-well-tip" class:below={tip.below} style="left:{tip.left}px; top:{tip.top}px;">
+          <div class="tip" data-testid="board-well-tip" data-material="popover" class:below={tip.below} style="left:{tip.left}px; top:{tip.top}px;">
             <div class="mono tip-ref">{tip.part.ref}</div>
             <dl class="tip-rows">
               {#each tip.rows as row (row.label)}

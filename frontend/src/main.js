@@ -2,6 +2,7 @@
 // console and window hooks have to install before anything else can log.
 import './lib/capture.js'
 
+import { readStored as readSkin, skinAttribute } from './lib/skin.js'
 import { readStored, themeAttribute } from './lib/theme.js'
 
 import { mount } from 'svelte'
@@ -17,6 +18,9 @@ import '@fontsource/chivo-mono/500.css'
 import '@fontsource/chivo-mono/600.css'
 
 import './styles/tokens.css'
+// After tokens.css on purpose: the skin is an override block, and a
+// same-specificity override has to come second to win.
+import './styles/glass.css'
 import './styles/base.css'
 import App from './App.svelte'
 
@@ -25,5 +29,10 @@ import App from './App.svelte'
 // attribute off, which is what keeps tokens.css following the OS.
 const theme = themeAttribute(readStored(globalThis.localStorage))
 if (theme) document.documentElement.dataset.theme = theme
+
+// Same one-write rule for the material. The default skin writes nothing,
+// which is what leaves the plain Drafting Table tokens in force.
+const skin = skinAttribute(readSkin(globalThis.localStorage))
+if (skin) document.documentElement.dataset.skin = skin
 
 export default mount(App, { target: document.getElementById('app') })

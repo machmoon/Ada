@@ -20,7 +20,7 @@
   }
 </script>
 
-<section class="activity" data-testid="chat-activity" data-phase={entry.phase}>
+<section class="activity" data-testid="chat-activity" data-phase={entry.phase} data-material="panel">
   <header>
     <span class="mark" aria-hidden="true"></span>
     <div>
@@ -58,7 +58,7 @@
             {/if}
           </div>
           {#if row.detail && open[row.id]}
-            <pre class="detail mono">{row.detail}</pre>
+            <pre class="detail mono" data-material="tint">{row.detail}</pre>
           {/if}
         </li>
       {/each}

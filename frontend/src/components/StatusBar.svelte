@@ -37,7 +37,7 @@
   )
 </script>
 
-<footer class="bar" data-testid="status-bar">
+<footer class="bar" data-testid="status-bar" data-material="chrome">
   <a
     class="lbl tab"
     class:current={tab === 'chat'}

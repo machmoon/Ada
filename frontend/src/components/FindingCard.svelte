@@ -25,7 +25,7 @@
   const selectable = $derived(Boolean(onselect) && parts.length > 0)
 </script>
 
-<article class="card" data-testid="finding-card" data-sev={info.key} data-selected={selected} data-parts={parts.join(' ')} class:selected>
+<article class="card" data-testid="finding-card" data-material="panel" data-sev={info.key} data-selected={selected} data-parts={parts.join(' ')} class:selected>
   <!-- The button sits inside the heading so the card keeps its outline level
        while the chips and title become one selection target. -->
   <h3 class="title">
