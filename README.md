@@ -29,7 +29,7 @@ Every stage is a real KiCad file you can open and inspect on its own, so you can
 where a design went wrong instead of only seeing the last artifact.
 
 ```
-490 passed — no network, no API key, no KiCad install
+542 passed — no network, no API key, no KiCad install
 ```
 
 ---
@@ -93,6 +93,7 @@ that consumes the file. Install it if you are a person who wants to see a board.
 | `fab.py` — Gerber, Excellon, BOM, pick-and-place | **Working** · fab package export |
 | `order.py` — order options, manufacturability preflight | **Working** · blocks an unrouted board |
 | `mcp/` — MCP server over stdio | **Working** · 23 tests |
+| `audit/` — optional visual design review | **Working** · 52 tests |
 | `service/` — Cloud Run + Firestore cache | **Working** · 99 tests |
 | `frontend/` — Svelte review UI, served by the service | **Working** · review, schematic and board tabs, with an in-app debug console for log export |
 | Overlay UI, guided cursor | Not built (mockups only) |
@@ -254,7 +255,7 @@ treats the board file as the interface.
 | Requires KiCad running | Yes | **No** |
 | Headless / CI | Hard | **Native** |
 | Platform lock | KiCad's plugin loader | **None — pure Python** |
-| Testable without KiCad | No | **Yes, all 490 tests** |
+| Testable without KiCad | No | **Yes, all 542 tests** |
 
 ### What it reads
 
@@ -409,6 +410,59 @@ Five tools: `validate_circuit`, `build_board`, `emit_kicad_pcb`, `place_parts`,
 
 ---
 
+## Reviewing a board
+
+Optional, and separate from generating one. `silkscreen-review` reviews any
+`.kicad_pcb` — one this project emitted, or one you laid out yourself — and
+marks what it finds **on the board**, not just in a list.
+
+```bash
+silkscreen-review board.kicad_pcb                       # standard effort
+silkscreen-review board.kicad_pcb -e deep -o review/    # deeper, write reports
+silkscreen-review board.kicad_pcb -e quick --no-model   # offline, no API key
+silkscreen-review board.kicad_pcb --fail-on-blocker     # exit 1 for CI
+```
+
+`-o` writes three files: `review.html` (board render beside the findings,
+click either to highlight the other), `review.svg` (the annotated board on its
+own, for a PR comment or a slide) and `review.json`.
+
+### The thinking slider
+
+```
+quick     ●───○───○   geometry and connectivity. No model call at all.
+standard  ○───●───○   + clearance sweeps, decoupling distance, track widths,
+                      and one model pass.
+deep      ○───○───●   + manufacturing rules, tighter thresholds, a per-part
+                      model pass for every IC, and every model finding must
+                      survive a refutation prompt before it is reported.
+```
+
+Each level runs a strict superset of the level below it — enforced by test, so
+"deeper" cannot quietly become "different". Higher levels are slower and, above
+`quick`, cost model calls.
+
+### Proven and suggested
+
+The report keeps two kinds of finding apart, because they are not equally
+trustworthy:
+
+- **Proven** — measured by a deterministic checker in `audit/rules.py`, and
+  shown with the measurement that proves it (`gap 0.100 mm, clearance
+  0.300 mm`). Outlined solid on the render.
+- **Suggested** — argued by the model: wrong capacitor value, floating mode
+  pin, a topology mistake. No measurement, dashed on the render, and dropped
+  entirely if it names no part the board contains.
+
+Nothing the model returns can delete, downgrade or reword a proven finding,
+and a model failure loses only the suggested half — the report then says why
+the model did not run rather than showing a shorter list.
+
+The report also states what was *checked*, so an empty finding list cannot be
+mistaken for a clean board when it only means a rule never ran.
+
+---
+
 ## The placer
 
 CP-SAT. Variables are each part's bottom-left corner on an integer grid;
@@ -508,7 +562,8 @@ engine/
       stages.py     the six stage bodies, shared by both drivers
       pipeline.py   prompt -> PCB
       adk/          ADK dynamic workflow over the same stage bodies
-  tests/          490 tests — no network, no API keys, no KiCad
+    audit/        optional visual review of a finished board
+  tests/          542 tests — no network, no API keys, no KiCad
     fixtures/     ref.kicad_pcb -- 11-footprint board fixture
 scripts/
   demo.py         end-to-end: read -> place -> write -> verify
@@ -588,10 +643,10 @@ docker build .                                      # the `docker` job
 
 ### Expected output
 
-**1. Test suite** — 490 tests, no warnings (four key-gated live-model tests skip unless `GOOGLE_API_KEY` is set):
+**1. Test suite** — 542 tests, no warnings (four key-gated live-model tests skip unless `GOOGLE_API_KEY` is set):
 
 ```
-490 passed in 190.85s
+542 passed in 190.85s
 ```
 
 The suite is dominated by the 20-second solver budget in a handful of placement
