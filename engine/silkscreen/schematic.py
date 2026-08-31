@@ -418,6 +418,35 @@ def build_schematic(
     )
 
 
+#: Advance width allowed for one character at this sheet's 1.27 mm font. Taken
+#: as the font size itself, which is an upper bound for KiCad's stroke font:
+#: measured off a plotted sheet, a narrow glyph runs about 0.94 mm and a wide
+#: one about 1.24 mm. Guessing lower once already put two labels through each
+#: other, and the cost of being generous is only sheet space.
+_CHAR_W_NM = mm(1.27)
+
+
+def _label_reach(sym: PlacedSymbol) -> int:
+    """How far this symbol's net labels stick out past its pins, vertically.
+
+    Only vertical pins matter. A sideways label runs into the column gutter,
+    which :data:`_LABEL_GUTTER_NM` already reserves; a vertical one runs at the
+    next symbol down the column. Reserving the stub length alone gave every
+    pair of stacked passives the same 5.08 mm to share no matter how long their
+    net names were, so ``GND`` and ``+3V3`` were drawn through each other --
+    valid s-expressions, clean ERC, unreadable sheet. Sized from the net name
+    because that is what decides the length, plus a character of clearance.
+    """
+    reach = 0
+    for pin in sym.shape.pins:
+        if pin.angle not in (90, 270):
+            continue
+        net = sym.pin_nets.get(pin.number, "")
+        if net:
+            reach = max(reach, len(net) * _CHAR_W_NM + _CHAR_W_NM)
+    return reach
+
+
 def _lay_out(symbols: list[PlacedSymbol]) -> list[str]:
     """Place symbols in columns, tallest first, and report an overflow.
 
@@ -432,7 +461,7 @@ def _lay_out(symbols: list[PlacedSymbol]) -> list[str]:
     limit_y = PAGE_H_NM - _MARGIN_NM
 
     for sym in symbols:
-        h = sym.shape.extent_h_nm * 2 + _STUB_NM * 2
+        h = sym.shape.extent_h_nm * 2 + max(_STUB_NM, _label_reach(sym)) * 2
         w = sym.shape.extent_w_nm * 2 + _LABEL_GUTTER_NM
         if y + h > limit_y and column_w:
             x += column_w
@@ -493,6 +522,34 @@ def _stub_on_sheet(sym: PlacedSymbol, pin: SymbolPin) -> tuple[int, int, int, in
 # --------------------------------------------------------------------------
 
 _FONT = "(effects (font (size 1.27 1.27)))"
+_FONT_LEFT = "(effects (font (size 1.27 1.27)) (justify left))"
+
+
+def _field_anchors(sym: PlacedSymbol) -> tuple[tuple[int, int], tuple[int, int], str]:
+    """Where a symbol's Reference and Value text sit, in sheet coordinates.
+
+    Above and below the body is the natural place, and it is the right one for
+    an IC: its pins leave sideways, so its net labels never compete for those
+    two spots. A passive's pins leave vertically and its labels land exactly
+    there -- same x, one text height away -- so the vertical label string gets
+    drawn straight through the horizontal reference. KiCad's own passives put
+    both fields beside the body instead, for this reason, so these do too.
+
+    Found by rendering an emitted sheet rather than by parsing it: the file is
+    valid and ERC is clean either way, which is why only looking at it catches
+    this.
+    """
+    shape = sym.shape
+    if any(pin.angle in (0, 180) for pin in shape.pins):
+        return (
+            (sym.x_nm, sym.y_nm - shape.extent_h_nm - mm(1.27)),
+            (sym.x_nm, sym.y_nm + shape.extent_h_nm + mm(1.27)),
+            _FONT,
+        )
+    # Clear of the label column, and left-justified so the text grows away from
+    # the body rather than back across it.
+    x = sym.x_nm + shape.extent_w_nm + mm(1.27)
+    return ((x, sym.y_nm - mm(1.27)), (x, sym.y_nm + mm(1.27)), _FONT_LEFT)
 
 
 def _lib_symbol(shape: SymbolShape, *, ref_prefix: str) -> list[str]:
@@ -571,15 +628,16 @@ def emit_kicad_sch(
         out.append("    (exclude_from_sim no) (in_bom yes) (on_board yes)")
         out.append("    (dnp no) (fields_autoplaced yes)")
         out.append(f'    (uuid "{stable_uuid("sym:" + sym.ref)}")')
+        (ref_x, ref_y), (val_x, val_y), field_font = _field_anchors(sym)
         out.append(
             f'    (property "Reference" "{_esc(sym.ref)}" '
-            f"(at {_f(sym.x_nm)} {_f(sym.y_nm - shape.extent_h_nm - mm(1.27))} 0) "
-            f"{_FONT})"
+            f"(at {_f(ref_x)} {_f(ref_y)} 0) "
+            f"{field_font})"
         )
         out.append(
             f'    (property "Value" "{_esc(sym.value)}" '
-            f"(at {_f(sym.x_nm)} {_f(sym.y_nm + shape.extent_h_nm + mm(1.27))} 0) "
-            f"{_FONT})"
+            f"(at {_f(val_x)} {_f(val_y)} 0) "
+            f"{field_font})"
         )
         out.append(
             f'    (property "Footprint" "{_esc(sym.footprint)}" '

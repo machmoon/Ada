@@ -386,3 +386,77 @@ def test_an_ic_uses_both_sides_of_its_body(spec):
         1 for p in ic.shape.pins if p.name.lower().startswith(("gnd", "vin"))
     )
     assert "VOUT" in {p.name for p in right}
+
+
+def _text_height_mm(reparsed) -> float:
+    """The sheet's own declared font size, in mm.
+
+    Read from the emitted file rather than imported from the emitter, so these
+    checks do not inherit whatever the emitter believes a character is wide --
+    which is exactly the belief that was wrong.
+    """
+    sizes = {
+        label.effects.font.height
+        for label in reparsed.labels
+        if label.effects and label.effects.font
+    }
+    assert len(sizes) == 1, f"labels disagree about font size: {sizes}"
+    return sizes.pop()
+
+
+def test_no_field_is_drawn_on_top_of_a_net_label(reparsed):
+    """Reference and Value must not land where a label already is.
+
+    Above and below the body is the natural home for these two fields, and it
+    is right for an IC, whose pins leave sideways. A passive's pins leave
+    vertically and its labels sit exactly there -- one text height away on the
+    same x -- so the vertical label string was drawn straight through the
+    horizontal reference. The file stayed valid and ERC stayed clean, which is
+    why nothing but looking at a plotted sheet caught it.
+    """
+    h = _text_height_mm(reparsed)
+    fields = [
+        (prop.key, prop.value, prop.position.X, prop.position.Y)
+        for sym in reparsed.schematicSymbols
+        for prop in sym.properties
+        if prop.key in ("Reference", "Value")
+    ]
+    assert fields, "no Reference/Value fields on the sheet"
+    for key, value, fx, fy in fields:
+        for label in reparsed.labels:
+            lx, ly = label.position.X, label.position.Y
+            if abs(fx - lx) < h and abs(fy - ly) < h:
+                raise AssertionError(
+                    f"{key} {value!r} at ({fx}, {fy}) collides with label "
+                    f"{label.text!r} at ({lx}, {ly})"
+                )
+
+
+def test_two_stacked_net_labels_do_not_run_through_each_other(reparsed):
+    """Labels facing each other down a column need room for both strings.
+
+    Reserving the stub length alone gave every stacked pair the same 5.08 mm
+    no matter how long their net names were, so ``GND`` and ``+3V3`` were drawn
+    one through the other. The span allowed here is one character per character
+    at the sheet's own font size, which is an upper bound for KiCad's stroke
+    font -- a narrow glyph measures about 0.94 mm at a 1.27 mm size and a wide
+    one about 1.24 mm.
+    """
+    h = _text_height_mm(reparsed)
+    vertical = [
+        (label.text, label.position.X, label.position.Y)
+        for label in reparsed.labels
+        if (label.position.angle or 0) % 180 == 90
+    ]
+    assert vertical, "no vertical labels on the sheet to check"
+    for i, (text_a, xa, ya) in enumerate(vertical):
+        for text_b, xb, yb in vertical[i + 1 :]:
+            if abs(xa - xb) >= h:
+                continue
+            # Worst case: each label grows toward the other.
+            needed = (len(text_a) + len(text_b)) * h
+            assert abs(ya - yb) >= needed, (
+                f"{text_a!r} at y={ya} and {text_b!r} at y={yb} are "
+                f"{abs(ya - yb):.2f} mm apart on x={xa}, and together they "
+                f"span up to {needed:.2f} mm"
+            )
