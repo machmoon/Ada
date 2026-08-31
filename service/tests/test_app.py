@@ -216,11 +216,11 @@ def raw_get(srv, target):
         conn.close()
 
 
-def post(srv, payload, path="/generate"):
+def post(srv, payload, path="/generate", headers=None):
     req = urllib.request.Request(
         url(srv, path),
         data=json.dumps(payload).encode(),
-        headers={"Content-Type": "application/json"},
+        headers={"Content-Type": "application/json", **(headers or {})},
     )
     try:
         with urllib.request.urlopen(req) as resp:
@@ -2142,7 +2142,7 @@ def test_grounding_payload_is_json_safe(ground_server):
 # ------------------------------------------------------------ /generate/stream
 
 
-def _request_bytes(srv, path, body, content_length):
+def _request_bytes(srv, path, body, content_length, headers=None):
     """One raw POST, with the framing headers written by hand.
 
     Written on a socket for the same reason post_without_content_length is:
@@ -2156,6 +2156,8 @@ def _request_bytes(srv, path, body, content_length):
         "Content-Type: application/json",
         "Connection: close",
     ]
+    for name, value in (headers or {}).items():
+        lines.append(f"{name}: {value}")
     if content_length is not None:
         lines.append(f"Content-Length: {content_length}")
     return ("\r\n".join(lines) + "\r\n\r\n").encode() + body
@@ -2188,7 +2190,9 @@ def post_raw(srv, path, body=b"", content_length=None):
     return _split_head(b"".join(chunks))
 
 
-def post_stream(srv, payload, path="/generate/stream", content_length="auto"):
+def post_stream(
+    srv, payload, path="/generate/stream", content_length="auto", headers=None
+):
     """POST and collect NDJSON frames until the server closes the connection.
 
     Frames are split as they arrive rather than after the read finishes, so a
@@ -2202,7 +2206,7 @@ def post_stream(srv, payload, path="/generate/stream", content_length="auto"):
     body = b"" if content_length is None else json.dumps(payload).encode()
     if content_length == "auto":
         content_length = len(body)
-    request = _request_bytes(srv, path, body, content_length)
+    request = _request_bytes(srv, path, body, content_length, headers)
     frames = []
     with socket.create_connection(("127.0.0.1", srv.server_port), timeout=60) as sock:
         sock.sendall(request)
@@ -3202,3 +3206,229 @@ def test_build_model_chain_ends_on_the_gemma_rung(monkeypatch):
         GEMMA_MODEL,
     ]
     assert chain.providers[-1].attempts == 1
+
+
+# --------------------------------------------------------- shared-token gate
+
+TOKEN = "s3cr3t-deploy-token"
+AUTH_REQUEST = {"intent": "a 3.3V regulator", "time_limit_s": 5}
+
+
+def post_raw_headers(srv, path, payload, headers=None):
+    """POST with arbitrary headers, returning status, headers and raw bytes.
+
+    The refusals below are checked as bytes rather than through ``post``: a 401
+    on the streaming route has to be proven to be a plain JSON body and not the
+    first frame of a stream, and that claim is about what came back on the
+    wire, not about what json.loads could make of it.
+    """
+    conn = http.client.HTTPConnection("127.0.0.1", srv.server_port, timeout=30)
+    try:
+        conn.request(
+            "POST",
+            path,
+            body=json.dumps(payload).encode(),
+            headers={"Content-Type": "application/json", **(headers or {})},
+        )
+        resp = conn.getresponse()
+        return resp.status, {k.lower(): v for k, v in resp.getheaders()}, resp.read()
+    finally:
+        conn.close()
+
+
+def bearer(token):
+    return {"Authorization": f"Bearer {token}"}
+
+
+@pytest.fixture
+def gated(monkeypatch):
+    """Turn the gate on for one test."""
+    monkeypatch.setenv("SILKSCREEN_ACCESS_TOKEN", TOKEN)
+    return TOKEN
+
+
+def test_no_token_configured_means_no_gate(monkeypatch, server):
+    """The property that makes this change safe to land.
+
+    Every workflow that predates the gate -- the CLI, the demo, the dev server,
+    the rest of this file -- sends no Authorization header at all. If an unset
+    var ever started gating, all of them break at once, so it is asserted here
+    rather than left implied by the other tests passing.
+    """
+    monkeypatch.delenv("SILKSCREEN_ACCESS_TOKEN", raising=False)
+    status, body = post(server, AUTH_REQUEST)
+    assert status == 200
+    assert body["kicad_pcb"].startswith("(kicad_pcb")
+
+    status, _, frames = post_stream(server, AUTH_REQUEST)
+    assert status == 200
+    assert frames[-1]["event"] == "run.done"
+
+
+@pytest.mark.parametrize("value", ["", "   ", "\n"])
+def test_a_blank_token_is_not_a_gate(monkeypatch, server, value):
+    """An unfilled --set-env-vars and a secret file's trailing newline.
+
+    Both arrive as a value nobody could ever present, so treating either as a
+    real token would lock the service out of itself.
+    """
+    monkeypatch.setenv("SILKSCREEN_ACCESS_TOKEN", value)
+    status, _ = post(server, AUTH_REQUEST)
+    assert status == 200
+
+
+def test_a_configured_token_admits_the_right_bearer(server, gated):
+    status, body = post(server, AUTH_REQUEST, headers=bearer(gated))
+    assert status == 200
+    assert body["kicad_pcb"].startswith("(kicad_pcb")
+
+
+def test_the_scheme_is_matched_case_insensitively(server, gated):
+    """RFC 7235 says the scheme is case-insensitive; clients take it at its word."""
+    status, _ = post(server, AUTH_REQUEST, headers={"Authorization": f"bearer {gated}"})
+    assert status == 200
+
+
+def test_a_missing_header_is_401(server, gated):
+    status, headers, raw = post_raw_headers(server, "/generate", AUTH_REQUEST)
+    assert status == 401
+    assert headers["content-type"] == "application/json"
+    assert headers["www-authenticate"].startswith("Bearer")
+    assert json.loads(raw) == {"error": "unauthorized"}
+
+
+@pytest.mark.parametrize(
+    "header",
+    [
+        "",
+        "Bearer",
+        "Bearer ",
+        "Bearer wrong-token",
+        f"Bearer {TOKEN}x",
+        f"Bearer {TOKEN[:-1]}",
+        f"Basic {TOKEN}",
+        TOKEN,
+        f"Token {TOKEN}",
+        "Bearer ééé",
+    ],
+)
+def test_a_wrong_or_malformed_header_is_401(server, gated, header):
+    """Including the non-ASCII case: compare_digest refuses a str with any in it.
+
+    That refusal is a TypeError, so a header of raw UTF-8 would leave the
+    handler as a 500 with an error id -- an internal fault reported for what is
+    an ordinary bad credential -- if both sides were not encoded first.
+    """
+    status, _, raw = post_raw_headers(
+        server, "/generate", AUTH_REQUEST, {"Authorization": header}
+    )
+    assert status == 401
+    assert json.loads(raw) == {"error": "unauthorized"}
+
+
+def test_a_refusal_never_echoes_the_token(server, gated):
+    """Not the configured token, and not what the caller presented."""
+    presented = "not-the-token"
+    _, headers, raw = post_raw_headers(
+        server, "/generate", AUTH_REQUEST, bearer(presented)
+    )
+    blob = raw.decode() + "\n".join(f"{k}: {v}" for k, v in headers.items())
+    assert TOKEN not in blob
+    assert presented not in blob
+
+
+def test_healthz_needs_no_token_in_either_mode(monkeypatch, server):
+    """Cloud Run's own probe carries no credentials.
+
+    A gated health check fails the revision before any traffic reaches it, so
+    the deploy never goes live at all -- the most expensive way to get this
+    wrong, and invisible until the rollout stalls.
+    """
+    monkeypatch.delenv("SILKSCREEN_ACCESS_TOKEN", raising=False)
+    status, _, body = get(server, "/healthz")
+    assert status == 200 and json.loads(body)["ok"] is True
+
+    monkeypatch.setenv("SILKSCREEN_ACCESS_TOKEN", TOKEN)
+    status, _, body = get(server, "/healthz")
+    assert status == 200 and json.loads(body)["ok"] is True
+
+
+def test_the_web_bundle_stays_ungated(server, web_dist, gated):
+    """A <script> tag cannot carry an Authorization header.
+
+    Gating the bundle would break the browser path outright while protecting
+    nothing: the files are public HTML and JS, and the POST routes that spend
+    model calls are gated either way.
+    """
+    status, headers, body = get(server, "/")
+    assert status == 200
+    assert b"<!doctype html>" in body.lower()
+
+    status, headers, _ = get(server, "/assets/app-abc123.js")
+    assert status == 200
+    assert headers["Content-Type"] == "text/javascript; charset=utf-8"
+
+
+def test_the_stream_route_refuses_before_it_streams(server, gated):
+    """A 401, not a 200 whose only frame is an apology.
+
+    The streaming route sends its status line the moment it starts, so a check
+    placed after that point could only report the refusal as a run.error frame
+    -- and a client that already saw run.accepted has no way to tell a rejected
+    request from a run that died.
+    """
+    status, headers, raw = post_raw_headers(server, "/generate/stream", AUTH_REQUEST)
+    assert status == 401
+    assert headers["content-type"] == "application/json"
+    assert b"run.accepted" not in raw
+    assert json.loads(raw) == {"error": "unauthorized"}
+
+
+def test_the_chat_stream_route_is_gated_too(server, gated):
+    """The gate sits above routing, so every POST route refuses identically.
+
+    /chat/stream is the newest paid route; a gate written inside each handler
+    is exactly the kind that forgets this one.
+    """
+    status, headers, raw = post_raw_headers(
+        server, "/chat/stream", {"intent": "a 3.3V regulator"}
+    )
+    assert status == 401
+    assert headers["content-type"] == "application/json"
+    assert json.loads(raw) == {"error": "unauthorized"}
+
+
+def test_a_correct_token_streams_normally(server, gated):
+    status, headers, frames = post_stream(server, AUTH_REQUEST, headers=bearer(gated))
+    assert status == 200
+    assert headers["content-type"] == "application/x-ndjson"
+    assert frames[0]["event"] == "run.accepted"
+    assert frames[-1]["event"] == "run.done"
+
+
+def test_the_token_never_reaches_the_event_stream(server, gated):
+    """Frames are the debug console's input; a secret in one is a leaked secret."""
+    _, _, frames = post_stream(server, AUTH_REQUEST, headers=bearer(gated))
+    blob = json.dumps(frames)
+    assert TOKEN not in blob
+    assert "authorization" not in blob.lower()
+
+
+def test_a_rejected_request_costs_no_model_call(monkeypatch, counting_server):
+    """The whole point of the gate: an anonymous caller spends none of our quota.
+
+    The second half is the control -- without it a counter that records nothing
+    would satisfy the first assertion for the wrong reason.
+    """
+    monkeypatch.setenv("SILKSCREEN_ACCESS_TOKEN", TOKEN)
+    status, _, _ = post_raw_headers(counting_server, "/generate", AUTH_REQUEST)
+    assert status == 401
+    status, _, _ = post_raw_headers(
+        counting_server, "/generate/stream", AUTH_REQUEST, bearer("wrong")
+    )
+    assert status == 401
+    assert counting_server.model.calls == [], "a refused request must reach no model"
+
+    status, _ = post(counting_server, AUTH_REQUEST, headers=bearer(TOKEN))
+    assert status == 200
+    assert counting_server.model.calls, "the same counter does record a real run"
