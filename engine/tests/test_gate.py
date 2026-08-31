@@ -365,3 +365,23 @@ def test_nothing_short_circuits_when_a_check_fails(placed, spec):
     )
     assert len(report.checks) == 12
     assert len(report.blocking) >= 3
+
+
+def test_the_routing_evidence_never_claims_100_percent_on_an_unrouted_board(
+    placed, spec
+):
+    """Evidence that contradicts its own verdict teaches a reader to skim past it.
+
+    ``BoardResult.route_completion`` is 1.0 when both net lists are empty --
+    correct for "there was nothing to route", exactly wrong for a board the
+    router was never run on.
+    """
+    check = _check(run_gate(placed, spec=spec), "routing-complete")
+    assert check.status is CheckStatus.FAIL
+    assert not any("100%" in item for item in check.evidence)
+    assert any("has not been run" in item for item in check.evidence)
+
+
+def test_a_routed_board_does_quote_its_completion(routed, spec):
+    check = _check(run_gate(routed, spec=spec), "routing-complete")
+    assert any("route completion 100%" in item for item in check.evidence)

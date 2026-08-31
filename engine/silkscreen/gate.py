@@ -242,11 +242,23 @@ def _check_routing(board: BoardResult, issues: Sequence[OrderIssue]) -> GateChec
     board are the same file list, the same outline and the same parts; the
     difference is whether the thing works at all.
     """
+    # BoardResult.route_completion is 1.0 when both lists are empty, which is
+    # the right answer for "there was nothing to route" and exactly the wrong
+    # one for a board the router was never run on. Quoting it unconditionally
+    # would print "route completion 100%" directly beneath a failure saying
+    # three nets have no copper -- evidence that contradicts its own verdict is
+    # worse than no evidence, because it teaches a reader to skim past it.
+    never_ran = not board.tracks and not board.routed_nets and not board.unrouted_nets
     evidence = [
         f"{len(board.routed_nets)} net(s) fully routed, "
         f"{len(board.unrouted_nets)} left open",
         f"{len(board.tracks)} track segment(s), {len(board.vias)} via(s)",
-        f"route completion {board.route_completion:.0%}",
+        (
+            "the router has not been run on this board, so there is no "
+            "completion figure to quote"
+            if never_ran
+            else f"route completion {board.route_completion:.0%}"
+        ),
     ]
     evidence += [
         f"open: {net} -- {why}" for net, why in sorted(board.unrouted_nets.items())

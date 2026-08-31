@@ -100,7 +100,7 @@ Every stage is a real KiCad file you can open and inspect on its own, so you can
 where a design went wrong instead of only seeing the last artifact.
 
 ```
-782 tests collected — no network, no API key, no KiCad install
+784 tests collected — no network, no API key, no KiCad install
 ```
 
 **Next:** [full install guide and troubleshooting](docs/install.md) ·
@@ -169,12 +169,12 @@ Platform-by-platform commands are in [docs/install.md](docs/install.md#kicad-opt
 | `fab.py` — Gerber, Excellon, BOM, pick-and-place, fab notes | **Working** · 34 tests |
 | `order.py` — order options, manufacturability preflight | **Working** · 30 tests · blocks an unrouted board |
 | `fabhouse.py` — OSH Park / JLCPCB / PCBWay limits and pricing | **Working** · 23 tests · one real quote, two honest refusals |
-| `gate.py` — the twelve-check pre-flight gate | **Working** · 24 tests |
+| `gate.py` — the twelve-check pre-flight gate | **Working** · 26 tests |
 | `approval.py` — the prepared order, and the human it stops at | **Working** · 19 tests · no submission path, by design |
 | `mcp/` — MCP server over stdio | **Working** · 43 tests |
 | `audit/` — optional visual design review | **Working** · 52 tests |
 | `service/` — Cloud Run + Firestore cache | **Working** · 113 tests · not deployed anywhere yet; no live URL |
-| `frontend/` — Svelte review UI, served by the service | **Working** · persistent orchestrator chat, expandable model/tool traces, session JSON, review, schematic and board tabs |
+| `frontend/` — Svelte review UI, served by the service | **Working** · persistent orchestrator chat, expandable model/tool traces, session JSON, review, schematic, board and order tabs |
 | Voice / talk input | Not built |
 | Overlay UI, guided cursor | Not built (mockups only) |
 
@@ -373,7 +373,7 @@ treats the board file as the interface.
 | Requires KiCad running | Yes | **No** |
 | Headless / CI | Hard | **Native** |
 | Platform lock | KiCad's plugin loader | **None — pure Python** |
-| Testable without KiCad | No | **Yes, all 782 tests** |
+| Testable without KiCad | No | **Yes, all 784 tests** |
 
 ### What it reads
 
@@ -634,6 +634,14 @@ Exit code is `0` on a GO and `2` on a NO-GO, so a script can branch on the
 verdict — and so the only thing an automated caller can do with a passing
 gate is notice that it passed.
 
+In the web UI, tick **Prepare a fab order** on the intent form and pick a
+quantity and a house. The run then grows an **Order** tab whose label carries
+the verdict (`Order · GO` / `Order · NO-GO`): the twelve checks with their
+evidence, the price, every file in the package as a download, and a
+permanently inert *Place order* button with the reason beside it rather than
+in a tooltip. The button is drawn at all because a screen that simply omits it
+leaves a reader wondering whether it is missing or refused.
+
 ### The pre-flight gate
 
 Twelve checks stand between a placement and an order. They are drawn from
@@ -845,7 +853,7 @@ engine/
       pipeline.py   prompt -> PCB
       adk/          ADK dynamic workflow over the same stage bodies
     audit/        optional visual review of a finished board
-  tests/          782 tests — no network, no API keys, no KiCad
+  tests/          784 tests — no network, no API keys, no KiCad
     fixtures/     ref.kicad_pcb -- 11-footprint board fixture
 scripts/
   demo.py         end-to-end: read -> place -> write -> verify
@@ -934,7 +942,7 @@ docker build .                                      # the `docker` job
 
 ### Expected output
 
-**1. Test suite** — 782 tests (live-model and local-simulator cases skip when
+**1. Test suite** — 784 tests (live-model and local-simulator cases skip when
 their optional dependency is unavailable):
 
 ```
@@ -956,7 +964,7 @@ its experimental JSON-schema function-declaration feature.
 | `test_agents.py` | 34 | Datasheet extraction, proposal repair loop, review — against a scripted model |
 | `test_order.py` | 30 | Order options and manufacturability preflight |
 | `test_fab.py` | 34 | Gerber, drill plating, BOM, pick-and-place, and fab notes |
-| `test_gate.py` | 24 | The pre-flight gate — every check, and attacks on each |
+| `test_gate.py` | 26 | The pre-flight gate — every check, and attacks on each |
 | `test_fabhouse.py` | 23 | Fab capability limits, published-rule pricing, the submission refusal |
 | `test_approval.py` | 19 | The prepared order, its package, and the CLI |
 | `test_kicad.py` | 28 | Board read/write, coordinate conversion, round-trip |
@@ -972,7 +980,7 @@ its experimental JSON-schema function-declaration feature.
 | `test_models.py` | 22 | Gemini discovery, model/thinking selection, and request-pace policy |
 | `test_orchestrator.py` | 4 | Root clarification, tool dispatch, ADK thinking, and pre-call pacing hook |
 | `test_quota.py` | 5 | Shared request spacing, Auto behavior, and invalid pace rejection |
-| **Total** | **782** | |
+| **Total** | **784** | |
 
 **2. Lint:**
 

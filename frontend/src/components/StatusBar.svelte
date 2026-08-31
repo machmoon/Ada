@@ -9,6 +9,8 @@
     tab = 'review',
     schematicEnabled = false,
     boardEnabled = false,
+    orderEnabled = false,
+    orderGo = false,
     debugOpen = false,
     ondebug = null,
   } = $props()
@@ -25,6 +27,10 @@
   const reviewTab = $derived(
     findings ? (reviewed ? `Review · ${count}` : 'Review · not run') : 'Review',
   )
+
+  // "Order" alone would not say whether the gate cleared, and the verdict is
+  // the whole reason to look at the tab.
+  const orderTab = $derived(orderEnabled ? `Order · ${orderGo ? 'GO' : 'NO-GO'}` : 'Order')
 
   const breakdown = $derived(
     findings && findings.length
@@ -84,6 +90,26 @@
     aria-current={tab === 'review' ? 'page' : undefined}
     data-testid="status-bar-tab-review"
   >{reviewTab}</a>
+  {#if orderEnabled}
+    <a
+      class="lbl tab"
+      class:current={tab === 'order'}
+      class:nogo={!orderGo}
+      href="#order"
+      aria-current={tab === 'order' ? 'page' : undefined}
+      data-testid="status-bar-tab-order"
+      data-enabled="true"
+      data-go={orderGo ? 'yes' : 'no'}
+    >{orderTab}</a>
+  {:else}
+    <span
+      class="lbl tab"
+      aria-disabled="true"
+      title="Tick 'Prepare a fab order' before running to see the order gate"
+      data-testid="status-bar-tab-order"
+      data-enabled="false"
+    >Order</span>
+  {/if}
   <div class="spacer"></div>
   {#if breakdown}<span class="mono breakdown" data-testid="status-bar-breakdown">{breakdown}</span>{/if}
   <!-- A disclosure, not a tab: it opens a drawer below this bar rather than
@@ -108,6 +134,8 @@
 </footer>
 
 <style>
+  .tab.nogo { color: var(--sev-blocker-fg); }
+
   .bar {
     height: var(--statusbar-h);
     border-top: 1px solid var(--rule);

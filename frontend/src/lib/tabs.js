@@ -1,7 +1,7 @@
 // Which pane the centre column shows. The name lives in the hash fragment so a
 // tab switch never reaches the server, and App is the only thing that reads it.
 
-export const TABS = ['chat', 'schematic', 'board', 'review']
+export const TABS = ['chat', 'schematic', 'board', 'review', 'order']
 
 /** The tab a hash names, or '' when it names none of them. */
 export function parseTab(hash) {
@@ -14,10 +14,14 @@ export function parseTab(hash) {
 
 /** The tab actually shown. Drawing tabs fall back to the durable transcript
     until the current run carries a contract each renderer accepts. */
-export function resolveTab(hash, { schematic = false, board = false, review = false } = {}) {
+export function resolveTab(
+  hash,
+  { schematic = false, board = false, review = false, order = false } = {},
+) {
   const name = parseTab(hash)
   if (name === 'schematic' && schematic) return 'schematic'
   if (name === 'board' && board) return 'board'
   if (name === 'review' && review) return 'review'
+  if (name === 'order' && order) return 'order'
   return 'chat'
 }
