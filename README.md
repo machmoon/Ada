@@ -556,11 +556,18 @@ worker calls, and final result. `GET /models` discovers the current key's
 catalog. `GET /healthz` is the readiness probe. The container serves the built UI at `/`,
 same origin as all of these routes, so there is no CORS anywhere.
 
+`GET /config/status` backs the live backend-readiness section in the right side rail.
+It reports whether Gemini, ADK, Ollama, Tinker, and Firestore can use the active
+process configuration, probes a configured Ollama server for its selected model,
+and notices local `.env` edits that require a backend restart. The response contains
+variable names and status messages only; it never returns configuration values or
+credentials. These checks do not make paid generation calls.
+
 ### Running the web UI
 
 The UI is a Svelte SPA in `frontend/`, and it needs Node 22 or newer
 (`node --version`). In development it runs on Vite's dev server, which proxies
-`/generate`, `/chat`, `/models`, and `/healthz` to the Python service — two terminals:
+`/generate`, `/chat`, `/models`, `/config`, and `/healthz` to the Python service — two terminals:
 
 ```bash
 PORT=8081 python -m service.app            # terminal 1: the API

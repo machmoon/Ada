@@ -1,5 +1,6 @@
 <script>
   import Icon from './Icon.svelte'
+  import ConfigurationStatus from './ConfigurationStatus.svelte'
   import { countOf, joinDot } from '../lib/format.js'
 
   let { result = null, reviewed = true } = $props()
@@ -71,6 +72,8 @@
       </div>
     </div>
   {/if}
+
+  <ConfigurationStatus />
 </aside>
 
 <style>

@@ -235,6 +235,32 @@ def test_health_check(server):
         assert json.loads(resp.read())["ok"] is True
 
 
+def test_configuration_status_uses_the_secret_safe_factory(server):
+    previous = Handler.__dict__["configuration_status_factory"]
+    Handler.configuration_status_factory = staticmethod(
+        lambda: {
+            "version": 1,
+            "dotenv": {
+                "present": True,
+                "state": "ready",
+                "summary": ".env matches the running backend.",
+                "reload_required": False,
+                "changed_since_start": False,
+                "pending": [],
+            },
+            "features": [],
+        }
+    )
+    try:
+        status, headers, body = get(server, "/config/status")
+    finally:
+        Handler.configuration_status_factory = previous
+
+    assert status == 200
+    assert headers.get("Cache-Control") == "no-store"
+    assert json.loads(body)["dotenv"]["state"] == "ready"
+
+
 def test_server_startup_does_not_create_a_trace_store_without_consent(monkeypatch):
     import service.app as app
 
