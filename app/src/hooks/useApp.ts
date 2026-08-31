@@ -1,15 +1,17 @@
 import { useEffect, useState } from "react";
-import { useTitles, useSystemAudio } from "@/hooks";
 import { listen } from "@tauri-apps/api/event";
-import { safeLocalStorage, migrateLocalStorageToSQLite } from "@/lib";
 import { getShortcutsConfig } from "@/lib/storage";
 import { invoke } from "@tauri-apps/api/core";
 
+/**
+ * Window-level app wiring for the overlay: registers the global shortcuts on
+ * startup, tracks the Windows hide/show workaround state (`isHidden`), and
+ * surfaces shortcut-registration failures. The Pluely chat concerns that used
+ * to live here (SQLite chat-history migration, conversation selection events,
+ * system-audio capture, title stripping) left with the chat product.
+ */
 export const useApp = () => {
-  const systemAudio = useSystemAudio();
   const [isHidden, setIsHidden] = useState(false);
-  // Initialize title management
-  useTitles();
 
   // Initialize shortcuts from localStorage on app startup
   useEffect(() => {
@@ -24,53 +26,6 @@ export const useApp = () => {
 
     initializeShortcuts();
   }, []);
-
-  // Migrate localStorage chat history to SQLite on app startup
-  useEffect(() => {
-    const runMigration = async () => {
-      try {
-        // Early exit: Check if migration already completed
-        const migrationKey = "chat_history_migrated_to_sqlite";
-        const alreadyMigrated =
-          safeLocalStorage.getItem(migrationKey) === "true";
-
-        if (alreadyMigrated) {
-          return; // Migration already complete, skip
-        }
-
-        const result = await migrateLocalStorageToSQLite();
-
-        if (result.success) {
-          if (result.migratedCount > 0) {
-            console.log(
-              `Successfully migrated ${result.migratedCount} conversations to SQLite`
-            );
-          }
-        } else if (result.error) {
-          // Migration failed - log error
-          console.error("Migration error:", result.error);
-        }
-      } catch (error) {
-        // Critical error during migration
-        console.error("Critical migration failure:", error);
-      }
-    };
-    runMigration();
-  }, []);
-
-  const handleSelectConversation = (conversation: any) => {
-    // useCompletion will fetch the full conversation from SQLite by id
-    window.dispatchEvent(
-      new CustomEvent("conversationSelected", {
-        detail: { id: conversation.id },
-      })
-    );
-  };
-
-  const handleNewConversation = () => {
-    // Trigger new conversation event
-    window.dispatchEvent(new CustomEvent("newConversation"));
-  };
 
   // WINDOWS HIDE/SHOW TOGGLE WINDOW WORKAROUND FOR SHORTCUTS
   useEffect(() => {
@@ -150,8 +105,5 @@ export const useApp = () => {
   return {
     isHidden,
     setIsHidden,
-    handleSelectConversation,
-    handleNewConversation,
-    systemAudio,
   };
 };

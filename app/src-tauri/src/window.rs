@@ -151,7 +151,7 @@ pub fn create_dashboard_window<R: Runtime>(
     app: &AppHandle<R>,
 ) -> Result<WebviewWindow<R>, tauri::Error> {
     let base_builder =
-        WebviewWindowBuilder::new(app, "dashboard", tauri::WebviewUrl::App("/chats".into()));
+        WebviewWindowBuilder::new(app, "dashboard", tauri::WebviewUrl::App("/workbench".into()));
 
     #[cfg(target_os = "macos")]
     let base_builder = base_builder
