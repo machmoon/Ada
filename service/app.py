@@ -600,7 +600,8 @@ def _tinker_configured() -> bool:
 def _opencode_configured() -> bool:
     model = os.getenv("OPENCODE_PLACEMENT_MODEL", "").strip()
     binary = os.getenv("OPENCODE_BIN", "opencode")
-    return bool(model and shutil.which(binary))
+    provider, separator, model_name = model.partition("/")
+    return bool(provider and separator and model_name and shutil.which(binary))
 
 
 def _experimental_requested(payload: dict[str, Any]) -> bool:

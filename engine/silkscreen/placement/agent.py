@@ -7,6 +7,7 @@ from collections.abc import Callable
 from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
 from dataclasses import dataclass, replace
 from math import isfinite
+from threading import Lock
 from typing import Protocol
 
 from .grader import board_to_text
@@ -54,6 +55,8 @@ class TextModel(Protocol):
 
 
 EvaluatedCandidate = tuple["SpeculativeCandidate", Board]
+_ACTIVE_LANE_POOLS: set[ThreadPoolExecutor] = set()
+_ACTIVE_LANE_POOLS_LOCK = Lock()
 
 
 @dataclass(frozen=True)
@@ -607,6 +610,33 @@ def _cancel_candidates(
     return cancelled
 
 
+def _own_pool_until_done(
+    pool: ThreadPoolExecutor,
+    futures: set[Future],
+) -> None:
+    """Retain cancelled work until every backend call has actually exited."""
+    if not futures:
+        pool.shutdown(wait=False, cancel_futures=True)
+        return
+    remaining = set(futures)
+    remaining_lock = Lock()
+    with _ACTIVE_LANE_POOLS_LOCK:
+        _ACTIVE_LANE_POOLS.add(pool)
+
+    def retire(future: Future) -> None:
+        with remaining_lock:
+            remaining.discard(future)
+            finished = not remaining
+        if not finished:
+            return
+        pool.shutdown(wait=False, cancel_futures=True)
+        with _ACTIVE_LANE_POOLS_LOCK:
+            _ACTIVE_LANE_POOLS.discard(pool)
+
+    for future in futures:
+        future.add_done_callback(retire)
+
+
 def _parallel_candidates(
     board: Board,
     profile: CompanyProfile,
@@ -668,7 +698,7 @@ def _parallel_candidates(
             status,
         )
     )
-    pool.shutdown(wait=False, cancel_futures=True)
+    _own_pool_until_done(pool, set(future_lanes))
     return _mark_duplicates(evaluated), early_winner
 
 
@@ -690,6 +720,42 @@ def _serial_candidates(
             continue
         evaluated.append(_candidate(board, profile, model, prompt, lane, width))
     return _mark_duplicates(evaluated), None
+
+
+def _choose_candidate(
+    evaluated: tuple[EvaluatedCandidate, ...],
+    early_winner: EvaluatedCandidate | None,
+) -> tuple[EvaluatedCandidate, EvaluatedCandidate | None]:
+    viable = tuple(item for item in evaluated if item[0].accepted)
+    winner = early_winner or (min(viable, key=_candidate_rank) if viable else None)
+    representative = winner or min(
+        evaluated,
+        key=lambda item: (
+            not bool(item[0].proposed),
+            bool(item[0].error),
+            item[0].lane,
+        ),
+    )
+    return representative, winner
+
+
+def _candidate_usage(
+    evaluated: tuple[EvaluatedCandidate, ...],
+) -> tuple[int | None, int | None, float | None]:
+    input_tokens = [
+        item[0].input_tokens for item in evaluated if item[0].input_tokens is not None
+    ]
+    output_tokens = [
+        item[0].output_tokens
+        for item in evaluated
+        if item[0].output_tokens is not None
+    ]
+    costs = [item[0].cost_usd for item in evaluated if item[0].cost_usd is not None]
+    return (
+        sum(input_tokens) if input_tokens else None,
+        sum(output_tokens) if output_tokens else None,
+        sum(costs) if costs else None,
+    )
 
 
 def _speculative_step(
@@ -730,27 +796,10 @@ def _speculative_step(
             board, profile, model_factory, prompt, width
         )
     wall_ms = round((time.perf_counter() - started) * 1000, 3)
-    viable = tuple(item for item in evaluated if item[0].accepted)
-    winner = early_winner or (min(viable, key=_candidate_rank) if viable else None)
-    representative = winner or min(
-        evaluated,
-        key=lambda item: (
-            not bool(item[0].proposed),
-            bool(item[0].error),
-            item[0].lane,
-        ),
-    )
+    representative, winner = _choose_candidate(evaluated, early_winner)
     chosen, updated = representative
     after = evaluate(updated, profile)
-    input_tokens = [
-        item[0].input_tokens for item in evaluated if item[0].input_tokens is not None
-    ]
-    output_tokens = [
-        item[0].output_tokens
-        for item in evaluated
-        if item[0].output_tokens is not None
-    ]
-    costs = [item[0].cost_usd for item in evaluated if item[0].cost_usd is not None]
+    input_tokens, output_tokens, cost_usd = _candidate_usage(evaluated)
     reason = (
         f"speculative lane {chosen.lane}/{width} committed "
         f"{len(chosen.accepted)}/{len(chosen.proposed)} actions"
@@ -776,9 +825,9 @@ def _speculative_step(
         speculative_wall_ms=wall_ms,
         early_commit=early_winner is not None,
         elapsed_ms=wall_ms,
-        input_tokens=sum(input_tokens) if input_tokens else None,
-        output_tokens=sum(output_tokens) if output_tokens else None,
-        cost_usd=sum(costs) if costs else None,
+        input_tokens=input_tokens,
+        output_tokens=output_tokens,
+        cost_usd=cost_usd,
     )
 
 

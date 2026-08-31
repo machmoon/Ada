@@ -414,6 +414,9 @@ def test_opencode_is_advertised_only_with_model_and_binary(monkeypatch):
 
     assert status["opencode"] is True
 
+    monkeypatch.setenv("OPENCODE_PLACEMENT_MODEL", "missing-provider-prefix")
+    assert placement_policy_status(experimental=True)["opencode"] is False
+
 
 def test_fast_policy_falls_back_safely(server, monkeypatch):
     monkeypatch.delenv("GEMINI_API_KEY", raising=False)
