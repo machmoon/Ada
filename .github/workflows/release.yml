@@ -52,6 +52,30 @@ jobs:
               sys.exit(f"{whl} would install stray top-level packages: {stray}")
           print("wheel top-level:", sorted(tops))
           PY
+      # The release is named from the tag; the wheel is named from
+      # pyproject.toml. Nothing keeps those in step, so tagging v0.2.0 without
+      # bumping the version publishes a release called v0.2.0 whose only asset
+      # is silkscreen-0.1.0-*.whl -- and any install URL derived from the tag
+      # 404s. Fail here, before anything is published, rather than leaving a
+      # permanent mislabelled release to be cleaned up by hand.
+      - name: Assert the tag matches the built version
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          python - <<'PY'
+          import glob, os, sys
+          tag = os.environ["TAG"].lstrip("v")
+          # PEP 427: {distribution}-{version}-{python tag}-...
+          built = {os.path.basename(w).split("-")[1] for w in glob.glob("dist/*.whl")}
+          if built != {tag}:
+              sys.exit(
+                  f"tag {os.environ['TAG']} does not match the built version(s) "
+                  f"{sorted(built)}; bump version in pyproject.toml or retag"
+              )
+          print(f"tag and wheel agree on {tag}")
+          PY
+
       - uses: actions/upload-artifact@v4
         with:
           name: python-dist
@@ -77,10 +101,19 @@ jobs:
       - run: npm run build
         working-directory: frontend
       - name: Zip the bundle
+        # The tag reaches the shell through the environment, never through ${{ }}
+        # interpolation into the script body. A git ref may legally contain $, `,
+        # ;, &, | and quotes, so a substituted ref name is shell source; it may
+        # also contain / , which would send the archive to a directory that does
+        # not exist. Quoted "$TAG" is data in both cases. workflow_dispatch has
+        # no tag, hence the fallback.
+        env:
+          TAG: ${{ github.ref_name }}
         run: |
           mkdir -p dist-zip
+          slug=$(printf '%s' "${TAG:-dev}" | tr -c 'A-Za-z0-9._-' '-')
           # Zip the directory itself, so the archive unpacks to ./dist/.
-          (cd frontend && zip -r ../dist-zip/silkscreen-web-${{ github.ref_name }}.zip dist)
+          (cd frontend && zip -r "../dist-zip/silkscreen-web-${slug}.zip" dist)
       - uses: actions/upload-artifact@v4
         with:
           name: web-dist
@@ -100,7 +133,12 @@ jobs:
           path: artifacts
           merge-multiple: true
       - run: ls -la artifacts
-      - uses: softprops/action-gh-release@v2
+      # Pinned to a commit: this step runs with contents: write, and a
+      # major-version tag is mutable -- upstream can retarget v2 at any
+      # commit, which would run unreviewed code against a token that can
+      # write releases. Bump deliberately; the trailing comment is the
+      # human-readable version the SHA belongs to.
+      - uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2.6.2
         with:
           files: artifacts/*
           generate_release_notes: true
