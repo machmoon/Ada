@@ -436,6 +436,31 @@ describe('describeStageEvent', () => {
     )
   })
 
+  it('names orchestrator and worker prompts before their calls', () => {
+    expect(
+      describeStageEvent({
+        event: 'model.request',
+        layer: 'orchestrator',
+        model: 'gemini-auto',
+      }),
+    ).toBe('orchestrator prompt prepared for gemini-auto')
+    expect(
+      describeStageEvent({ event: 'model.request', layer: 'worker', stage: 'review' }),
+    ).toBe('worker prompt prepared (review)')
+  })
+
+  it('describes orchestrator tool boundaries and clarification completion', () => {
+    expect(describeStageEvent({ event: 'tool.start', tool: 'generate_board' })).toBe(
+      'orchestrator called generate_board...',
+    )
+    expect(describeStageEvent({ event: 'tool.done', tool: 'generate_board' })).toBe(
+      'generate_board finished',
+    )
+    expect(describeStageEvent({ event: 'chat.done', needs_clarification: true })).toBe(
+      'waiting for one clarification',
+    )
+  })
+
   it('reports a raw model response by its size', () => {
     expect(
       describeStageEvent({
@@ -547,16 +572,25 @@ describe('describeStageEvent', () => {
 
   it('never throws, and always returns a readable sentence, on a gutted event', () => {
     const events = [
+      'chat.accepted',
       'run.accepted',
       'stage.start',
       'stage.done',
       'read.part',
       'propose.round',
       'model.call',
+      'model.request',
+      'model.response',
       'model.retry',
+      'tool.start',
+      'tool.done',
+      'tool.error',
       'ground.part',
       'run.done',
       'run.error',
+      'assistant.message',
+      'chat.done',
+      'chat.error',
       'client.badframe',
       'some.event',
     ]

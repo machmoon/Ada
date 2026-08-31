@@ -89,11 +89,22 @@ Model access did not move. The nodes call the `Model` protocol in
 `FallbackModel`'s failover semantics survive unchanged — the `served_by` field the service
 reports and the `model.retry` events the UI shows come from the code they always did.
 
+The web presentation path adds a separate root above that workflow.
+`engine/silkscreen/agents/adk/orchestrator.py` is a genuine ADK `LlmAgent`: it decides
+between asking one electrically essential clarification and calling one high-level
+`generate_board` tool. That tool wraps the existing validated pipeline rather than
+replacing its stages, so placement, repair, routing, and review retain their typed
+contracts. ADK's model and tool callbacks emit correlated request, response, start, done,
+and error events to `POST /chat/stream`; raw payloads are present only on the debug stream.
+The orchestrator itself uses ADK's native Gemini model adapter, while the worker stages
+continue to use the tested `Model` protocol and fallback chain.
+
 ### Where the SDK is called
 
-There are exactly two places in the repository that import the Gen AI SDK, and both are
-inside `engine/silkscreen/agents/`. The ADK layer sits above them and does not call the
-vendor SDK itself.
+The worker pipeline has two direct Gen AI SDK call sites inside
+`engine/silkscreen/agents/`. The ADK root described above uses ADK's native Gemini adapter
+instead of those wrappers, and `service/models.py` uses the SDK's read-only `models.list`
+operation to populate the UI's model choices.
 
 The first is `engine/silkscreen/agents/model.py`. The class `GeminiModel` imports
 `from google import genai`, constructs a `genai.Client(api_key=key)` from `GOOGLE_API_KEY`,
@@ -400,21 +411,15 @@ Orchestration is what ADK sells, the pipeline is orchestration, and running it o
 framework built for it is easier to defend than a hand-rolled sequencer doing the same
 thing.
 
-## Planned next steps [not yet built]
+## Shipped root agent and remaining stage migration
 
-None of the following is implemented. It is recorded as feature 12 in `TODO.txt`, and it is
-listed here so that the shipped state described above is not confused with the intended one.
-
-The next step is to re-express each stage as an ADK `LlmAgent` rather than as a node that
-calls the `Model` protocol by hand. That is the change that actually removes code: with the
-model call owned by the framework, the `_EventingModel` wrapper in `pipeline.py` — roughly
-ninety lines whose entire purpose is timing each round-trip and surfacing `FallbackModel`
-retries as events — is replaced by the runtime's own callbacks. It also requires rebuilding
-the two offline guarantees one level up, as a scripted LLM implementation standing in for
-the live one and a failover LLM wrapping a provider list, so that the properties
-`ScriptedModel` and `FallbackModel` supply today survive the move. Until those exist, the
-protocol-calling nodes stay, because losing keyless tests to gain framework idiom would be a
-bad trade.
+The conversational root `LlmAgent` and its `generate_board` tool are implemented. The
+remaining feature-12 work is narrower: re-express individual worker stages as ADK
+`LlmAgent`s rather than workflow nodes that call the `Model` protocol by hand. That change
+could eventually replace `_EventingModel` in `pipeline.py` with runtime callbacks, but only
+after equivalent scripted-LLM and provider-failover adapters preserve the current offline
+and resilience guarantees. Until then, the root uses ADK-native model access and the
+workers deliberately retain `ScriptedModel` and `FallbackModel`.
 
 The evaluation harness and the cross-run session memory described in the previous section
 are the other two candidates, in that order. Both are additive, and neither is started.
@@ -440,14 +445,16 @@ the SPA, streamed stage events, an `optimal` placement, and a `FallbackModel` fa
 cheap tier surfacing in `served_by` — the semantics the parity suite exists to protect). That
 run is what flipped the default engine to `adk`.
 
-The model identifiers `gemini-3.7-flash` and `gemini-3.5-flash-lite` in `model.py` were read
-from the source but were not verified against a current Gemini model list, so this document
-makes no claim that they resolve. The embedding model `gemini-embedding-001` does appear in
-the Gen AI SDK's own `embed_content` example, so that one is corroborated.
+At runtime, `GET /models` asks the Gemini API for the current key's models, filters for
+`generateContent`, and caches the result for fifteen minutes. `Auto` resolves to
+`SILKSCREEN_ORCHESTRATOR_MODEL` when set and otherwise to the configured default. If the
+key is absent or discovery fails, the service labels its two configured IDs as a fallback
+catalog rather than claiming they were verified live. The embedding model
+`gemini-embedding-001` appears in the Gen AI SDK's own `embed_content` example.
 
-No live model call was made while writing this. Every statement about the pipeline's
-behaviour comes from reading the source and the offline tests, not from observing a run
-against the API.
+No additional live model call was made for the conversational-root change. Its behaviour
+is pinned with an offline `BaseLlm` fake, while the earlier workflow path has the live run
+recorded above.
 
 The `google-genai` pin was previously flagged here as unbounded above, with PyPI showing
 2.20.0 and a notice of breaking changes planned for 3.0.0. That observation is resolved

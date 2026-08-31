@@ -99,6 +99,16 @@ class FallbackModel:
                 return attempt.provider
         return None
 
+    @property
+    def last_model(self) -> str | None:
+        """Concrete model id behind :attr:`last_provider`, when it exposes one."""
+        served = self.last_provider
+        for provider in self.providers:
+            if provider.name == served:
+                value = getattr(provider.model, "model", None)
+                return str(value) if value else None
+        return None
+
     def generate(
         self,
         prompt: str,

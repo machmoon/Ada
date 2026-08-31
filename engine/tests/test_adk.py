@@ -214,6 +214,10 @@ def test_response_events_carry_each_answer_verbatim(tmp_path):
         for call in model.calls
     ]
     responses = [e for e in events if e["event"] == "model.response"]
+    requests = [e for e in events if e["event"] == "model.request"]
+    assert [e["stage"] for e in requests] == ["read", "propose", "review"]
+    assert [e["prompt"] for e in requests] == [call["prompt"] for call in model.calls]
+    assert [e["call_id"] for e in requests] == [e["call_id"] for e in responses]
     assert [e["stage"] for e in responses] == ["read", "propose", "review"]
     assert [e["text"] for e in responses] == answers
     assert [e["chars"] for e in responses] == [len(a) for a in answers]

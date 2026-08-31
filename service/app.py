@@ -64,6 +64,7 @@ from silkscreen.order import (  # noqa: E402
 from silkscreen.units import to_mm  # noqa: E402
 
 from .cache import FactStore, MemoryFactStore  # noqa: E402
+from .models import model_catalog, select_model  # noqa: E402
 
 __all__ = [
     "Handler",
@@ -463,6 +464,17 @@ def build_model():
     )
 
 
+def run_chat_orchestrator(**kwargs):
+    """Load ADK only for the route that needs its LLM agent."""
+    try:
+        from silkscreen.agents.adk.orchestrator import run_orchestrator
+    except ImportError as exc:
+        raise RuntimeError(
+            "the chat orchestrator needs the adk extra: pip install 'silkscreen[adk]'"
+        ) from exc
+    return run_orchestrator(**kwargs)
+
+
 def generate(
     payload: dict[str, Any],
     *,
@@ -615,6 +627,16 @@ def generate(
         ),
     }
 
+    if result.route is not None:
+        response["routing"] = {
+            "tracks": len(result.route.tracks),
+            "vias": len(result.route.vias),
+            "routed": list(result.route.routed),
+            "unrouted": dict(result.route.unrouted),
+            "warnings": list(result.route.warnings),
+            "completion": round(result.route.completion, 4),
+        }
+
     if order_opts is not None:
         response["order"] = _order_block(board, result.spec, order_opts)
 
@@ -681,10 +703,11 @@ def generate(
 
 
 class Handler(BaseHTTPRequestHandler):
-    """Four routes: a health check Cloud Run can probe, the generator in its
-    one-shot and streaming forms, and the built web bundle."""
+    """Same-origin API and built web bundle for the review interface."""
 
     model_factory = staticmethod(build_model)
+    model_catalog_factory = staticmethod(model_catalog)
+    orchestrator_runner = staticmethod(run_chat_orchestrator)
     store: FactStore | None = None
     pages_store: FactStore | None = None
     embedder_factory = staticmethod(build_embedder)
@@ -777,6 +800,10 @@ class Handler(BaseHTTPRequestHandler):
             self._send(200, {"ok": True, "service": "silkscreen"})
             return
 
+        if route == "/models":
+            self._send(200, self.model_catalog_factory())
+            return
+
         static = self._resolve_static(route)
         if static is not None:
             self._send_file(static)
@@ -793,6 +820,9 @@ class Handler(BaseHTTPRequestHandler):
         self._send(404, {"error": f"no route {self.path}"})
 
     def do_POST(self) -> None:
+        if self.path == "/chat/stream":
+            self._chat_stream()
+            return
         if self.path == "/generate/stream":
             self._generate_stream()
             return
@@ -921,6 +951,113 @@ class Handler(BaseHTTPRequestHandler):
 
         with contextlib.suppress(ConnectionError):
             emit({"event": "run.done", "result": result})
+
+    def _chat_stream(self) -> None:
+        """One ADK orchestrator turn, with pipeline and model events inline."""
+        payload = self._read_payload()
+        if payload is None:
+            return
+
+        intent = payload.get("intent")
+        clarification = payload.get("clarification", "")
+        if not isinstance(intent, str) or not intent.strip():
+            self._send(400, {"error": "'intent' is required"})
+            return
+        if not isinstance(clarification, str):
+            self._send(400, {"error": "'clarification' must be a string"})
+            return
+
+        session_id = str(payload.get("session_id") or uuid.uuid4().hex)
+        turn_id = str(payload.get("turn_id") or uuid.uuid4().hex[:12])
+        if len(session_id) > 128 or len(turn_id) > 128:
+            self._send(
+                400,
+                {"error": "session and turn ids must be at most 128 characters"},
+            )
+            return
+
+        try:
+            catalog = self.model_catalog_factory()
+            orchestrator_model = select_model(payload.get("model"), catalog)
+        except ValueError as exc:
+            self._send(400, {"error": str(exc)})
+            return
+
+        self.send_response(200)
+        self.send_header("Content-Type", "application/x-ndjson")
+        self.send_header("Cache-Control", "no-cache")
+        self.end_headers()
+
+        started = time.monotonic()
+        event_seq = 0
+        gone = False
+
+        def emit(event: dict[str, Any]) -> None:
+            nonlocal event_seq, gone
+            event_seq += 1
+            frame = {
+                "schema_version": 1,
+                "session_id": session_id,
+                "turn_id": turn_id,
+                "event_id": f"e{event_seq}",
+                **event,
+            }
+            frame.setdefault("t_s", round(time.monotonic() - started, 3))
+            try:
+                self.wfile.write((json.dumps(frame) + "\n").encode())
+                self.wfile.flush()
+            except ConnectionError:
+                gone = True
+                raise
+
+        def generate_board() -> dict[str, Any]:
+            board_payload = {
+                key: value
+                for key, value in payload.items()
+                if key not in {"clarification", "session_id", "turn_id", "model"}
+            }
+            if clarification.strip():
+                board_payload["intent"] = (
+                    f"{intent.strip()}\n\nClarification: {clarification.strip()}"
+                )
+            return self._run(board_payload, on_event=emit)
+
+        try:
+            emit(
+                {
+                    "event": "chat.accepted",
+                    "layer": "orchestrator",
+                    "model": orchestrator_model,
+                }
+            )
+            outcome = self.orchestrator_runner(
+                message=intent,
+                clarification=clarification,
+                model=orchestrator_model,
+                session_id=session_id,
+                generate=generate_board,
+                emit=emit,
+                debug=bool(payload.get("debug", False)),
+            )
+        except Exception as exc:
+            if gone:
+                sys.stderr.write(f"stream client disconnected: {self.path}\n")
+                return
+            status, body = _error_response(exc)
+            with contextlib.suppress(ConnectionError):
+                emit({"event": "chat.error", "status": status, **body})
+            return
+
+        with contextlib.suppress(ConnectionError):
+            emit(
+                {
+                    "event": "chat.done",
+                    "assistant": outcome.assistant,
+                    "needs_clarification": outcome.needs_clarification,
+                    "model": outcome.model,
+                    "result": outcome.result,
+                }
+            )
 
     def log_message(self, fmt: str, *args: Any) -> None:
         sys.stderr.write(f"{self.address_string()} - {fmt % args}\n")

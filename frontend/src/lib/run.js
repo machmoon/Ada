@@ -17,14 +17,36 @@ const IDLE = {
   // Keyed by backend stage name, plus the synthetic `validate` — see stageEvent.
   stages: {},
   feed: [],
+  sessionId: '',
+  entries: [],
+  needsClarification: false,
+  actualModel: '',
 }
 
 /** phase: idle | running | done | error */
 export const run = writable(IDLE)
 
-export function startRun(request) {
+export function startRun(request, options = {}) {
   const id = nextRunId()
   const intent = String(request?.intent ?? '')
+  const previous = get(run)
+  const preserve = options.preserve === true
+  const sessionId = preserve && previous.sessionId ? previous.sessionId : newSessionId()
+  const entries = preserve ? [...(previous.entries || [])] : []
+  const message = String(options.message ?? intent)
+  if (message) {
+    entries.push({ id: `${id}-user`, type: 'message', role: 'user', text: message })
+  }
+  entries.push({
+    id,
+    type: 'activity',
+    phase: 'running',
+    request,
+    stages: {},
+    feed: [],
+    result: null,
+    error: null,
+  })
   logEvent('run.start', `run ${id} started`, {
     id,
     intent,
@@ -44,17 +66,61 @@ export function startRun(request) {
     id,
     stages: {},
     feed: [],
+    sessionId,
+    entries,
+    needsClarification: false,
+    actualModel: '',
   })
 }
 
 export function finishRun(result) {
   logDone(get(run), result)
-  run.update((state) => ({ ...state, phase: 'done', result, error: null }))
+  run.update((state) => {
+    const activity = updateActivity(state.entries, state.id, {
+      phase: 'done',
+      result,
+      error: null,
+    })
+    return {
+      ...state,
+      phase: 'done',
+      result,
+      error: null,
+      needsClarification: false,
+      entries: attachResult(activity, result),
+    }
+  })
+}
+
+export function finishClarification(outcome) {
+  run.update((state) => ({
+    ...state,
+    phase: 'clarification',
+    result: null,
+    error: null,
+    needsClarification: true,
+    actualModel: String(outcome?.model ?? state.actualModel ?? ''),
+    entries: updateActivity(state.entries, state.id, {
+      phase: 'clarification',
+      result: null,
+      error: null,
+    }),
+  }))
 }
 
 export function failRun(error) {
   logFailure(get(run), error)
-  run.update((state) => ({ ...state, phase: 'error', result: null, error }))
+  run.update((state) => ({
+    ...state,
+    phase: 'error',
+    result: null,
+    error,
+    entries: updateActivity(state.entries, state.id, {
+      phase: 'error',
+      result: null,
+      error: plainError(error),
+    }),
+  }))
 }
 
 export function resetRun() {
@@ -64,7 +130,26 @@ export function resetRun() {
   record({ level: 'debug', src: 'app', event: 'run.reset', msg: 'run cleared', data: { id } })
   // Fresh containers rather than IDLE's own: nothing may end up sharing the
   // holder every future run starts from.
-  run.update((state) => ({ ...IDLE, stages: {}, feed: [], request: state.request }))
+  run.update((state) => ({
+    ...IDLE,
+    stages: {},
+    feed: [],
+    entries: [],
+    request: state.request,
+  }))
+}
+
+/** Restore a previously validated session snapshot. */
+export function restoreRun(snapshot) {
+  run.set({
+    ...IDLE,
+    ...snapshot,
+    phase: snapshot.phase === 'running' ? 'error' : snapshot.phase,
+    stages: snapshot.stages || {},
+    feed: snapshot.feed || [],
+    entries: Array.isArray(snapshot.entries) ? snapshot.entries : [],
+    startedAt: 0,
+  })
 }
 
 // ------------------------------------------------------- the live pipeline
@@ -105,6 +190,8 @@ const START_SUMMARY = {
 /** Events that are not, in themselves, bad news default to info. */
 const LEVEL_OF = {
   'run.error': 'error',
+  'chat.error': 'error',
+  'tool.error': 'error',
   'model.retry': 'warn',
   'client.badframe': 'warn',
 }
@@ -130,20 +217,126 @@ export function stageEvent(evt) {
     data: event,
   })
 
-  run.update((state) => ({
-    ...state,
-    stages: nextStages(state.stages || {}, name, event),
-    feed: appendFeed(state.feed || [], {
-      id: (feedSeq += 1),
-      t_s: finiteOrNull(event.t_s),
-      text,
-      event: name,
-      // The feed is the one place a raw answer lives whole: the debug log
-      // clips every string it records, so the row keeps its own copy. Set
-      // only where there is one, so no other row carries a dead field.
-      ...(name === 'model.response' ? { detail: String(event.text ?? '') } : {}),
-    }),
-  }))
+  run.update((state) => {
+    const stages = nextStages(state.stages || {}, name, event)
+    const eventModel = String(event.model ?? '')
+    const actualModel =
+      eventModel && (event.layer === 'orchestrator' || name.startsWith('chat.'))
+        ? eventModel
+        : state.actualModel
+    const hidden = name === 'assistant.message' || name === 'chat.done'
+    const row = hidden
+      ? null
+      : {
+          id: (feedSeq += 1),
+          t_s: finiteOrNull(event.t_s),
+          text,
+          event: name,
+          layer: String(event.layer ?? ''),
+          callId: String(event.call_id ?? event.tool_call_id ?? ''),
+          ...detailOf(name, event),
+        }
+    const feed = row ? appendFeed(state.feed || [], row) : state.feed || []
+    let entries = updateActivity(state.entries, state.id, { stages, feed })
+    if (name === 'assistant.message') {
+      entries = [
+        ...entries,
+        {
+          id: String(event.event_id || `${state.id}-assistant-${feedSeq += 1}`),
+          type: 'message',
+          role: 'assistant',
+          text: String(event.text ?? ''),
+          model: String(event.model ?? ''),
+          needsClarification: event.needs_clarification === true,
+        },
+      ]
+    }
+    return {
+      ...state,
+      stages,
+      feed,
+      entries,
+      actualModel,
+    }
+  })
+}
+
+function detailOf(name, event) {
+  if (name === 'model.response') {
+    if (event.response) return { detail: pretty(event.response), detailLabel: 'raw response' }
+    return { detail: String(event.text ?? ''), detailLabel: 'raw response' }
+  }
+  if (name === 'model.request') {
+    return {
+      detail: pretty({
+        system: event.system ?? '',
+        prompt: event.prompt ?? undefined,
+        contents: event.contents ?? undefined,
+        documents: event.documents ?? undefined,
+        tools: event.tools ?? undefined,
+        temperature: event.temperature ?? undefined,
+        max_output_tokens: event.max_output_tokens ?? undefined,
+      }),
+      detailLabel: 'raw prompt',
+    }
+  }
+  if (name === 'tool.start') {
+    return { detail: pretty(event.args ?? {}), detailLabel: 'arguments' }
+  }
+  if (name === 'tool.done') {
+    return { detail: pretty(event.result ?? {}), detailLabel: 'result' }
+  }
+  if (name === 'tool.error') {
+    return { detail: String(event.error ?? ''), detailLabel: 'error' }
+  }
+  return {}
+}
+
+function pretty(value) {
+  try {
+    return JSON.stringify(value, null, 2)
+  } catch {
+    return String(value ?? '')
+  }
+}
+
+function updateActivity(entries, id, patch) {
+  return (entries || []).map((entry) =>
+    entry.type === 'activity' && entry.id === id ? { ...entry, ...patch } : entry,
+  )
+}
+
+function attachResult(entries, result) {
+  const next = [...(entries || [])]
+  for (let index = next.length - 1; index >= 0; index -= 1) {
+    if (next[index].type === 'message' && next[index].role === 'assistant') {
+      next[index] = { ...next[index], result }
+      return next
+    }
+  }
+  next.push({
+    id: `result-${Date.now()}`,
+    type: 'message',
+    role: 'assistant',
+    text: 'The board run completed.',
+    result,
+  })
+  return next
+}
+
+function plainError(error) {
+  return {
+    kind: String(error?.kind ?? 'internal'),
+    message: String(error?.message ?? error ?? ''),
+    status: Number(error?.status ?? 0),
+    errorId: String(error?.errorId ?? ''),
+  }
+}
+
+let sessionSeq = 0
+function newSessionId() {
+  sessionSeq += 1
+  return `session-${Date.now().toString(36)}-${sessionSeq}`
 }
 
 function nextStages(stages, name, evt) {

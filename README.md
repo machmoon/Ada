@@ -29,7 +29,7 @@ Every stage is a real KiCad file you can open and inspect on its own, so you can
 where a design went wrong instead of only seeing the last artifact.
 
 ```
-542 passed — no network, no API key, no KiCad install
+554 passed — no network, no API key, no KiCad install
 ```
 
 ---
@@ -44,10 +44,11 @@ where a design went wrong instead of only seeing the last artifact.
 | KiCad project (`.kicad_pro`) | ✅ | ❌ |
 | Adversarial review, findings, citations | ✅ text | ✅ nicer to read |
 
-**The CLI is the supported path.** The web UI (`service/` + `frontend/`) is a review
-viewer built around the one artifact the pipeline used to produce, and it has not
-caught up with schematics or routing: it shows a placement diagram and hands you the
-final `.kicad_pcb`. Use it to read a review; use the CLI to design a board.
+**The CLI is still the complete project-output path.** The web UI (`service/` +
+`frontend/`) now starts with a persistent orchestrator chat, shows the observable model,
+tool, validation, and retry activity, and hands you compact cards for the schematic,
+placement diagram, review, and final `.kicad_pcb`. It still does not return the native
+`.kicad_sch`/`.kicad_pro` or draw routed tracks, so use the CLI when those files matter.
 
 ---
 
@@ -83,7 +84,7 @@ that consumes the file. Install it if you are a person who wants to see a board.
 | `kicad.py` — `.kicad_pcb` read/write | **Working** · 28 tests |
 | `packing.py` — CP-SAT placer | **Working** · 43 tests |
 | `netlist.py` — validated circuit IR | **Working** · 21 tests |
-| `schematic.py` — `.kicad_sch` + `.kicad_pro` emission | **Working** · 20 tests · KiCad ERC clean |
+| `schematic.py` — `.kicad_sch` + `.kicad_pro` emission | **Working** · 22 tests · KiCad ERC clean |
 | `routing.py` — two-layer grid autorouter | **Working, partial by design** · 20 tests — see below |
 | `footprints.py` + `board.py` — land patterns, board emission | **Working** · 20 tests |
 | `agents/` — datasheet, propose, review, pipeline | **Working** · 34 tests |
@@ -94,8 +95,8 @@ that consumes the file. Install it if you are a person who wants to see a board.
 | `order.py` — order options, manufacturability preflight | **Working** · blocks an unrouted board |
 | `mcp/` — MCP server over stdio | **Working** · 23 tests |
 | `audit/` — optional visual design review | **Working** · 52 tests |
-| `service/` — Cloud Run + Firestore cache | **Working** · 99 tests |
-| `frontend/` — Svelte review UI, served by the service | **Working** · review, schematic and board tabs, with an in-app debug console for log export |
+| `service/` — Cloud Run + Firestore cache | **Working** · 103 tests |
+| `frontend/` — Svelte review UI, served by the service | **Working** · persistent orchestrator chat, expandable model/tool traces, session JSON, review, schematic and board tabs |
 | Overlay UI, guided cursor | Not built (mockups only) |
 
 ---
@@ -255,7 +256,7 @@ treats the board file as the interface.
 | Requires KiCad running | Yes | **No** |
 | Headless / CI | Hard | **Native** |
 | Platform lock | KiCad's plugin loader | **None — pure Python** |
-| Testable without KiCad | No | **Yes, all 542 tests** |
+| Testable without KiCad | No | **Yes, all 554 tests** |
 
 ### What it reads
 
@@ -363,14 +364,19 @@ gcloud run deploy silkscreen --source . --region us-central1 \
 the board, the emitted `.kicad_pcb`, and a versioned `schematic` topology block
 with stable part ids, board refs, pins and structured net endpoints. Extracted
 datasheet facts persist to Firestore, so the second request for a part skips the most expensive stage.
-`GET /healthz` is the readiness probe. The container also serves the built review
-UI at `/`, same origin as `/generate`, so there is no CORS anywhere.
+`POST /chat/stream` is the presentation path: a genuine ADK `LlmAgent` may ask one
+essential clarification and otherwise calls the validated generator as its
+`generate_board` tool. It streams versioned NDJSON events for the orchestrator, tool,
+worker calls, and final result. `GET /models` discovers the current key's
+`generateContent`-capable Gemini models, with a short server cache and configured fallback
+catalog. `GET /healthz` is the readiness probe. The container serves the built UI at `/`,
+same origin as all of these routes, so there is no CORS anywhere.
 
 ### Running the web UI
 
 The UI is a Svelte SPA in `frontend/`, and it needs Node 22 or newer
 (`node --version`). In development it runs on Vite's dev server, which proxies
-`/generate` and `/healthz` to the Python service — two terminals:
+`/generate`, `/chat`, `/models`, and `/healthz` to the Python service — two terminals:
 
 ```bash
 PORT=8081 python -m service.app            # terminal 1: the API
@@ -390,14 +396,20 @@ The UI has its own suite, which CI runs before the build:
 cd frontend && npm test  # Vitest over frontend/src/lib
 ```
 
-A run lands on the review. The **Schematic** tab draws the validated circuit as
-generic IC and passive symbols with physical pin numbers and net-labelled
-connections; it deliberately does not claim to be a native `.kicad_sch` or a
-library-accurate symbol sheet. The **Board** tab draws the board the placer
-actually produced — courtyard outlines, copper pads, and part refs, straight
-from the `placements` the service returns. Selecting a finding highlights the
-parts it names in either drawing, and the board and review panes will hand you
-the emitted `.kicad_pcb` as a download.
+A run stays in the **Chat** tab as a persistent transcript. Friendly activity summaries
+are shown by default; raw orchestrator and worker prompts/responses are expandable for a
+demo or debugging. Clarification, retry, edit, copy-error, and discovered-model retry
+controls remain beside the failed or incomplete turn. **Save session** exports a versioned
+JSON snapshot containing the transcript, trace, result, and board artifact; **Open session**
+restores it locally. Treat that debug export as sensitive if a prompt contains private
+design information.
+
+The compact artifact cards open the existing views. **Schematic** draws the validated
+circuit as generic symbols with physical pin numbers and net-labelled connections; it does
+not claim to be a native `.kicad_sch` or a library-accurate sheet. **Board** draws the
+placement the service actually produced — courtyard outlines, pads, and part refs — while
+**Review** shows the grounded findings. Selecting a finding highlights the parts it names,
+and the board and review panes offer the emitted `.kicad_pcb` as a download.
 
 ### As an MCP server
 
@@ -563,7 +575,7 @@ engine/
       pipeline.py   prompt -> PCB
       adk/          ADK dynamic workflow over the same stage bodies
     audit/        optional visual review of a finished board
-  tests/          542 tests — no network, no API keys, no KiCad
+  tests/          554 tests — no network, no API keys, no KiCad
     fixtures/     ref.kicad_pcb -- 11-footprint board fixture
 scripts/
   demo.py         end-to-end: read -> place -> write -> verify
@@ -643,10 +655,10 @@ docker build .                                      # the `docker` job
 
 ### Expected output
 
-**1. Test suite** — 542 tests, no warnings (four key-gated live-model tests skip unless `GOOGLE_API_KEY` is set):
+**1. Test suite** — 554 tests, no warnings (four key-gated live-model tests skip unless `GOOGLE_API_KEY` is set):
 
 ```
-542 passed in 190.85s
+554 passed in 190.85s
 ```
 
 The suite is dominated by the 20-second solver budget in a handful of placement

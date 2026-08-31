@@ -7,6 +7,8 @@ import { parseNdjson } from './stream.js'
 
 const ENDPOINT = '/generate'
 const STREAM_ENDPOINT = '/generate/stream'
+const CHAT_STREAM_ENDPOINT = '/chat/stream'
+const MODELS_ENDPOINT = '/models'
 const NDJSON_TYPE = 'application/x-ndjson'
 const TIMEOUT_MESSAGE = 'The run passed the 300 second budget and was cancelled.'
 
@@ -391,5 +393,173 @@ export async function generateStream(request, onEvent) {
     throw streamFailure(controller, ms, events, 'The stream closed before the run finished.')
   } finally {
     clearTimeout(timer)
+  }
+}
+
+// --------------------------------------------------------------------- chat
+
+function chatTerminalOf(evt) {
+  const name = String(evt?.event ?? '')
+  if (name === 'chat.done') {
+    return {
+      outcome: {
+        assistant: String(evt.assistant ?? ''),
+        needsClarification: evt.needs_clarification === true,
+        model: String(evt.model ?? ''),
+        result: evt.result ? normalizeResponse(objectOf(evt.result)) : null,
+      },
+    }
+  }
+  if (name === 'chat.error') {
+    return { error: errorFor(Number(evt.status) || 500, evt) }
+  }
+  return null
+}
+
+function chatFailure(controller, ms, events, why) {
+  logError('api.failed', `POST ${CHAT_STREAM_ENDPOINT} stopped after ${events} events`, {
+    ms,
+    events,
+    aborted: controller.signal.aborted,
+    why,
+  })
+  if (controller.signal.aborted) return new ApiError('timeout', TIMEOUT_MESSAGE)
+  return new ApiError('network', why)
+}
+
+/** One ADK orchestrator turn. Unlike generateStream this has no one-shot
+    fallback: replaying an agent turn can duplicate a paid tool invocation. */
+export async function chatStream(request, onEvent) {
+  const body = JSON.stringify({ ...request, debug: true })
+  guardSize(body)
+
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS)
+  const startedAt = Date.now()
+  try {
+    let response
+    try {
+      response = await fetch(CHAT_STREAM_ENDPOINT, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', accept: NDJSON_TYPE },
+        body,
+        signal: controller.signal,
+      })
+    } catch (err) {
+      logError('api.failed', `POST ${CHAT_STREAM_ENDPOINT} never reached a response`, {
+        ms: Date.now() - startedAt,
+        aborted: controller.signal.aborted,
+      })
+      if (controller.signal.aborted) throw new ApiError('timeout', TIMEOUT_MESSAGE)
+      throw new ApiError('network', String(err && err.message ? err.message : err))
+    }
+
+    if (!response.ok) {
+      let data = {}
+      let parsed = true
+      try {
+        data = await response.json()
+      } catch {
+        parsed = false
+      }
+      recordOutcome(CHAT_STREAM_ENDPOINT, response, Date.now() - startedAt, parsed, {
+        stream: true,
+      })
+      throw errorFor(response.status, data || {})
+    }
+
+    const type = contentTypeOf(response)
+    if (!isNdjson(type) || !response.body || typeof response.body.getReader !== 'function') {
+      throw new ApiError('internal', 'The chat service did not return a readable event stream.', {
+        status: response.status,
+      })
+    }
+
+    logEvent('api.stream', `POST ${CHAT_STREAM_ENDPOINT} opened ${response.status}`, {
+      status: response.status,
+      ms: Date.now() - startedAt,
+      content_type: type,
+    })
+
+    const reader = response.body.getReader()
+    const decoder = new TextDecoder()
+    let carry = ''
+    let events = 0
+    let outcome = null
+    let closed = false
+    try {
+      while (!outcome && !closed) {
+        let chunk
+        try {
+          chunk = await reader.read()
+        } catch (err) {
+          throw chatFailure(
+            controller,
+            Date.now() - startedAt,
+            events,
+            String(err && err.message ? err.message : err),
+          )
+        }
+        closed = Boolean(chunk.done)
+        const text = closed ? `${decoder.decode()}\n` : decoder.decode(chunk.value, { stream: true })
+        const step = parseNdjson(carry, text)
+        carry = step.carry
+        for (const evt of step.events) {
+          events += 1
+          emit(onEvent, evt)
+          if (!outcome) outcome = chatTerminalOf(evt)
+        }
+      }
+    } finally {
+      releaseReader(reader)
+    }
+
+    const ms = Date.now() - startedAt
+    if (outcome?.error) {
+      const error = outcome.error
+      recordOutcome(CHAT_STREAM_ENDPOINT, { status: error.status, ok: false }, ms, true, {
+        stream: true,
+        events,
+      })
+      throw error
+    }
+    if (outcome) {
+      recordOutcome(CHAT_STREAM_ENDPOINT, response, ms, true, { stream: true, events })
+      return outcome.outcome
+    }
+    throw chatFailure(controller, ms, events, 'The stream closed before the turn finished.')
+  } finally {
+    clearTimeout(timer)
+  }
+}
+
+/** Server-filtered Gemini models. Auto remains the normal UI choice. */
+export async function listModels() {
+  let response
+  try {
+    response = await fetch(MODELS_ENDPOINT, { headers: { accept: 'application/json' } })
+  } catch (err) {
+    throw new ApiError('network', String(err && err.message ? err.message : err))
+  }
+  let data = {}
+  try {
+    data = await response.json()
+  } catch {
+    throw new ApiError('internal', 'The model catalog is not JSON.', { status: response.status })
+  }
+  if (!response.ok) throw errorFor(response.status, data || {})
+  return {
+    default: String(data.default ?? 'auto'),
+    auto_model: String(data.auto_model ?? ''),
+    source: String(data.source ?? ''),
+    warning: String(data.warning ?? ''),
+    models: asArray(data.models).map((model) => ({
+      id: String(model?.id ?? ''),
+      name: String(model?.name ?? model?.id ?? ''),
+      description: String(model?.description ?? ''),
+      input_token_limit: model?.input_token_limit ?? null,
+      output_token_limit: model?.output_token_limit ?? null,
+      thinking: model?.thinking ?? null,
+    })).filter((model) => model.id),
   }
 }

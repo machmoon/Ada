@@ -88,6 +88,9 @@ feature is tracked under feature 12.
  ----- Grounding toggle on the intent form             [DONE]        sends "ground" only when a datasheet is given
  ----- Download the emitted .kicad_pcb                 [DONE]        from the board well and the review results
  ----- In-app debug console + log export               [DONE]        console/window capture; text + NDJSON
+ ----- Persistent chat transcript + artifact cards    [DONE]        friendly activity; raw prompts/responses expand
+ ----- Save/open versioned JSON sessions              [DONE]        transcript, trace, result and board artifact
+ ----- Retry/edit/switch-model recovery controls      [DONE]        failures stay in the transcript for comparison
  ----- data-testid sweep across every component        [DONE]        stable hooks for e2e and agent QA
  ----- Voice: spoken intent, findings read aloud       [NOT BUILT]   the last phase, by instruction; Whisper
  10  Service error taxonomy                            [OPEN]
@@ -105,6 +108,8 @@ feature is tracked under feature 12.
  ----- POST /generate/stream, NDJSON frames           [DONE]        service/app.py; run.done carries the one-shot body
  ----- Chat feed + live stage ticks + console mirror  [DONE]        PipelineFeed.svelte; src 'server' log entries
  ----- Raw model responses behind a "debug" flag      [DONE]        model.response frames, clipped at 16 kB
+ ----- Raw model requests + correlated call ids       [DONE]        system/user prompts, documents and settings
+ ----- POST /chat/stream, versioned agent events       [DONE]        one clarification or a terminal board result
  ----- Fallback must never rerun a started run        [OPEN]        PR #9 review (P2, genuine): generateStream falls
                                                                      back to one-shot on a 200 whose content type was
                                                                      rewritten or whose body is unreadable — but a 200
@@ -125,6 +130,8 @@ feature is tracked under feature 12.
  ----- R12 Dockerfile + setup gain the adk extra       [DONE]        image, CI and setup all install the extra
  ----- R10 default engine flips to adk                 [DONE]        gate passed 2026-08-30: live SPA run,
                                                                      optimal placement, failover observed
+ ----- LLM root orchestrator + generate_board tool     [DONE]        ADK LlmAgent decides clarification vs tool call
+ ----- Gemini models.list discovery + Auto policy     [DONE]        /models; server-filtered retry choices
  ----- R9 agents dir for adk web and /docs             [NOT BUILT]   a dev surface only, off the request path
  ----- R11 parallel reads via asyncio.gather           [NOT BUILT]   closes feature 2; needs an order-independent
                                                                      event test

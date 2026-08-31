@@ -5,6 +5,7 @@ describe('parseTab', () => {
   it('reads a tab name off the hash, with or without the leading hash', () => {
     expect(parseTab('#board')).toBe('board')
     expect(parseTab('review')).toBe('review')
+    expect(parseTab('#chat')).toBe('chat')
   })
 
   it('accepts any case and surrounding whitespace', () => {
@@ -20,8 +21,8 @@ describe('parseTab', () => {
     expect(parseTab(null)).toBe('')
   })
 
-  it('knows the three tabs the status bar shows', () => {
-    expect(TABS).toEqual(['schematic', 'board', 'review'])
+  it('knows the four tabs the status bar shows', () => {
+    expect(TABS).toEqual(['chat', 'schematic', 'board', 'review'])
   })
 })
 
@@ -30,22 +31,27 @@ describe('resolveTab', () => {
     expect(resolveTab('#board', { board: true })).toBe('board')
   })
 
-  it('falls back to the review when there is no board to show', () => {
-    expect(resolveTab('#board', { board: false })).toBe('review')
-    expect(resolveTab('#board')).toBe('review')
+  it('falls back to the chat when there is no board to show', () => {
+    expect(resolveTab('#board', { board: false })).toBe('chat')
+    expect(resolveTab('#board')).toBe('chat')
   })
 
   it('shows the schematic once a run carries validated topology', () => {
     expect(resolveTab('#schematic', { schematic: true })).toBe('schematic')
   })
 
-  it('falls back to review when there is no schematic to show', () => {
-    expect(resolveTab('#schematic', { schematic: false, board: true })).toBe('review')
-    expect(resolveTab('#schematic')).toBe('review')
+  it('falls back to chat when there is no schematic to show', () => {
+    expect(resolveTab('#schematic', { schematic: false, board: true })).toBe('chat')
+    expect(resolveTab('#schematic')).toBe('chat')
   })
 
-  it('defaults to the review for an empty or unknown hash', () => {
-    expect(resolveTab('', { schematic: true, board: true })).toBe('review')
-    expect(resolveTab('#nowhere', { schematic: true, board: true })).toBe('review')
+  it('shows review only after a result exists', () => {
+    expect(resolveTab('#review', { review: true })).toBe('review')
+    expect(resolveTab('#review', { review: false })).toBe('chat')
+  })
+
+  it('defaults to the chat for an empty or unknown hash', () => {
+    expect(resolveTab('', { schematic: true, board: true, review: true })).toBe('chat')
+    expect(resolveTab('#nowhere', { schematic: true, board: true, review: true })).toBe('chat')
   })
 })

@@ -38,6 +38,13 @@
 </script>
 
 <footer class="bar" data-testid="status-bar">
+  <a
+    class="lbl tab"
+    class:current={tab === 'chat'}
+    href="#chat"
+    aria-current={tab === 'chat' ? 'page' : undefined}
+    data-testid="status-bar-tab-chat"
+  >Chat</a>
   <!-- Tabs are hash fragments, so a switch never reaches the server. Each
        drawing wakes up only when the current run carries its data contract. -->
   {#if schematicEnabled}

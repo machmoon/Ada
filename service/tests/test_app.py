@@ -13,6 +13,7 @@ import urllib.request
 from pathlib import Path
 
 import pytest
+from silkscreen.agents.adk.orchestrator import OrchestratorResult
 from silkscreen.agents.model import ScriptedModel
 from silkscreen.kicad import footprint_ref, load_board
 from silkscreen.units import to_mm
@@ -1024,6 +1025,23 @@ def test_wirelength_is_reported_in_mm(server):
     assert round(body["wirelength_mm"], 3) == body["wirelength_mm"]
 
 
+def test_routing_outcome_names_every_net_left_as_ratsnest(server):
+    body = placements_of(server)
+    routing = body["routing"]
+
+    assert isinstance(routing["routed"], list)
+    assert isinstance(routing["unrouted"], dict)
+    assert 0 <= routing["completion"] <= 1
+    assert set(routing) == {
+        "tracks",
+        "vias",
+        "routed",
+        "unrouted",
+        "warnings",
+        "completion",
+    }
+
+
 def test_placements_are_additive(server):
     """Nothing that was in the response before is gone or reshaped."""
     body = placements_of(server)
@@ -1638,6 +1656,143 @@ def post_stream(srv, payload, path="/generate/stream", content_length="auto"):
             rest += chunk
     assert not rest.strip(), "a frame arrived without its terminating newline"
     return status, headers, frames
+
+
+def test_models_lists_the_server_catalog(server):
+    previous = Handler.__dict__["model_catalog_factory"]
+    Handler.model_catalog_factory = staticmethod(
+        lambda: {
+            "default": "auto",
+            "auto_model": "gemini-test",
+            "source": "test",
+            "models": [{"id": "gemini-test", "input_token_limit": 1000}],
+        }
+    )
+    try:
+        status, _, body = get(server, "/models")
+    finally:
+        Handler.model_catalog_factory = previous
+
+    assert status == 200
+    catalog = json.loads(body)
+    assert catalog["default"] == "auto"
+    assert catalog["models"][0]["id"] == "gemini-test"
+
+
+def test_chat_stream_wraps_the_pipeline_in_an_orchestrator_turn(
+    monkeypatch, server
+):
+    import service.app as app
+
+    previous_catalog = Handler.__dict__["model_catalog_factory"]
+    previous_runner = Handler.__dict__["orchestrator_runner"]
+    Handler.model_catalog_factory = staticmethod(
+        lambda: {
+            "default": "auto",
+            "auto_model": "gemini-test",
+            "models": [{"id": "gemini-test"}],
+        }
+    )
+
+    def fake_generate(payload, **kwargs):
+        kwargs["on_event"]({"event": "stage.start", "stage": "propose"})
+        return {"status": "FEASIBLE", "intent": payload["intent"], "parts": []}
+
+    def fake_orchestrator(**kwargs):
+        kwargs["emit"](
+            {
+                "event": "model.request",
+                "layer": "orchestrator",
+                "call_id": "orchestrator-1",
+                "system": "system prompt",
+                "contents": [{"role": "user", "text": kwargs["message"]}],
+            }
+        )
+        result = kwargs["generate"]()
+        kwargs["emit"](
+            {
+                "event": "assistant.message",
+                "text": "The board is ready.",
+                "needs_clarification": False,
+            }
+        )
+        return OrchestratorResult(
+            assistant="The board is ready.",
+            result=result,
+            needs_clarification=False,
+            model=str(kwargs["model"]),
+        )
+
+    Handler.orchestrator_runner = staticmethod(fake_orchestrator)
+    monkeypatch.setattr(app, "generate", fake_generate)
+    try:
+        status, headers, frames = post_stream(
+            server,
+            {
+                "intent": "a regulator",
+                "debug": True,
+                "session_id": "session-1",
+                "turn_id": "turn-1",
+            },
+            path="/chat/stream",
+        )
+    finally:
+        Handler.model_catalog_factory = previous_catalog
+        Handler.orchestrator_runner = previous_runner
+
+    assert status == 200
+    assert headers["content-type"] == "application/x-ndjson"
+    assert [frame["event"] for frame in frames] == [
+        "chat.accepted",
+        "model.request",
+        "stage.start",
+        "assistant.message",
+        "chat.done",
+    ]
+    assert all(frame["schema_version"] == 1 for frame in frames)
+    assert all(frame["session_id"] == "session-1" for frame in frames)
+    assert all(frame["turn_id"] == "turn-1" for frame in frames)
+    assert frames[-1]["result"]["status"] == "FEASIBLE"
+    assert frames[-1]["assistant"] == "The board is ready."
+
+
+def test_chat_stream_can_end_in_a_clarification_without_running_the_board(server):
+    previous_catalog = Handler.__dict__["model_catalog_factory"]
+    previous_runner = Handler.__dict__["orchestrator_runner"]
+    Handler.model_catalog_factory = staticmethod(
+        lambda: {
+            "default": "auto",
+            "auto_model": "gemini-test",
+            "models": [{"id": "gemini-test"}],
+        }
+    )
+
+    def clarify(**kwargs):
+        question = "What input voltage should the regulator accept?"
+        kwargs["emit"](
+            {
+                "event": "assistant.message",
+                "text": question,
+                "needs_clarification": True,
+            }
+        )
+        return OrchestratorResult(question, None, True, str(kwargs["model"]))
+
+    Handler.orchestrator_runner = staticmethod(clarify)
+    try:
+        status, _, frames = post_stream(
+            server,
+            {"intent": "a regulator"},
+            path="/chat/stream",
+        )
+    finally:
+        Handler.model_catalog_factory = previous_catalog
+        Handler.orchestrator_runner = previous_runner
+
+    assert status == 200
+    assert frames[-1]["event"] == "chat.done"
+    assert frames[-1]["needs_clarification"] is True
+    assert frames[-1]["result"] is None
 
 
 def test_a_stream_reports_the_run_and_ends_with_the_one_shot_body(server):

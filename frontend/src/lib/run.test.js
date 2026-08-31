@@ -1,7 +1,17 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { get } from 'svelte/store'
 import { clearLog, log } from './log.js'
-import { MAX_FEED, elapsed, failRun, finishRun, resetRun, run, stageEvent, startRun } from './run.js'
+import {
+  MAX_FEED,
+  elapsed,
+  failRun,
+  finishClarification,
+  finishRun,
+  resetRun,
+  run,
+  stageEvent,
+  startRun,
+} from './run.js'
 
 // The store is a module singleton, so the idle value has to be captured at import
 // time, before any test mutates it. Every test then starts from this exact object.
@@ -34,6 +44,10 @@ describe('the run store', () => {
       id: '',
       stages: {},
       feed: [],
+      sessionId: '',
+      entries: [],
+      needsClarification: false,
+      actualModel: '',
     })
   })
 })
@@ -251,6 +265,30 @@ describe('startRun', () => {
 
     expect(get(run).result).toBeNull()
     expect(get(run).error).toBeNull()
+  })
+
+  it('starts a transcript with the user message and a live activity entry', () => {
+    startRun({ intent: 'a regulator' })
+
+    expect(get(run).entries).toMatchObject([
+      { type: 'message', role: 'user', text: 'a regulator' },
+      { type: 'activity', phase: 'running', feed: [], stages: {} },
+    ])
+    expect(get(run).sessionId).toMatch(/^session-/)
+  })
+
+  it('keeps earlier transcript entries for a clarification answer', () => {
+    startRun({ intent: 'a regulator' })
+    finishClarification({ model: 'gemini-test' })
+    const sessionId = get(run).sessionId
+
+    startRun(
+      { intent: 'a regulator' },
+      { preserve: true, message: '5 V input' },
+    )
+
+    expect(get(run).sessionId).toBe(sessionId)
+    expect(get(run).entries.filter((entry) => entry.role === 'user')).toHaveLength(2)
   })
 })
 
@@ -714,6 +752,66 @@ describe('stageEvent: the feed', () => {
     expect(call.detail).toBeUndefined()
     expect(response).toMatchObject({ event: 'model.response', detail: '{"devices": {}}' })
     expect(response.text).toBe('response (propose): 15 chars')
+  })
+
+  it('keeps observable model prompts expandable and correlated by call id', () => {
+    startRun({ intent: 'x' })
+
+    stageEvent({
+      event: 'model.request',
+      layer: 'orchestrator',
+      call_id: 'orchestrator-1',
+      system: 'system instruction',
+      contents: [{ role: 'user', text: 'make a board' }],
+    })
+
+    const [request] = get(run).feed
+    expect(request).toMatchObject({
+      event: 'model.request',
+      layer: 'orchestrator',
+      callId: 'orchestrator-1',
+      detailLabel: 'raw prompt',
+    })
+    expect(request.detail).toContain('system instruction')
+    expect(request.detail).toContain('make a board')
+  })
+
+  it('keeps the session model attributed to the orchestrator across worker calls', () => {
+    startRun({ intent: 'board', datasheets: {} })
+    stageEvent({
+      event: 'chat.accepted',
+      layer: 'orchestrator',
+      model: 'gemini-root',
+    })
+    stageEvent({
+      event: 'model.call',
+      layer: 'worker',
+      model: 'gemini-worker',
+      stage: 'propose',
+      ok: true,
+    })
+
+    expect(get(run).actualModel).toBe('gemini-root')
+  })
+
+  it('moves the orchestrator answer into the transcript rather than the activity feed', () => {
+    startRun({ intent: 'x' })
+
+    stageEvent({
+      event: 'assistant.message',
+      event_id: 'answer-1',
+      text: 'Which input voltage?',
+      needs_clarification: true,
+    })
+
+    expect(get(run).feed).toEqual([])
+    expect(get(run).entries.at(-1)).toMatchObject({
+      id: 'answer-1',
+      type: 'message',
+      role: 'assistant',
+      text: 'Which input voltage?',
+      needsClarification: true,
+    })
   })
 
   it('carries an empty detail rather than nothing for a response with no text', () => {
