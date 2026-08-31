@@ -9,9 +9,10 @@ import {
   ScrollArea,
 } from "@/components";
 import type { EngineHealth } from "@/hooks";
-import type { RunRequestDraft } from "@/contexts";
+import { useSilkscreenRun, type RunRequestDraft } from "@/contexts";
 import { cn } from "@/lib/utils";
 import { RunOptions } from "./RunOptions";
+import { VoiceButton } from "./VoiceButton";
 
 /**
  * The engine's state as one dot.
@@ -85,6 +86,8 @@ export const PromptBar = ({
 }: PromptBarProps) => {
   const [optionsOpen, setOptionsOpen] = useState(false);
   const submittable = canStart && !hidden;
+  // Only for the bearer token — the run itself stays behind onSubmit.
+  const { token } = useSilkscreenRun();
 
   return (
     <div className="flex flex-1 items-center gap-1.5">
@@ -103,6 +106,21 @@ export const PromptBar = ({
             onSubmit();
           }
         }}
+      />
+
+      <VoiceButton
+        baseUrl={baseUrl}
+        token={token}
+        disabled={busy || hidden}
+        // The transcript joins the draft through the same onChange path typing
+        // uses, for the user to review and edit. It must never submit.
+        onTranscript={(text) =>
+          onRequestChange({
+            intent: request.intent.trim()
+              ? `${request.intent.trimEnd()} ${text}`
+              : text,
+          })
+        }
       />
 
       <Popover open={optionsOpen} onOpenChange={setOptionsOpen}>

@@ -16,6 +16,7 @@ Deploy::
 
 from __future__ import annotations
 
+import base64
 import contextlib
 import hashlib
 import json
@@ -52,6 +53,7 @@ from silkscreen.agents.resilience import (  # noqa: E402
     Provider,
 )
 from silkscreen.agents.retrieval import GeminiEmbedder  # noqa: E402
+from silkscreen.agents.transcribe import transcribe_audio  # noqa: E402
 from silkscreen.board import emit_kicad_pcb  # noqa: E402
 from silkscreen.fab import fab_files  # noqa: E402
 from silkscreen.order import (  # noqa: E402
@@ -82,10 +84,36 @@ __all__ = [
     "generate",
     "make_server",
     "page_cache_key",
+    "transcribe_request",
 ]
 
 MAX_BODY_BYTES = 1 << 20
 DEFAULT_TIME_LIMIT = 20.0
+
+#: Audio types /transcribe accepts. The first six are the formats Gemini's
+#: audio documentation names outright (plus their common MIME aliases --
+#: browsers say audio/mpeg for mp3 and audio/x-wav for wav). webm, mp4 and
+#: x-m4a are what this endpoint's real clients actually record: Chromium's
+#: MediaRecorder produces webm/opus and WKWebView produces mp4/aac, and Gemini
+#: accepts both -- rejecting them here would refuse the desktop app's own
+#: microphone. Compared case-insensitively with any ";codecs=..." suffix
+#: stripped, since MediaRecorder reports "audio/webm;codecs=opus".
+TRANSCRIBE_AUDIO_TYPES = frozenset(
+    {
+        "audio/wav",
+        "audio/x-wav",
+        "audio/mp3",
+        "audio/mpeg",
+        "audio/aiff",
+        "audio/x-aiff",
+        "audio/aac",
+        "audio/ogg",
+        "audio/flac",
+        "audio/webm",
+        "audio/mp4",
+        "audio/x-m4a",
+    }
+)
 PAGES_COLLECTION = "datasheet_pages"
 MAX_GROUND_PARTS = 25
 
@@ -381,6 +409,44 @@ def _placements_dict(board) -> dict[str, Any]:
         "frame": "solver-y-up",
         "parts": parts,
     }
+
+
+def transcribe_request(payload: dict[str, Any]) -> tuple[bytes, str, str | None]:
+    """Decode and validate one /transcribe body, or refuse it as a ValueError.
+
+    Every message names its field: a 400 that just says "bad request" costs a
+    round of client-side guessing. The overall size is already bounded by
+    ``MAX_BODY_BYTES`` before this runs, so the only checks left are shape.
+    """
+    raw = payload.get("audio_b64")
+    if not isinstance(raw, str) or not raw.strip():
+        raise ValueError("'audio_b64' is required")
+    try:
+        # validate=True: silently discarding non-alphabet bytes would decode
+        # a corrupted upload into different audio rather than refusing it.
+        audio = base64.b64decode(raw, validate=True)
+    except ValueError:  # binascii.Error is a ValueError
+        raise ValueError("'audio_b64' is not valid base64") from None
+    # No zero-byte check: valid base64 of nothing is "", which the required
+    # check above already refused.
+
+    mime = payload.get("mime_type")
+    if not isinstance(mime, str) or not mime.strip():
+        raise ValueError("'mime_type' is required")
+    # MediaRecorder reports "audio/webm;codecs=opus"; the parameter is real
+    # information but the allow-list is about the container.
+    base_type = mime.split(";", 1)[0].strip().lower()
+    if base_type not in TRANSCRIBE_AUDIO_TYPES:
+        raise ValueError(
+            "'mime_type' must be one of "
+            f"{', '.join(sorted(TRANSCRIBE_AUDIO_TYPES))}; got {mime!r}"
+        )
+
+    language = payload.get("language")
+    if language is not None and not isinstance(language, str):
+        raise ValueError("'language' must be a string")
+    language = (language or "").strip() or None
+    return audio, base_type, language
 
 
 def caused_by_model_failure(exc: BaseException) -> bool:
@@ -869,6 +935,9 @@ class Handler(BaseHTTPRequestHandler):
         if self.path in ("/generate", "/"):
             self._generate_once()
             return
+        if self.path == "/transcribe":
+            self._transcribe()
+            return
         self._send(404, {"error": f"no route {self.path}"})
 
     def _read_payload(self) -> dict[str, Any] | None:
@@ -951,6 +1020,37 @@ class Handler(BaseHTTPRequestHandler):
             self._send(status, body)
         else:
             self._send(200, result)
+
+    def _transcribe(self) -> None:
+        """One spoken request in, its text out, through the same model seam.
+
+        The transcript is whatever the model said, stripped -- silence and
+        noise are the caller's to interpret, not this route's to veto. Errors
+        follow the shared taxonomy: field problems are ValueErrors and answer
+        as 400s, a failed model call answers as the 502 /generate would send.
+        """
+        payload = self._read_payload()
+        if payload is None:
+            return
+        try:
+            audio, mime_type, language = transcribe_request(payload)
+            model = self.model_factory()
+            text = transcribe_audio(model, audio, mime_type, language=language)
+        except Exception as exc:
+            status, body = _error_response(exc)
+            self._send(status, body)
+            return
+        self._send(
+            200,
+            {
+                "text": text,
+                # FallbackModel reports which tier actually answered; a plain
+                # GeminiModel reports its configured id; a scripted stand-in
+                # honestly reports neither.
+                "model": getattr(model, "last_model", None)
+                or getattr(model, "model", None),
+            },
+        )
 
     def _generate_stream(self) -> None:
         """The same run, reported while it happens, as NDJSON.

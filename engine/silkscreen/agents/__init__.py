@@ -10,6 +10,7 @@ from .model import Document, GeminiModel, Model, ModelError, ScriptedModel
 from .pipeline import PipelineResult, generate_pcb
 from .propose import ProposalError, propose_circuit
 from .review import Finding, Severity, review_circuit
+from .transcribe import transcribe_audio
 
 __all__ = [
     "Model", "GeminiModel", "ScriptedModel", "ModelError", "Document",
@@ -17,4 +18,5 @@ __all__ = [
     "propose_circuit", "ProposalError",
     "Finding", "Severity", "review_circuit",
     "generate_pcb", "PipelineResult",
+    "transcribe_audio",
 ]
