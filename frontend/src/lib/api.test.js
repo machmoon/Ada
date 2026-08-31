@@ -1405,3 +1405,39 @@ describe('getConfigurationStatus', () => {
     expect(status.features[0].state).toBe('warning')
   })
 })
+
+describe('the order block on a request', () => {
+  it('is absent until it is asked for', () => {
+    // The service reads an absent `order` as "do not prepare one". Sending an
+    // empty object would prepare an order nobody wanted, and the response
+    // would then carry a price.
+    expect('order' in normalizeRequest({ intent: 'x' })).toBe(false)
+    expect('order' in normalizeRequest({ intent: 'x', order: { enabled: false } })).toBe(false)
+    expect('order' in normalizeRequest({ intent: 'x', order: { quantity: 5 } })).toBe(false)
+  })
+
+  it('carries the quantity and house when it is', () => {
+    expect(
+      normalizeRequest({
+        intent: 'x',
+        order: { enabled: true, quantity: 10, service: 'jlcpcb-2layer' },
+      }).order,
+    ).toEqual({ quantity: 10, service: 'jlcpcb-2layer' })
+  })
+
+  it('clamps a quantity the service would reject rather than round-tripping to a 400', () => {
+    const q = (quantity) =>
+      normalizeRequest({ intent: 'x', order: { enabled: true, quantity } }).order.quantity
+    expect(q(0)).toBe(1)
+    expect(q(-5)).toBe(1)
+    expect(q(99999)).toBe(1000)
+    expect(q(7.6)).toBe(8)
+    expect(q('nonsense')).toBe(5)
+  })
+
+  it('omits an empty house rather than sending one the service must reject', () => {
+    expect(
+      normalizeRequest({ intent: 'x', order: { enabled: true, quantity: 5, service: '  ' } }).order,
+    ).toEqual({ quantity: 5 })
+  })
+})

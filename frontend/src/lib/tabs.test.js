@@ -21,8 +21,14 @@ describe('parseTab', () => {
     expect(parseTab(null)).toBe('')
   })
 
-  it('knows the five tabs the status bar shows', () => {
-    expect(TABS).toEqual(['chat', 'schematic', 'placement', 'board', 'review'])
+  it('knows the six tabs the status bar shows', () => {
+    expect(TABS).toEqual(['chat', 'schematic', 'placement', 'board', 'review', 'order'])
+  })
+
+  it('falls back to chat when no order was prepared', () => {
+    // An order tab with nothing behind it would imply a gate that ran.
+    expect(resolveTab('#order', {})).toBe('chat')
+    expect(resolveTab('#order', { order: true })).toBe('order')
   })
 })
 

@@ -279,6 +279,36 @@ feature is tracked under feature 12.
                                                                      so rather than acting on the wrong board). A
                                                                      second replica would need a real store.
 
+ 19  Ordering: fab package, gate, quote, human stop     [PARTIAL]
+ ----- Fab package: Gerber, drill, BOM, CPL            [DONE]        fab.py
+ ----- Drill split by plating + fab notes README       [DONE]        PTH/NPTH always ship; README-fab.txt answers
+                                                                     the questions a CAM engineer would email
+ ----- Pre-flight gate: 12 checks with evidence        [DONE]        gate.py; SKIPPED blocks like FAIL
+ ----- Real fab capability profiles + a real quote     [DONE]        fabhouse.py; OSH Park priced from its
+                                                                     published rule, JLCPCB/PCBWay unpriced
+ ----- Prepared order + silkscreen-order CLI           [DONE]        approval.py; exit 0 GO, 2 NO-GO
+ ----- Gate and quote on /generate's order block       [DONE]        additive; no route submits
+ ----- Order tab in the web UI                         [NOT BUILT]   the service already returns gate, quote and
+                                                                     the rendered summary; this is a view over
+                                                                     data that already ships
+ ----- BOM part numbers (LCSC/MPN resolution)          [NOT BUILT]   the gate blocks assembly without them, which
+                                                                     is the honest state until a resolver exists.
+                                                                     Needs a supplier lookup, so it is agent-lane
+                                                                     work, not engine-lane
+ ----- Wider via annular ring so JLCPCB will build it  [OPEN]        the router's 0.6/0.3 mm vias leave 0.15 mm,
+                                                                     under JLCPCB's stated 0.18 mm absolute
+                                                                     minimum. Clears OSH Park. Router-lane fix
+ ----- Order submission                                [WILL NOT BUILD]
+                                                                     Deliberate and permanent. See
+                                                                     fabhouse.SUBMISSION_BOUNDARY: the gate
+                                                                     proves what it measures, not that the
+                                                                     circuit is the one the buyer meant, and an
+                                                                     agent that clears its own checks and then
+                                                                     buys converts every remaining design error
+                                                                     into money at machine speed. Do not add a
+                                                                     submit path, a --yes flag, or a fab's
+                                                                     authenticated API.
+
 OPEN WORK, SUMMARISED
 ---------------------
 Everything actionable reduces to: feature 2 in full (parallel reads, now the
@@ -291,6 +321,12 @@ serializer promotion, run persistence). The board well shipped, so voice is
 all that is left of 9 and stays last. Feature 16 still needs a trusted IC
 model registry and its place in the agent repair loop. The [IDEA] rows under
 4 and 5 are ideas, not commitments.
+
+The ordering lane (feature 14) is complete up to the human stop, which is
+where it is meant to end. What is left under it is a web view over data the
+service already returns, BOM part-number resolution (agent-lane), and a
+router-lane via change; submission is marked WILL NOT BUILD rather than
+NOT BUILT, and that row is a decision, not a backlog item.
 
 The ADK lane runs alongside that. Feature 12 is live and the flip is done: the
 default engine has been "adk" since the 2026-08-30 gate run, with

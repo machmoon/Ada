@@ -24,13 +24,21 @@ import re
 from decimal import Decimal
 
 import pytest
-from silkscreen.board import BoardResult, PlacedPart, build_board, emit_kicad_pcb
+from silkscreen.board import (
+    BoardResult,
+    PlacedPart,
+    build_board,
+    emit_kicad_pcb,
+    route_board,
+)
 from silkscreen.fab import (
     FabLayer,
     bom_csv,
     cpl_csv,
+    drill_report,
     excellon_drill,
     fab_files,
+    fab_readme,
     gerber_copper,
     gerber_mask,
     gerber_outline,
@@ -64,9 +72,12 @@ GERBER_FILES = (
 )
 
 EXPECTED_FILES = GERBER_FILES + (
+    "silkscreen-PTH.DRL",
     "silkscreen-NPTH.DRL",
+    "silkscreen-drill-report.txt",
     "silkscreen-BOM.csv",
     "silkscreen-CPL.csv",
+    "README-fab.txt",
 )
 
 #: A coordinate command: an operation code applied at an integer position.
@@ -109,6 +120,19 @@ def _spec():
 @pytest.fixture(scope="module")
 def board():
     return build_board(_spec(), time_limit_s=4.0)
+
+
+@pytest.fixture(scope="module")
+def routed():
+    """The same board with copper on it, which is the only orderable state.
+
+    Separate from ``board`` rather than routing it in place, because half the
+    point of these tests is that an unrouted board and a routed one produce
+    different packages and must never be confused for one another.
+    """
+    result = build_board(_spec(), time_limit_s=4.0)
+    route_board(result)
+    return result
 
 
 @pytest.fixture(scope="module")
@@ -213,14 +237,15 @@ def _asym_footprint() -> Footprint:
 # --------------------------------------------------------- structure and format
 
 
-def test_fab_files_returns_twelve_uniquely_named_files(board):
+def test_fab_files_returns_uniquely_named_files(board):
     """A missing file reads as an oversight at the fab and stalls the order."""
     files = fab_files(board)
     assert all(isinstance(f, FabLayer) for f in files)
     names = [f.filename for f in files]
-    assert len(files) == 12
     assert names == list(EXPECTED_FILES)
-    assert len(set(names)) == 12, "two layers sharing a filename overwrite one another"
+    assert len(set(names)) == len(names), (
+        "two layers sharing a filename overwrite one another"
+    )
 
 
 def test_every_gerber_opens_with_the_format_spec_and_closes_with_m02(board):
@@ -249,10 +274,12 @@ def test_gerbers_contain_no_creation_timestamp(board):
 
 
 def test_excellon_is_well_formed_and_declares_no_tools(board):
-    """Every footprint this engine generates is SMD, so the drill file is empty.
+    """A board with no vias yields an empty drill program, and means it.
 
     Empty means empty: a tool definition with no hits, or a hit with no tool,
-    is how a fab ends up drilling something that is not in the design.
+    is how a fab ends up drilling something that is not in the design. ``T0``
+    is not a tool -- it is Excellon's end-of-program tool-change reset, which
+    every writer emits before ``M30``.
     """
     text = excellon_drill(board)
     lines = text.splitlines()
@@ -260,13 +287,82 @@ def test_excellon_is_well_formed_and_declares_no_tools(board):
     assert lines[-1] == "M30", "an Excellon file ends with M30"
     assert "METRIC" in lines
     assert not re.search(r"^T\d+[CFS]", text, re.M), "no tool may be defined"
-    assert not re.search(r"^T\d+\s*$", text, re.M), "no tool may be selected"
+    assert not re.search(r"^T[1-9]\d*\s*$", text, re.M), "no tool may be selected"
     assert not re.search(r"^X[-\d]", text, re.M), "an all-SMD design has no drill hits"
 
-    # And it is the same file for any board, since it describes no geometry.
+    # And it is the same file for any unrouted board, since it describes no
+    # geometry.
     assert excellon_drill(_one_part_board(
         PlacedPart(ref="U1", footprint=_asym_footprint(), value="v")
     )) == text
+
+
+def test_the_two_drill_programs_declare_opposite_plating(board):
+    """Plating is carried by which file a hole is in, so the files must say so.
+
+    An unplated via is an open circuit that passes every visual inspection, so
+    a drill program named or attributed for the wrong plating class is not a
+    naming quibble -- it is a dead board that looks finished.
+    """
+    plated = excellon_drill(board)
+    unplated = excellon_drill(board, plated=False)
+    assert "TF.FileFunction,Plated,1,2,PTH" in plated
+    assert "TF.FileFunction,NonPlated,1,2,NPTH" in unplated
+    assert "NonPlated" not in plated
+
+
+def test_vias_are_drilled_in_the_plated_file_and_only_there(routed):
+    """Every via is a plated hole; none of them may land in the NPTH program."""
+    assert routed.vias, "this fixture is meant to have vias"
+    plated = excellon_drill(routed)
+    unplated = excellon_drill(routed, plated=False)
+
+    hits = re.findall(r"^X([-\d.]+)Y([-\d.]+)$", plated, re.M)
+    assert len(hits) == len(routed.vias)
+    assert not re.search(r"^X[-\d.]", unplated, re.M), (
+        "an NPTH program carrying a via would leave the layers unconnected"
+    )
+
+    tools = re.findall(r"^T(\d+)C([\d.]+)$", plated, re.M)
+    assert tools, "a program with hits must define the tool they use"
+    assert {float(size) for _, size in tools} == {
+        via.drill_nm / 1e6 for via in routed.vias
+    }
+
+
+def test_the_drill_report_counts_every_hole(routed):
+    report = drill_report(routed)
+    assert f"Total holes: {len(routed.vias)}" in report
+    assert "silkscreen-PTH.DRL" in report
+
+
+def test_fab_readme_states_the_origin_units_and_mask_polarity(board):
+    """These are the questions a CAM engineer emails about; answer them first."""
+    notes = fab_readme(board)
+    assert "millimetres" in notes
+    assert "bottom-left corner of the board profile, at (0,0)" in notes
+    assert "POSITIVE" in notes
+    assert "NOT pre-mirrored" in notes
+    # Every file in the package is accounted for in the notes.
+    for name in EXPECTED_FILES:
+        if name != "README-fab.txt":
+            assert name in notes, f"{name} is shipped but never explained"
+
+
+def test_fab_readme_refuses_to_call_an_unrouted_board_ready(board, routed):
+    """An unrouted and a routed board ship the same file list.
+
+    The notes are the only place inside the package where that difference is
+    visible, so they have to carry it in words a human cannot skim past.
+    """
+    assert not board.tracks, "this fixture is meant to be unrouted"
+    unrouted_notes = fab_readme(board)
+    assert "NO COPPER TRACKS AT ALL" in unrouted_notes
+    assert "Do not run it." in unrouted_notes
+
+    routed_notes = fab_readme(routed)
+    assert "Do not run it." not in routed_notes
+    assert "fully routed" in routed_notes
 
 
 # --------------------------------------------------------------- coordinates
@@ -494,7 +590,7 @@ def test_silkscreen_traces_the_body_outline_with_a_pen(board):
     assert _coords(silk), "the fixture circuit should have a legend to draw"
     assert not _rect_apertures(silk)
     circles = _CIRCLE_RE.findall(silk)
-    assert {_nm(c[1]) for c in circles} == {mm(0.12)}
+    assert {_nm(c[1]) for c in circles} == {mm(0.15)}
 
     # Each stroke endpoint sits on some part's body rectangle: the outline is
     # clipped around pads, never redrawn somewhere else.

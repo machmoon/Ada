@@ -18,6 +18,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from .footprints import (
+    SILK_STROKE_NM,
     Footprint,
     UnsupportedPackage,
     for_passive,
@@ -514,11 +515,13 @@ def emit_kicad_pcb(
         # The body outline, clipped clear of the pads: stroking the raw body
         # rectangle put ink on every pad the body edge touches (see
         # footprints.silk_segments), and ink on a pad is a solderability
-        # defect a fab will clip or flag.
+        # defect a fab will clip or flag. The pen matches SILK_STROKE_NM,
+        # which also sets the clip margin.
         for i, (sx, sy, ex, ey) in enumerate(silk_segments(fp)):
             out.append(
                 f"    (fp_line (start {f(sx)} {f(sy)}) (end {f(ex)} {f(ey)})"
-                f' (stroke (width 0.12) (type solid)) (layer "{side}.SilkS")'
+                f" (stroke (width {f(SILK_STROKE_NM)}) (type solid))"
+                f' (layer "{side}.SilkS")'
                 f' (uuid "{_uuid(part.ref + f"silk{i}")}"))'
             )
 

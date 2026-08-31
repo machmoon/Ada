@@ -28,6 +28,8 @@
   } from './lib/run.js'
   import { highlightSchematicParts, readSchematic } from './lib/schematic.js'
   import { resolveTab } from './lib/tabs.js'
+  import OrderPane from './components/OrderPane.svelte'
+  import { hasOrder, isGo } from './lib/order.js'
 
   // The tab lives in the hash fragment; App is the only thing that reads it,
   // and the status bar's links are what write it.
@@ -96,12 +98,17 @@
   const boardEnabled = $derived(placements !== null)
   const schematicEnabled = $derived(schematic !== null)
   const placementEnabled = $derived(placement !== null)
+  // The order block is opt-in on the request, so its tab appears only when one
+  // was actually prepared -- never as an empty pane implying a gate that ran.
+  const orderEnabled = $derived($run.phase === 'done' && hasOrder($run.result))
+  const orderGo = $derived(orderEnabled && isGo($run.result))
   const tab = $derived(
     resolveTab(hash, {
       schematic: schematicEnabled,
       placement: placementEnabled,
       board: boardEnabled,
       review: $run.phase === 'done',
+      order: orderEnabled,
     }),
   )
   const pcb = $derived($run.result ? pcbText($run.result) : '')
@@ -245,6 +252,8 @@
           <BoardWell {placements} {highlightedRefs} {pcb} />
       {:else if tab === 'placement' && placement}
           <PlacementResults {placement} />
+      {:else if tab === 'order' && orderEnabled}
+          <OrderPane result={$run.result} />
       {:else if tab === 'review' && $run.phase === 'done' && $run.result}
           <ReviewResults
             result={$run.result}
@@ -294,6 +303,8 @@
     {schematicEnabled}
     {placementEnabled}
     {boardEnabled}
+    {orderEnabled}
+    {orderGo}
     {debugOpen}
     ondebug={() => (debugOpen = !debugOpen)}
   />

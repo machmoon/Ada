@@ -46,6 +46,24 @@ function clampTimeLimit(value) {
   return Math.min(MAX_TIME_LIMIT_S, Math.max(MIN_TIME_LIMIT_S, Math.round(n)))
 }
 
+/** The order block to send, or null when no order was asked for.
+
+    Quantity is clamped rather than passed through: the service rejects a bad
+    one with a 400, and a round trip that can only fail is a round trip the
+    user waits on for nothing. It is also the field where a typo is expensive
+    later, so it is pinned to something sane on the way out. */
+export function normalizeOrder(order) {
+  if (!order || order.enabled !== true) return null
+  const quantity = Number(order.quantity)
+  const service = String(order.service ?? '').trim()
+  return {
+    quantity: Number.isFinite(quantity)
+      ? Math.min(1000, Math.max(1, Math.round(quantity)))
+      : 5,
+    ...(service ? { service } : {}),
+  }
+}
+
 /** Drop half-filled datasheet rows and clamp the solver budget to what the service accepts. */
 export function normalizeRequest(request) {
   const datasheets = {}
@@ -60,6 +78,7 @@ export function normalizeRequest(request) {
   const placementPolicy = placementPolicies.has(String(request.placement_policy || 'deterministic'))
     ? String(request.placement_policy || 'deterministic')
     : 'deterministic'
+  const order = normalizeOrder(request.order)
   return {
     intent: String(request.intent ?? '').trim(),
     datasheets,
@@ -88,6 +107,10 @@ export function normalizeRequest(request) {
             : {}),
         }
       : {}),
+    // Same rule for the order block. An absent `order` means "do not prepare
+    // one"; sending an empty object would ask the service to prepare an order
+    // nobody wanted, and the response would then carry a price.
+    ...(order ? { order } : {}),
   }
 }
 

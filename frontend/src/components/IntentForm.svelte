@@ -9,6 +9,7 @@
     suggestConstraintManifest,
   } from '../lib/constraints.js'
   import { DATASHEET_PRESETS } from '../lib/datasheets.js'
+  import { FAB_SERVICES } from '../lib/order.js'
 
   let {
     onsubmit,
@@ -57,6 +58,12 @@
   let noSolverBudget = $state(seed.no_solver_budget !== false)
   let review = $state(seed.review !== false)
   let ground = $state(seed.ground === true)
+  // Preparing an order costs nothing and buys nothing when it is not wanted,
+  // so it is opt-in and off by default -- and the request carries no `order`
+  // key at all until it is ticked.
+  let orderWanted = $state(Boolean(seed.order && seed.order.enabled))
+  let orderQuantity = $state((seed.order && seed.order.quantity) || 5)
+  let orderService = $state((seed.order && seed.order.service) || FAB_SERVICES[0].id)
   // Seeded once with the rest of the editable form state.
   // svelte-ignore state_referenced_locally
   let orchestratorModel = $state(initialModel || 'gemini-3.7-flash')
@@ -95,6 +102,7 @@
     placement_policy: placementPolicy,
     experimental_placement: experimentalPlacement,
     record_trace: experimentalPlacement && recordTrace,
+    order: { enabled: orderWanted, quantity: orderQuantity, service: orderService },
   })
 
   // The service rejects oversize bodies with 413; blocking here keeps the user
@@ -593,6 +601,33 @@
       <span>Ground findings against datasheet pages</span>
     </label>
 
+    <label class="control checkbox" title="Renders the fab package and runs the pre-flight gate. It never places an order.">
+      <input type="checkbox" bind:checked={orderWanted} data-testid="intent-form-order" />
+      <span>Prepare a fab order</span>
+    </label>
+
+    {#if orderWanted}
+      <label class="control" data-testid="intent-form-order-controls">
+        <span class="lbl">Qty</span>
+        <input
+          type="number"
+          min="1"
+          max="1000"
+          class="qty"
+          bind:value={orderQuantity}
+          data-testid="intent-form-order-quantity"
+        />
+      </label>
+      <label class="control">
+        <span class="lbl">Fab</span>
+        <select bind:value={orderService} data-testid="intent-form-order-service">
+          {#each FAB_SERVICES as service (service.id)}
+            <option value={service.id}>{service.label}{service.priced ? '' : ' · no price'}</option>
+          {/each}
+        </select>
+      </label>
+    {/if}
+
     <div class="spacer"></div>
     <MicButton />
     <button type="submit" class="run" data-testid="intent-form-submit" disabled={!canSubmit}>
@@ -764,6 +799,15 @@
     font-size: var(--fs-mono-sm);
   }
   .no-budget.active { background: var(--ink); color: var(--paper); }
+
+  .qty {
+    width: 62px;
+    padding: 4px 6px;
+    background: var(--surface);
+    border: 1px solid var(--rule-soft);
+    color: inherit;
+    font: inherit;
+  }
 
   .spacer { flex-grow: 1; }
 

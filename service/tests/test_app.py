@@ -15,6 +15,7 @@ from pathlib import Path
 import pytest
 from silkscreen.agents.adk.orchestrator import OrchestratorResult
 from silkscreen.agents.model import ScriptedModel
+from silkscreen.gate import REQUIRED_FILES
 from silkscreen.kicad import footprint_ref, load_board
 from silkscreen.placement.api import repair_request
 from silkscreen.placement.traces import MemoryFailureTraceStore
@@ -2994,11 +2995,14 @@ def test_the_order_block_is_purely_additive(server):
 
 def test_an_order_request_returns_a_manifest_and_the_fab_files(server):
     order = order_of(server)["order"]
-    assert sorted(order) == ["files", "issues", "manifest", "orderable"]
+    # Additive only: the four keys a client could already rely on stay, and
+    # the gate and the price arrive beside them rather than instead of them.
+    assert {"files", "issues", "manifest", "orderable"} <= set(order)
+    assert {"gate", "quote", "ready_for_human_review"} <= set(order)
 
     filenames = [f["filename"] for f in order["files"]]
-    assert len(filenames) == 12
-    assert len(set(filenames)) == 12, (
+    assert set(REQUIRED_FILES) == set(filenames)
+    assert len(set(filenames)) == len(filenames), (
         "duplicate names collide in the package a human is meant to submit"
     )
 
@@ -3015,6 +3019,60 @@ def test_an_order_request_returns_a_manifest_and_the_fab_files(server):
     assert manifest["requires_human_approval"] is True
     assert isinstance(manifest["disclaimer"], str)
     assert manifest["disclaimer"].strip(), "the disclaimer must actually say something"
+
+
+def test_the_order_block_carries_the_gate_and_its_evidence(server):
+    """The response has to say what was checked, not only what the verdict was."""
+    order = order_of(server)["order"]
+    gate = order["gate"]
+
+    assert isinstance(gate["go"], bool)
+    assert gate["headline"]
+    assert len(gate["checks"]) == 12
+    assert {c["id"] for c in gate["checks"]} >= {
+        "routing-complete",
+        "design-rules",
+        "fab-capabilities",
+        "bom-valid",
+        "package-consistent",
+    }
+    for check in gate["checks"]:
+        assert check["evidence"], f"{check['id']} carries a verdict with no evidence"
+    assert order["ready_for_human_review"] == gate["go"]
+
+
+def test_the_order_block_carries_a_real_price_from_the_default_house(server):
+    quote = order_of(server)["order"]["quote"]
+    assert quote["house"] == "OSH Park"
+    assert quote["basis"] == "published-rule"
+    assert quote["total_cents"] > 0
+    assert quote["source_url"].startswith("https://")
+
+
+def test_a_house_that_needs_credentials_returns_no_price_rather_than_zero(server):
+    """A zero in a money field is indistinguishable from free at a glance."""
+    quote = order_of(server, {"quantity": 5, "service": "jlcpcb-2layer"})["order"][
+        "quote"
+    ]
+    assert quote["basis"] == "unavailable"
+    assert quote["total_cents"] is None
+    assert quote["total_text"] == "no price"
+    assert "credential" in quote["unavailable_reason"].lower()
+
+
+def test_an_unknown_fab_service_is_a_400_before_any_model_runs(server):
+    request = dict(ORDER_REQUEST)
+    request["order"] = {"quantity": 5, "service": "not-a-fab"}
+    status, body = post(server, request)
+    assert status == 400
+    assert "unknown fab service" in json.dumps(body)
+
+
+def test_the_service_exposes_no_route_that_submits_an_order(server):
+    """Checked at the surface, because this is the boundary the PR is about."""
+    for path in ("/order", "/order/submit", "/submit", "/checkout", "/pay"):
+        status, _ = post(server, {"prompt": "x"}, path=path)
+        assert status in (404, 405), f"{path} answered {status}"
 
 
 def test_an_unrouted_board_is_not_orderable(server):
@@ -3135,7 +3193,7 @@ def test_the_fab_files_are_json_safe_and_well_formed(server):
         assert isinstance(entry["content"], str) and entry["content"].strip()
 
     by_name = {f["filename"]: f["content"] for f in files}
-    assert len(by_name) == 12
+    assert set(by_name) == set(REQUIRED_FILES)
 
     gerbers = sorted(n for n in by_name if n.endswith(GERBER_SUFFIXES))
     assert len(gerbers) == 9
@@ -3143,9 +3201,16 @@ def test_the_fab_files_are_json_safe_and_well_formed(server):
         assert by_name[name].startswith("%FSLAX46Y46*%"), name
         assert by_name[name].rstrip("\n").endswith("M02*"), name
 
-    drills = [n for n in by_name if n.endswith(".DRL")]
-    assert len(drills) == 1
-    assert by_name[drills[0]].startswith("M48")
+    # Two drill programs, because Excellon has no per-hole plating field and
+    # the plating class is carried by which file a hole is in. Shipping one is
+    # how a via gets drilled unplated.
+    drills = sorted(n for n in by_name if n.endswith(".DRL"))
+    assert drills == ["silkscreen-NPTH.DRL", "silkscreen-PTH.DRL"]
+    for name in drills:
+        assert by_name[name].startswith("M48")
+        assert by_name[name].rstrip("\n").endswith("M30")
+    assert "TF.FileFunction,Plated" in by_name["silkscreen-PTH.DRL"]
+    assert "TF.FileFunction,NonPlated" in by_name["silkscreen-NPTH.DRL"]
 
     csvs = sorted(n for n in by_name if n.endswith(".csv"))
     assert [by_name[n].splitlines()[0] for n in csvs] == [
@@ -3169,7 +3234,7 @@ def test_an_order_and_grounding_coexist(ground_server):
     assert grounded["pages"] == {"cached": ["AMS1117-3.3"], "read": []}
 
     order = body["order"]
-    assert len(order["files"]) == 12
+    assert {f["filename"] for f in order["files"]} == set(REQUIRED_FILES)
     assert order["manifest"]["options"]["quantity"] == 10
     assert order["orderable"] is False
 
