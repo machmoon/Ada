@@ -194,6 +194,22 @@ describe('describeStageEvent', () => {
     )
   })
 
+  it('reports the datasheet download separately from the read', () => {
+    // The download is the one step that waits on someone else's web server, so
+    // it gets its own line: without it a slow host is indistinguishable from a
+    // hung run.
+    expect(
+      describeStageEvent({ event: 'read.fetch', part: 'AMS1117-3.3', bytes: 95151 }),
+    ).toBe('AMS1117-3.3: downloaded 93 kB')
+  })
+
+  it('still describes a download that reports no size', () => {
+    expect(describeStageEvent({ event: 'read.fetch', part: 'AMS1117-3.3' })).toBe(
+      'AMS1117-3.3: downloaded the PDF',
+    )
+    expect(describeStageEvent({ event: 'read.fetch', bytes: 2048 })).toBe('downloaded 2 kB')
+  })
+
   it('still reads as a sentence when the part is missing', () => {
     expect(describeStageEvent({ event: 'read.part', part: null, index: 1, total: 2 })).toBe(
       `reading a datasheet (1 of 2)${ELLIPSIS}`,

@@ -18,6 +18,8 @@ from silkscreen.agents import (
     read_datasheet,
     review_circuit,
 )
+from silkscreen.agents.datasheet import MAX_INLINE_PDF_BYTES
+from silkscreen.agents.grounding import GroundingError
 from silkscreen.agents.pipeline import MAX_RESPONSE_TEXT
 from silkscreen.agents.propose import ProposalError
 from silkscreen.agents.review import Severity
@@ -77,24 +79,97 @@ DATASHEET_JSON = {
 # ---------------------------------------------------------------- datasheet
 
 
+def _pdf(url: str, **kwargs: object) -> bytes:
+    """Stand in for the download, so these stay tests of read_datasheet.
+
+    A pdf_url is fetched now rather than handed to the provider, so without
+    this every case below would resolve a hostname.
+    """
+    return b"%PDF-1.4 stub datasheet"
+
+
 def test_read_datasheet_extracts_pins_and_citations():
     model = ScriptedModel(responses=[json.dumps(DATASHEET_JSON)])
-    facts = read_datasheet(model, "AMS1117-3.3", pdf_url="https://x/ams1117.pdf")
+    facts = read_datasheet(
+        model, "AMS1117-3.3", pdf_url="https://x/ams1117.pdf", fetch=_pdf
+    )
     assert facts.pin_count == 3
     assert facts.pin_map() == {"GND": "1", "VOUT": "2", "VIN": "3"}
     assert facts.requirements[0]["page"] == 9
 
 
-def test_read_datasheet_sends_the_pdf_to_the_model():
+def test_read_datasheet_downloads_the_url_and_sends_bytes():
+    """The provider is handed the PDF, never the link to it.
+
+    Gemini does not fetch arbitrary URLs -- its ``file_uri`` takes a Files API
+    URI or a YouTube link. A public datasheet URL comes back as a bare 429
+    RESOURCE_EXHAUSTED with no quota metric, which reads as an exhausted key and
+    survives every failover attempt, so this assertion is the whole fix.
+    """
     model = ScriptedModel(responses=[json.dumps(DATASHEET_JSON)])
-    read_datasheet(model, "AMS1117-3.3", pdf_url="https://x/ams1117.pdf")
-    assert model.calls[0]["documents"][0].url == "https://x/ams1117.pdf"
+    read_datasheet(
+        model,
+        "AMS1117-3.3",
+        pdf_url="https://x/ams1117.pdf",
+        fetch=lambda url, **kw: b"%PDF-1.4 fake",
+    )
+    doc = model.calls[0]["documents"][0]
+    assert doc.data == b"%PDF-1.4 fake"
+    assert doc.url is None
+
+
+def test_read_datasheet_caps_what_it_will_download():
+    """Bigger than one request can carry has to fail here, not at the API."""
+    seen: dict = {}
+
+    def fetch(url, **kwargs):
+        seen.update(url=url, **kwargs)
+        return b"%PDF-1.4 fake"
+
+    read_datasheet(
+        ScriptedModel(responses=[json.dumps(DATASHEET_JSON)]),
+        "AMS1117-3.3",
+        pdf_url="https://x/a.pdf",
+        fetch=fetch,
+    )
+    assert seen == {"url": "https://x/a.pdf", "max_bytes": MAX_INLINE_PDF_BYTES}
+
+
+def test_read_datasheet_does_not_download_when_given_bytes():
+    def explode(url, **kwargs):  # pragma: no cover - must never run
+        raise AssertionError(f"fetched {url} despite being handed bytes")
+
+    model = ScriptedModel(responses=[json.dumps(DATASHEET_JSON)])
+    read_datasheet(
+        model, "AMS1117-3.3", pdf_bytes=b"%PDF-1.4 given", fetch=explode
+    )
+    assert model.calls[0]["documents"][0].data == b"%PDF-1.4 given"
+
+
+def test_read_datasheet_refuses_a_url_that_serves_html():
+    """Regression: a .pdf URL that answers 200 text/html.
+
+    LCSC's AMS1117 link redirects to a product page and returns 126kB of markup
+    from a URL ending in .pdf. Sent onward as application/pdf that is a 400 from
+    the API naming neither the part nor the URL, so the check belongs here.
+    """
+    model = ScriptedModel(responses=[json.dumps(DATASHEET_JSON)])
+    with pytest.raises(GroundingError, match="did not return a PDF"):
+        read_datasheet(
+            model,
+            "AMS1117-3.3",
+            pdf_url="https://datasheet.lcsc.com/lcsc/x_C6186.pdf",
+            fetch=lambda url, **kw: b"<!doctype html><html><head><title>LCSC",
+        )
+    assert model.calls == [], "a non-PDF must not reach the model"
 
 
 def test_read_datasheet_tolerates_a_code_fence():
     fenced = "```json\n" + json.dumps(DATASHEET_JSON) + "\n```"
     model = ScriptedModel(responses=[fenced])
-    facts = read_datasheet(model, "AMS1117-3.3", pdf_url="https://x/a.pdf")
+    facts = read_datasheet(
+        model, "AMS1117-3.3", pdf_url="https://x/a.pdf", fetch=_pdf
+    )
     assert facts.pin_count == 3
 
 
@@ -103,13 +178,17 @@ def test_read_datasheet_refuses_a_part_with_no_pinout():
     empty = dict(DATASHEET_JSON, pins=[])
     model = ScriptedModel(responses=[json.dumps(empty)])
     with pytest.raises(ModelError, match="No pins extracted"):
-        read_datasheet(model, "AMS1117-3.3", pdf_url="https://x/a.pdf")
+        read_datasheet(
+            model, "AMS1117-3.3", pdf_url="https://x/a.pdf", fetch=_pdf
+        )
 
 
 def test_pin_count_disagreement_is_flagged_not_hidden():
     mismatched = dict(DATASHEET_JSON, pin_count=8)
     model = ScriptedModel(responses=[json.dumps(mismatched)])
-    facts = read_datasheet(model, "AMS1117-3.3", pdf_url="https://x/a.pdf")
+    facts = read_datasheet(
+        model, "AMS1117-3.3", pdf_url="https://x/a.pdf", fetch=_pdf
+    )
     assert "package choice may be wrong" in facts.notes
 
 
@@ -162,7 +241,11 @@ def test_propose_gives_up_loudly_after_the_repair_budget():
 def test_propose_passes_datasheet_facts_into_the_prompt():
     model = ScriptedModel(responses=[json.dumps(DATASHEET_JSON),
                                      json.dumps(GOOD_CIRCUIT)])
-    facts = [read_datasheet(model, "AMS1117-3.3", pdf_url="https://x/a.pdf")]
+    facts = [
+        read_datasheet(
+            model, "AMS1117-3.3", pdf_url="https://x/a.pdf", fetch=_pdf
+        )
+    ]
     propose_circuit(model, "a regulator", facts=facts)
     prompt = model.calls[1]["prompt"]
     assert "22uF tantalum" in prompt and "p.9" in prompt
@@ -236,7 +319,7 @@ def test_review_survives_junk_output():
 # ---------------------------------------------------------------- pipeline
 
 
-def test_full_pipeline_prompt_to_board(tmp_path):
+def test_full_pipeline_prompt_to_board(tmp_path, offline_pdf_fetch):
     """intent -> datasheet -> propose -> place -> .kicad_pcb -> review."""
     review_json = json.dumps({"findings": [
         {"severity": "blocker", "title": "Output cap is ceramic, not tantalum",
@@ -377,7 +460,7 @@ def _scripted_pipeline_model():
     })
 
 
-def test_events_trace_every_stage_and_model_call(tmp_path):
+def test_events_trace_every_stage_and_model_call(tmp_path, offline_pdf_fetch):
     """The stream is a progress signal: one event per boundary, no payload."""
     model = _scripted_pipeline_model()
     events = []
@@ -392,7 +475,7 @@ def test_events_trace_every_stage_and_model_call(tmp_path):
     )
 
     assert [e["event"] for e in events] == [
-        "stage.start", "read.part", "model.call", "stage.done",
+        "stage.start", "read.part", "read.fetch", "model.call", "stage.done",
         "stage.start", "model.call", "stage.done",
         "stage.start", "stage.done",
         "stage.start", "stage.done",
@@ -418,7 +501,7 @@ def test_events_trace_every_stage_and_model_call(tmp_path):
             assert not (isinstance(value, str) and len(value) > 500)
 
 
-def test_the_event_name_set_is_frozen(tmp_path):
+def test_the_event_name_set_is_frozen(tmp_path, offline_pdf_fetch):
     """Every event name a client can be sent, in one assertion.
 
     ``frontend/src/lib/stream.js`` switches on these strings to turn a frame
@@ -439,13 +522,14 @@ def test_the_event_name_set_is_frozen(tmp_path):
                  time_limit_s=10.0, on_event=events.append)
 
     assert {e["event"] for e in events} == {
-        "stage.start", "stage.done", "read.part", "propose.round", "model.call",
+        "stage.start", "stage.done", "read.part", "read.fetch",
+        "propose.round", "model.call",
     }
     # The two conditional names have their own tests here: model.response fires
     # only under include_responses, model.retry only behind a failover model.
 
 
-def test_response_events_carry_each_answer_verbatim(tmp_path):
+def test_response_events_carry_each_answer_verbatim(tmp_path, offline_pdf_fetch):
     """The debug stream: what the model actually said, attributed to its stage.
 
     A response follows its own call immediately, so a client reading the feed
@@ -588,7 +672,7 @@ def test_events_surface_a_provider_failover(tmp_path):
     assert calls[0]["ok"] and calls[0]["provider"] == "backup"
 
 
-def test_the_project_files_sit_beside_a_dotted_board_name(tmp_path):
+def test_the_project_files_sit_beside_a_dotted_board_name(tmp_path, offline_pdf_fetch):
     """The .kicad_pro must name the board that is actually there.
 
     Stripping every suffix turned "revision.2.kicad_pcb" into the stem
@@ -613,7 +697,9 @@ def test_the_project_files_sit_beside_a_dotted_board_name(tmp_path):
     assert all(p.exists() for p in result.artifacts)
 
 
-def test_routing_can_be_turned_off_without_losing_the_board(tmp_path):
+def test_routing_can_be_turned_off_without_losing_the_board(
+    tmp_path, offline_pdf_fetch
+):
     """--no-route leaves a placed board with pads on nets and empty copper."""
     out = tmp_path / "board.kicad_pcb"
     result = generate_pcb(
@@ -629,7 +715,7 @@ def test_routing_can_be_turned_off_without_losing_the_board(tmp_path):
     assert out.exists()
 
 
-def test_board_only_writes_the_board_and_nothing_else(tmp_path):
+def test_board_only_writes_the_board_and_nothing_else(tmp_path, offline_pdf_fetch):
     out = tmp_path / "board.kicad_pcb"
     result = generate_pcb(
         _scripted_pipeline_model(),
