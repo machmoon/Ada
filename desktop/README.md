@@ -1,4 +1,34 @@
-# silkscreen as a desktop app
+# Desktop development
+
+Ada has two checkout-only desktop launchers. The native macOS shell under
+`desktop/src-tauri/` is the path forward; `desktop/silkscreen-app` remains a
+portable fallback that opens the same Svelte UI in a Chromium app window.
+
+## Native macOS shell
+
+Install Python and frontend dependencies, build the shared web bundle, then
+run the Rust host:
+
+```sh
+./scripts/install.sh
+cargo run --manifest-path desktop/src-tauri/Cargo.toml
+```
+
+The host starts `python -m desktop.sidecar` on an OS-assigned
+`127.0.0.1` port, waits for `/healthz`, and injects that exact origin into the
+embedded Svelte app. `CommandOrControl+Shift+K` hides or restores the window,
+and text exports use the native Save dialog. Closing Ada closes the child
+service and releases its port.
+
+`ADA_REPO_ROOT` can select another checkout and `ADA_PYTHON` can select its
+interpreter. By default the shell uses this repository and `.venv/bin/python`.
+
+This is a developer shell, not a distributable app. Tauri bundling is disabled
+until Python is packaged as a sidecar and the nested binaries are signed and
+notarized. It currently uses a normal native window; the compact transparent
+overlay remains the next milestone described in [TAURI.md](TAURI.md).
+
+## Chromium app-window fallback
 
 `desktop/silkscreen-app` runs silkscreen the way you would run an installed
 application: one command, one window, no terminal to keep an eye on and no URL
@@ -71,11 +101,11 @@ prefers `.venv/bin/python`, because the system python almost never has
 `ortools` and `kiutils` and the resulting `ModuleNotFoundError` reads as "the
 app is broken" rather than "wrong interpreter".
 
-## What it deliberately is not
+## What the Chromium launcher deliberately is not
 
 - **Not a native app.** It is a browser window in disguise. It has a browser's
   process model, a browser's memory footprint, and a browser's window
-  decorations. `TAURI.md` is the plan for the real shell.
+  decorations. Use the Tauri shell above for the native host.
 - **Not always-on-top, not translucent, not hotkey-summoned.** Chrome's
   `--app` mode gives no control over window level, background transparency, or
   global shortcuts — those are exactly the capabilities that require a native

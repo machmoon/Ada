@@ -1,16 +1,18 @@
-# The native shell: a Tauri plan
+# Native shell: implementation and roadmap
 
 `desktop/silkscreen-app` is a browser window in disguise, and it hits a hard
 ceiling: Chrome's `--app` mode gives no control over window level,
 transparency, or global shortcuts. Those three are exactly what a Cluely-style
-ambient overlay *is*. This document is the plan for the shell that provides
-them.
+ambient overlay *is*. This document records both the native foundation now in
+the repository and the remaining overlay and distribution work.
 
-It was researched against the current Tauri docs; every API and config key
-below is real and cited. **Nothing here can be built or verified on this
-machine — there is no Rust toolchain (`cargo` and `rustc` are both absent).**
-Treat this as a spec to execute on a machine that has one, not as a claim that
-it works.
+The implemented foundation is a fresh MIT-licensed Tauri 2 host in
+`desktop/src-tauri/`. It embeds the existing Svelte bundle, owns a loopback
+Python sidecar, routes HTTP through Tauri's native HTTP plugin, uses a native
+Save dialog, and toggles its normal window with
+`CommandOrControl+Shift+K`. Rust tests, Clippy, the frontend suite, and a live
+macOS launch have been verified. Transparent overlay behavior, bundled Python,
+signing, notarization, and `.dmg` publishing remain roadmap items.
 
 ---
 
@@ -19,15 +21,14 @@ it works.
 **Tauri 2.x** (latest core release 2.11.5, 2026-07-01; there is no v3).
 <https://tauri.app/release/core/>
 
-Add it to the existing tree rather than scaffolding a new app:
+The shell was added to the existing tree rather than introducing another UI:
 
 ```sh
 npx tauri init      # or: cargo tauri init
 ```
 
-This creates `src-tauri/` with `Cargo.toml`, `tauri.conf.json`, and
-`capabilities/default.json`. Put it at `desktop/src-tauri/` so the shell stays
-in one directory and the repo root stays a Python project.
+The resulting `desktop/src-tauri/` contains `Cargo.toml`, `tauri.conf.json`,
+and `capabilities/default.json`, so the repo root remains a Python project.
 <https://v2.tauri.app/start/create-project/>
 
 ### Loading `frontend/dist`
@@ -54,14 +55,14 @@ API base URL baked in, so Tauri loads it directly:
   the simpler option if you do not want a Node process in the loop.
 <https://v2.tauri.app/reference/config/>
 
-**The consequence that matters:** in production the page origin is
+**The consequence that matters:** in a built shell the page origin is
 `tauri://localhost`, not `http://127.0.0.1:PORT`. `frontend/src/lib/api.js`
 fetches same-origin relative paths, so under Tauri those resolve against
-`tauri://` and 404. The shell must give the SPA the sidecar's base URL. The
-least invasive way is an initialization script (§4) that sets
-`window.__SILKSCREEN_BASE__`, with `api.js` gaining a one-line
-`const BASE = globalThis.__SILKSCREEN_BASE__ ?? ''`. That is a frontend-lane
-change, and it is the *only* one the shell strictly requires.
+`tauri://` and 404. The implemented shell injects the sidecar origin as
+`globalThis.__SILKSCREEN_BASE__`; `frontend/src/lib/transport.js` keeps browser
+requests relative and sends desktop requests through `@tauri-apps/plugin-http`.
+The Rust parser and Tauri capability both restrict that bridge to canonical
+`http://127.0.0.1:<port>` origins.
 
 ---
 
@@ -149,9 +150,9 @@ cleanly and then raises `ImportError` on the first solve.
 
 ### Option B — require a local Python (a wrapper, honestly labelled)
 
-Skip `externalBin`. Use the shell plugin to run `python -m service.app` (or
-`launcher.py`) from a path the app discovers or the user configures, exactly as
-`silkscreen-app` does today.
+Skip `externalBin`. Use Rust's `std::process::Command` to run the dedicated
+`desktop.sidecar` module from a path the app discovers or the user configures,
+exactly as `silkscreen-app` discovers its local Python today.
 
 - **Pro:** no 40 MB per-platform payload, no notarization of a Python binary,
   no antivirus reputation problem, and the app tracks the checkout — which is
@@ -159,10 +160,10 @@ Skip `externalBin`. Use the shell plugin to run `python -m service.app` (or
 - **Con:** it is not something you hand to somebody who does not have the
   repo. It is `silkscreen-app` with a nicer window.
 
-**Recommendation:** ship Option B first, because it is a two-day change that
-gets the overlay working, and the overlay is the point. Move to Option A only
-when there is a person to hand the `.dmg` to. The Rust code differs by one
-`Command` construction; nothing else in this document changes.
+**Current implementation:** Option B is complete for development. Rust starts
+`.venv/bin/python -m desktop.sidecar`, reads one JSON readiness record, keeps
+the child's stdin open as an ownership signal, and shuts it down on app exit.
+Move to Option A before enabling Tauri bundles or publishing a `.dmg`.
 
 ---
 
@@ -315,14 +316,15 @@ app.handle().plugin(tauri_plugin_global_shortcut::Builder::new().build())?;
 app.global_shortcut().register("CommandOrControl+Shift+K")?;
 ```
 
-Permissions: `global-shortcut:allow-register`, `...:allow-unregister`,
-`...:allow-is-registered`.
+Permissions `global-shortcut:allow-register`, `...:allow-unregister`, and
+`...:allow-is-registered` are needed only when JavaScript owns registration.
+The current handler is Rust-side, so those commands are not exposed to the
+webview.
 <https://v2.tauri.app/plugin/global-shortcut/>
 
-The handler toggles `window.show()`/`hide()` plus `set_focus()`. On macOS,
-registering a global shortcut prompts for Accessibility/Input Monitoring
-permission on first use — the app must survive the user declining rather than
-silently never responding to the key.
+The implemented Rust handler toggles `window.show()`/`hide()` plus
+`set_focus()`. A shortcut conflict is logged without aborting startup, so the
+normal desktop window still works when another app owns that key combination.
 
 ---
 
@@ -335,23 +337,23 @@ silently never responding to the key.
 | **Windows SmartScreen / AV** | Option A. `--onefile` PyInstaller output self-extracts to `%TEMP%`, which matches packer heuristics and gets flagged (pyinstaller#6754). | Use `--onedir`, code-sign (an EV cert clears SmartScreen reputation fastest), set icon and version metadata, submit false positives to Microsoft. |
 | **No Mac App Store** | Both options, if you want transparency. `macos-private-api` disqualifies the bundle. | Developer-ID + notarization, direct download. Decide this before designing a store listing. |
 | **Linux blur** | Both options. WebKitGTK does not blur behind a transparent window; compositor blur is not the app's to request. | Ship the flat-tint reading and say so. |
-| **`tauri://` origin breaks same-origin fetch** | Both options. `api.js` assumes same-origin relative paths. | The `__SILKSCREEN_BASE__` seam in §4, plus a one-line change in `api.js`. |
-| **Sidecar orphaning** | Both options. If the shell is force-killed the Python process can outlive it and keep the port. | Hold the `CommandChild` and `kill()` it on `RunEvent::ExitRequested`; belt-and-braces, have the sidecar exit when its stdin closes. |
-| **First-launch cost** | Option A. Importing OR-Tools takes seconds; a transparent always-on-top window that shows nothing for four seconds looks broken. | Do not create the window until `/healthz` answers — the same rule `launcher.py` already follows — and show a small splash meanwhile. |
-| **Rust toolchain absent here** | Everything above. | None of this compiles on this machine. Any of it landing needs `rustup` first, and none of it should be committed as "done" before it has been built and run. |
+| **`tauri://` origin breaks same-origin fetch** | Resolved in the foundation. | Keep the strict `__SILKSCREEN_BASE__` seam and native HTTP transport tests. |
+| **Sidecar orphaning** | Both options. If the shell is force-killed the Python process can outlive it and keep the port. | Hold the child and stop it on `RunEvent::ExitRequested`; the implemented sidecar also exits when its stdin closes. |
+| **First-launch cost** | Both options. Importing OR-Tools takes seconds; a transparent always-on-top window that shows nothing for four seconds looks broken. | The implemented host creates its window only after `/healthz` answers. Add a splash if packaged startup is still visibly slow. |
+| **Developer-only sidecar** | The current Option B host resolves a checkout and local Python environment. | Keep `bundle.active` false. Implement Option A, signing, and notarization before publishing installers. |
 
 ---
 
 ## 7. Suggested order
 
-1. `tauri init` under `desktop/src-tauri/`, `frontendDist` at `frontend/dist`,
-   Option B backend. Prove the SPA loads and generates in a normal Tauri window.
-2. Add the `__SILKSCREEN_BASE__` seam and the `api.js` line. This is the only
-   frontend change; get it reviewed by that lane.
-3. Turn on `transparent` + `decorations: false` + `alwaysOnTop` +
+1. **Done:** native host under `desktop/src-tauri/`, `frontendDist` at
+   `frontend/dist`, and the parent-owned Option B backend in a normal window.
+2. **Done:** strict `__SILKSCREEN_BASE__` transport, native Save dialog, global
+   summon/dismiss shortcut, and macOS CI for Rust plus the shared frontend.
+3. **Next:** turn on `transparent` + `decorations: false` + `alwaysOnTop` +
    `macOSPrivateApi`, add the initialization script, confirm the glass skin
    reads correctly against a live desktop.
-4. `window-vibrancy` for real material; global shortcut for summon/dismiss;
-   `setIgnoreCursorEvents` for click-through.
-5. Only then Option A, PyInstaller and signing — and budget the macOS
+4. Add `window-vibrancy` for real material and `setIgnoreCursorEvents` for
+   click-through.
+5. Only then implement Option A, PyInstaller, and signing — and budget the macOS
    entitlements problem as its own task, not as a build-config tweak.

@@ -101,15 +101,15 @@ Every stage is a real KiCad file you can open and inspect on its own, so you can
 where a design went wrong instead of only seeing the last artifact.
 
 ```
-998 tests collected — no network, no API key, no KiCad install
+1005 tests collected — no network, no API key, no KiCad install
 ```
 
 **Next:** [full install guide and troubleshooting](docs/install.md) ·
 [contributing](CONTRIBUTING.md) · [how it works](#prompt-to-pcb)
 
 **Download:** [tagged releases](https://github.com/machmoon/silkscreen/releases) carry the
-Python wheel, the built web UI, and the **Kaleo** desktop app (macOS `.dmg`,
-Apple Silicon, ad-hoc signed — right-click → Open on first launch).
+Python wheel and built web UI. The native **Ada** macOS shell currently runs
+from a checkout; `.dmg` packaging, signing, and notarization are not yet built.
 
 ---
 
@@ -438,7 +438,7 @@ treats the board file as the interface.
 | Requires KiCad running | Yes | **No** |
 | Headless / CI | Hard | **Native** |
 | Platform lock | KiCad's plugin loader | **None — pure Python** |
-| Testable without KiCad | No | **Yes, all 998 tests** |
+| Testable without KiCad | No | **Yes, all 1005 tests** |
 
 ### What it reads
 
@@ -862,7 +862,7 @@ engine/
       pipeline.py   prompt -> PCB
       adk/          ADK dynamic workflow over the same stage bodies
     audit/        optional visual review of a finished board
-  tests/          998 tests — no network, no API keys, no KiCad
+  tests/          1005 tests — no network, no API keys, no KiCad
     fixtures/     ref.kicad_pcb -- 11-footprint board fixture
 scripts/
   demo.py         end-to-end: read -> place -> write -> verify
