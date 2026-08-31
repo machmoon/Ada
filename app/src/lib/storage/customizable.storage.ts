@@ -25,7 +25,7 @@ export const DEFAULT_CUSTOMIZABLE_STATE: CustomizableState = {
   appIcon: { isVisible: true },
   alwaysOnTop: { isEnabled: false },
   autostart: { isEnabled: false },
-  cursor: { type: "invisible" },
+  cursor: { type: "default" },
 };
 
 /**
@@ -45,7 +45,13 @@ export const getCustomizableState = (): CustomizableState => {
       alwaysOnTop:
         parsedState.alwaysOnTop || DEFAULT_CUSTOMIZABLE_STATE.alwaysOnTop,
       autostart: parsedState.autostart || DEFAULT_CUSTOMIZABLE_STATE.autostart,
-      cursor: parsedState.cursor || DEFAULT_CUSTOMIZABLE_STATE.cursor,
+      // A stored "invisible" is upstream's hide-the-pointer setting, which
+      // predates this default flipping to a real cursor. Migrate it rather
+      // than leaving early installs with no visible pointer.
+      cursor:
+        !parsedState.cursor || parsedState.cursor.type === "invisible"
+          ? DEFAULT_CUSTOMIZABLE_STATE.cursor
+          : parsedState.cursor,
     };
   } catch (error) {
     console.error("Failed to get customizable state:", error);

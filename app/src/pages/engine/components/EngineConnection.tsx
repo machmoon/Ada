@@ -4,7 +4,11 @@ import { Button, Header, Input, Label } from "@/components";
 import { safeLocalStorage } from "@/lib";
 import { cn } from "@/lib/utils";
 import { DEFAULT_BASE_URL, health } from "@/lib/silkscreen/client";
-import { LOOPBACK_HOSTS, KALEO_STORAGE_KEYS } from "@/config/kaleo.constants";
+import {
+  LOOPBACK_HOSTS,
+  IPV6_LOOPBACK_HOSTS,
+  KALEO_STORAGE_KEYS,
+} from "@/config/kaleo.constants";
 
 export interface BaseUrlCheck {
   ok: boolean;
@@ -82,6 +86,14 @@ export function validateEngineBaseUrl(raw: string): BaseUrlCheck {
     }
     return Number(octets[0]) === 127;
   };
+  if ((IPV6_LOOPBACK_HOSTS as readonly string[]).includes(host)) {
+    return {
+      ok: false,
+      url: "",
+      reason:
+        "IPv6 loopback cannot be used as the engine address. Use http://127.0.0.1:8081 instead.",
+    };
+  }
   const isLoopback =
     (LOOPBACK_HOSTS as readonly string[]).includes(host) || isV4Loopback(host);
   if (!isLoopback) {

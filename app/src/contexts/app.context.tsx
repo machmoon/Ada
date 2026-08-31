@@ -295,8 +295,11 @@ export const AppProvider = ({ children }: { children: ReactNode }) => {
         return;
       }
 
-      // For overlay windows (main, capture-overlay-*)
-      const safeType = type || "invisible";
+      // For overlay windows (main, capture-overlay-*). Upstream defaulted this
+      // to "invisible" -- it hides the pointer so a screen-share does not show
+      // you clicking. That is a covert-use feature; here it just means a user
+      // cannot see what they are aiming at, so the fallback is a real cursor.
+      const safeType = type || "default";
       const cursorValue = type === "invisible" ? "none" : safeType;
       document.documentElement.style.setProperty("--cursor-type", cursorValue);
     } catch (error) {

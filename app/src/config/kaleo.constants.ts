@@ -35,7 +35,16 @@ export const KALEO_STORAGE_KEYS = {
  * the user's Gemini quota on every call — to whoever can reach that address.
  * `127.0.0.0/8` is matched by prefix because the whole block is loopback.
  */
-export const LOOPBACK_HOSTS = ["localhost", "::1", "[::1]"] as const;
+export const LOOPBACK_HOSTS = ["localhost"] as const;
+
+/**
+ * IPv6 loopback, accepted by this validator only so it can be refused with a
+ * reason. Tauri's HTTP scope is a URL pattern where `:` opens a named group,
+ * so an IPv6 literal cannot be written there -- and one unparseable entry
+ * rejects the whole scope, blocking every request the app makes. Allowing the
+ * address here would therefore produce a silent, total connection failure.
+ */
+export const IPV6_LOOPBACK_HOSTS = ["::1", "[::1]"] as const;
 
 /**
  * How to start the engine, quoted from the repository's own docs rather than
