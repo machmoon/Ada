@@ -31,6 +31,7 @@ transcriptions do not convert. Conversion happens once, in the checker.
 
 from __future__ import annotations
 
+import math
 from dataclasses import asdict, dataclass, field, fields
 from enum import StrEnum
 from typing import Any
@@ -109,8 +110,10 @@ class RatingKind(StrEnum):
 class _Constraint:
     """Fields every constraint kind shares. Not serialized on its own."""
 
-    #: Stable within a set, e.g. ``abs-max.vdd`` -- how a checker, a diff or a
-    #: human review refers to one constraint across re-extractions.
+    #: Stable within a set, e.g. ``abs-max.vdd`` -- how a checker, a diff or
+    #: a human review refers to one constraint. Duplicate subjects get a
+    #: positional ``-2``/``-3`` suffix, so those ids are only as stable as
+    #: the extraction order that produced them; diff by subject, not suffix.
     id: str
     provenance: Provenance
     #: The extractor's own 0..1 estimate. Advisory; ``needs_review`` governs.
@@ -291,25 +294,84 @@ def _load(cls: type, data: Any) -> Any:
     return cls(**{k: v for k, v in data.items() if k in known})
 
 
+def _check(cond: bool, what: str) -> None:
+    if not cond:
+        raise ValueError(f"malformed constraint set: {what}")
+
+
+def _valid_real(value: Any, what: str) -> None:
+    """None or a finite non-bool number. NaN is rejected explicitly because
+    ``json`` emits and accepts it, and every comparison against NaN is False
+    -- including the gate's confidence floor."""
+    if value is None:
+        return
+    _check(
+        not isinstance(value, bool) and isinstance(value, (int, float))
+        and math.isfinite(value),
+        f"{what} must be a finite number or null, got {value!r}",
+    )
+
+
+def _valid_bool(value: Any, what: str) -> None:
+    _check(isinstance(value, bool), f"{what} must be a boolean, got {value!r}")
+
+
 def _load_constraint(cls: type, data: Any) -> Any:
-    """Build a constraint, rebuilding nested Provenance and tuple fields."""
+    """Build a constraint, rebuilding nested objects and validating scalars.
+
+    The contract is "malformed input raises ValueError -- one type"; without
+    these checks a corrupt file loads silently and detonates later as a
+    TypeError inside the gate or the checker, far from the file that caused
+    it. Worse, several corrupt shapes would load into *more* trust than the
+    pipeline granted (``"needs_review": 0`` in ``trusted()``, NaN confidence
+    sailing past the floor), so validation here is part of the trust ladder,
+    not politeness.
+    """
     if not isinstance(data, dict):
         raise ValueError(f"expected an object for {cls.__name__}, got "
                          f"{type(data).__name__}")
     known = {f.name for f in fields(cls)}
     kwargs = {k: v for k, v in data.items() if k in known}
     kwargs["provenance"] = _load(Provenance, data.get("provenance") or {"page": 0})
+    prov = kwargs["provenance"]
+    _check(isinstance(prov.page, int) and not isinstance(prov.page, bool),
+           f"provenance.page must be an integer, got {prov.page!r}")
+    _valid_bool(prov.verified, "provenance.verified")
+    _check(isinstance(prov.quote, str) and isinstance(prov.section, str),
+           "provenance quote and section must be strings")
+
+    _check(isinstance(kwargs.get("id"), str) and kwargs["id"] != "",
+           f"a {cls.__name__} constraint needs a non-empty string id")
+    for name in ("confidence",):
+        if name in kwargs:
+            _valid_real(kwargs[name], name)
+            _check(0.0 <= kwargs[name] <= 1.0,
+                   f"confidence must be within 0..1, got {kwargs[name]!r}")
+    for name in ("needs_review", "confirmed", "per_pin"):
+        if name in kwargs:
+            _valid_bool(kwargs[name], name)
     for name in ("pins", "rails"):
-        if name in kwargs and isinstance(kwargs[name], list):
+        if name in kwargs:
+            _check(isinstance(kwargs[name], (list, tuple))
+                   and all(isinstance(v, str) for v in kwargs[name]),
+                   f"{name} must be a list of strings, got {kwargs[name]!r}")
             kwargs[name] = tuple(kwargs[name])
+    for name in ("value", "max_distance_mm", "resistor_value"):
+        if name in kwargs:
+            _valid_real(kwargs[name], name)
+    if kwargs.get("count") is not None and "count" in kwargs:
+        _check(isinstance(kwargs["count"], int)
+               and not isinstance(kwargs["count"], bool),
+               f"count must be an integer or null, got {kwargs['count']!r}")
     if "limit" in kwargs:
         kwargs["limit"] = _load(Limit, kwargs["limit"])
+        for name in ("min", "typ", "max"):
+            _valid_real(getattr(kwargs["limit"], name), f"limit.{name}")
+        _check(isinstance(kwargs["limit"].unit, str), "limit.unit must be a string")
     if "kind" in kwargs:
         # StrEnum serializes as its value; rebuild the enum member. An unknown
         # kind is malformed data, and ValueError is already our contract.
         kwargs["kind"] = RatingKind(str(kwargs["kind"]))
-    if "id" not in kwargs:
-        raise ValueError(f"a {cls.__name__} constraint needs an id")
     return cls(**kwargs)
 
 

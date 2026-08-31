@@ -6,7 +6,7 @@
     "title": "NA555, NE555, SA555, SE555 Precision Timers (SLFS022K)",
     "revision": "SLFS022K, revised March 2026",
     "url": "https://www.ti.com/lit/ds/symlink/ne555.pdf",
-    "sha256": "",
+    "sha256": "c6f5275b8c31eb1d65e30400e38357aefe95e2088286bbded5afc216f4259ee9",
     "page_count": 39
   },
   "ratings": [
@@ -15,26 +15,55 @@
       "kind": "absolute_maximum",
       "parameter": "Supply voltage",
       "symbol": "VCC",
-      "limit": {"unit": "V", "min": null, "typ": null, "max": 18.0,
-                "conditions": "with respect to GND"},
-      "pins": ["VCC"],
-      "provenance": {"page": 4, "section": "5.1 Absolute Maximum Ratings",
-                     "quote": "VCC Supply voltage(2) 18 V", "verified": false},
-      "confidence": 1.0, "needs_review": false, "review_reason": "",
-      "confirmed": true, "notes": "hand-transcribed reference"
+      "limit": {
+        "unit": "V",
+        "min": null,
+        "typ": null,
+        "max": 18.0,
+        "conditions": "with respect to GND"
+      },
+      "pins": [
+        "VCC"
+      ],
+      "provenance": {
+        "page": 4,
+        "section": "5.1 Absolute Maximum Ratings",
+        "quote": "VCC Supply voltage(2) 18 V",
+        "verified": true
+      },
+      "confidence": 1.0,
+      "needs_review": false,
+      "review_reason": "",
+      "confirmed": true,
+      "notes": "hand-transcribed reference"
     },
     {
       "id": "abs-max.vi",
       "kind": "absolute_maximum",
       "parameter": "Input voltage, CONT, RESET, THRES, TRIG",
       "symbol": "VI",
-      "limit": {"unit": "V", "min": null, "typ": null, "max": null,
-                "conditions": "maximum is VCC (a rail-relative limit, not a fixed number)"},
-      "pins": ["CONT", "RESET", "THRES", "TRIG"],
-      "provenance": {"page": 4, "section": "5.1 Absolute Maximum Ratings",
-                     "quote": "VI Input voltage CONT, RESET, THRES, TRIG VCC V",
-                     "verified": false},
-      "confidence": 1.0, "needs_review": false, "review_reason": "",
+      "limit": {
+        "unit": "V",
+        "min": null,
+        "typ": null,
+        "max": null,
+        "conditions": "maximum is VCC (a rail-relative limit, not a fixed number)"
+      },
+      "pins": [
+        "CONT",
+        "RESET",
+        "THRES",
+        "TRIG"
+      ],
+      "provenance": {
+        "page": 4,
+        "section": "5.1 Absolute Maximum Ratings",
+        "quote": "VI Input voltage CONT, RESET, THRES, TRIG VCC V",
+        "verified": true
+      },
+      "confidence": 1.0,
+      "needs_review": false,
+      "review_reason": "",
       "confirmed": true,
       "notes": "hand-transcribed reference; deliberate schema stress case — the limit is another rail, so the numeric max stays null and the relation lives in conditions"
     },
@@ -43,86 +72,179 @@
       "kind": "absolute_maximum",
       "parameter": "Output current",
       "symbol": "IO",
-      "limit": {"unit": "mA", "min": -225.0, "typ": null, "max": 225.0, "conditions": ""},
-      "pins": ["OUT"],
-      "provenance": {"page": 4, "section": "5.1 Absolute Maximum Ratings",
-                     "quote": "IO Output current ±225 mA", "verified": false},
-      "confidence": 1.0, "needs_review": false, "review_reason": "",
-      "confirmed": true, "notes": "hand-transcribed reference; datasheet states ±225"
+      "limit": {
+        "unit": "mA",
+        "min": -225.0,
+        "typ": null,
+        "max": 225.0,
+        "conditions": ""
+      },
+      "pins": [
+        "OUT"
+      ],
+      "provenance": {
+        "page": 4,
+        "section": "5.1 Absolute Maximum Ratings",
+        "quote": "IO Output current ±225 mA",
+        "verified": true
+      },
+      "confidence": 1.0,
+      "needs_review": false,
+      "review_reason": "",
+      "confirmed": true,
+      "notes": "hand-transcribed reference; datasheet states ±225"
     },
     {
       "id": "abs-max.tj",
       "kind": "absolute_maximum",
       "parameter": "Operating virtual junction temperature",
       "symbol": "TJ",
-      "limit": {"unit": "°C", "min": null, "typ": null, "max": 150.0, "conditions": ""},
+      "limit": {
+        "unit": "°C",
+        "min": null,
+        "typ": null,
+        "max": 150.0,
+        "conditions": ""
+      },
       "pins": [],
-      "provenance": {"page": 4, "section": "5.1 Absolute Maximum Ratings",
-                     "quote": "TJ Operating virtual junction temperature 150 °C",
-                     "verified": false},
-      "confidence": 1.0, "needs_review": false, "review_reason": "",
-      "confirmed": true, "notes": "hand-transcribed reference"
+      "provenance": {
+        "page": 4,
+        "section": "5.1 Absolute Maximum Ratings",
+        "quote": "TJ Operating virtual junction temperature 150 °C",
+        "verified": true
+      },
+      "confidence": 1.0,
+      "needs_review": false,
+      "review_reason": "",
+      "confirmed": true,
+      "notes": "hand-transcribed reference"
     },
     {
       "id": "abs-max.tstg",
       "kind": "absolute_maximum",
       "parameter": "Storage temperature",
       "symbol": "Tstg",
-      "limit": {"unit": "°C", "min": -65.0, "typ": null, "max": 150.0, "conditions": ""},
+      "limit": {
+        "unit": "°C",
+        "min": -65.0,
+        "typ": null,
+        "max": 150.0,
+        "conditions": ""
+      },
       "pins": [],
-      "provenance": {"page": 4, "section": "5.1 Absolute Maximum Ratings",
-                     "quote": "Tstg Storage temperature –65 150 °C", "verified": false},
-      "confidence": 1.0, "needs_review": false, "review_reason": "",
-      "confirmed": true, "notes": "hand-transcribed reference"
+      "provenance": {
+        "page": 4,
+        "section": "5.1 Absolute Maximum Ratings",
+        "quote": "Tstg Storage temperature –65 150 °C",
+        "verified": true
+      },
+      "confidence": 1.0,
+      "needs_review": false,
+      "review_reason": "",
+      "confirmed": true,
+      "notes": "hand-transcribed reference"
     },
     {
       "id": "op.vcc",
       "kind": "operating_condition",
       "parameter": "Supply voltage, NA555, NE555, SA555",
       "symbol": "VCC",
-      "limit": {"unit": "V", "min": 4.5, "typ": null, "max": 16.0, "conditions": ""},
-      "pins": ["VCC"],
-      "provenance": {"page": 4, "section": "5.3 Recommended Operating Conditions",
-                     "quote": "VCC Supply voltage NA555, NE555, SA555 4.5 16 V",
-                     "verified": false},
-      "confidence": 1.0, "needs_review": false, "review_reason": "",
-      "confirmed": true, "notes": "hand-transcribed reference; SE555 allows 18 V"
+      "limit": {
+        "unit": "V",
+        "min": 4.5,
+        "typ": null,
+        "max": 16.0,
+        "conditions": ""
+      },
+      "pins": [
+        "VCC"
+      ],
+      "provenance": {
+        "page": 4,
+        "section": "5.3 Recommended Operating Conditions",
+        "quote": "VCC Supply voltage NA555, NE555, SA555 4.5 16 V",
+        "verified": true
+      },
+      "confidence": 1.0,
+      "needs_review": false,
+      "review_reason": "",
+      "confirmed": true,
+      "notes": "hand-transcribed reference; SE555 allows 18 V"
     },
     {
       "id": "op.io",
       "kind": "operating_condition",
       "parameter": "Output current",
       "symbol": "IO",
-      "limit": {"unit": "mA", "min": -200.0, "typ": null, "max": 200.0, "conditions": ""},
-      "pins": ["OUT"],
-      "provenance": {"page": 4, "section": "5.3 Recommended Operating Conditions",
-                     "quote": "IO Output current ±200 mA", "verified": false},
-      "confidence": 1.0, "needs_review": false, "review_reason": "",
-      "confirmed": true, "notes": "hand-transcribed reference; datasheet states ±200"
+      "limit": {
+        "unit": "mA",
+        "min": -200.0,
+        "typ": null,
+        "max": 200.0,
+        "conditions": ""
+      },
+      "pins": [
+        "OUT"
+      ],
+      "provenance": {
+        "page": 4,
+        "section": "5.3 Recommended Operating Conditions",
+        "quote": "IO Output current ±200 mA",
+        "verified": true
+      },
+      "confidence": 1.0,
+      "needs_review": false,
+      "review_reason": "",
+      "confirmed": true,
+      "notes": "hand-transcribed reference; datasheet states ±200"
     },
     {
       "id": "op.ta",
       "kind": "operating_condition",
       "parameter": "Operating free-air temperature, NE555",
       "symbol": "TA",
-      "limit": {"unit": "°C", "min": 0.0, "typ": null, "max": 70.0, "conditions": "NE555 variant"},
+      "limit": {
+        "unit": "°C",
+        "min": 0.0,
+        "typ": null,
+        "max": 70.0,
+        "conditions": "NE555 variant"
+      },
       "pins": [],
-      "provenance": {"page": 4, "section": "5.3 Recommended Operating Conditions",
-                     "quote": "NE555 0 70", "verified": false},
-      "confidence": 1.0, "needs_review": false, "review_reason": "",
-      "confirmed": true, "notes": "hand-transcribed reference"
+      "provenance": {
+        "page": 4,
+        "section": "5.3 Recommended Operating Conditions",
+        "quote": "NE555 0 70",
+        "verified": true
+      },
+      "confidence": 1.0,
+      "needs_review": false,
+      "review_reason": "",
+      "confirmed": true,
+      "notes": "hand-transcribed reference"
     },
     {
       "id": "thermal.theta-ja-p-pdip",
       "kind": "thermal",
       "parameter": "Junction-to-ambient thermal resistance, P (PDIP) package",
       "symbol": "RθJA",
-      "limit": {"unit": "°C/W", "min": null, "typ": 98.5, "max": null, "conditions": ""},
+      "limit": {
+        "unit": "°C/W",
+        "min": null,
+        "typ": 98.5,
+        "max": null,
+        "conditions": ""
+      },
       "pins": [],
-      "provenance": {"page": 5, "section": "5.4 Thermal Information",
-                     "quote": "RθJA Junction-to-ambient thermal resistance 125.4 92.2 125.0 98.5 124.5 164.2 °C/W",
-                     "verified": false},
-      "confidence": 1.0, "needs_review": false, "review_reason": "",
+      "provenance": {
+        "page": 5,
+        "section": "5.4 Thermal Information",
+        "quote": "RθJA Junction-to-ambient thermal resistance 125.4 92.2 125.0 98.5 124.5 164.2 °C/W",
+        "verified": true
+      },
+      "confidence": 1.0,
+      "needs_review": false,
+      "review_reason": "",
       "confirmed": true,
       "notes": "hand-transcribed reference; P (PDIP) column of the six-package row — a known column-soup trap for extraction"
     },
@@ -131,12 +253,23 @@
       "kind": "thermal",
       "parameter": "Junction-to-ambient thermal resistance, D (SOIC) package",
       "symbol": "RθJA",
-      "limit": {"unit": "°C/W", "min": null, "typ": 125.4, "max": null, "conditions": ""},
+      "limit": {
+        "unit": "°C/W",
+        "min": null,
+        "typ": 125.4,
+        "max": null,
+        "conditions": ""
+      },
       "pins": [],
-      "provenance": {"page": 5, "section": "5.4 Thermal Information",
-                     "quote": "RθJA Junction-to-ambient thermal resistance 125.4 92.2 125.0 98.5 124.5 164.2 °C/W",
-                     "verified": false},
-      "confidence": 1.0, "needs_review": false, "review_reason": "",
+      "provenance": {
+        "page": 5,
+        "section": "5.4 Thermal Information",
+        "quote": "RθJA Junction-to-ambient thermal resistance 125.4 92.2 125.0 98.5 124.5 164.2 °C/W",
+        "verified": true
+      },
+      "confidence": 1.0,
+      "needs_review": false,
+      "review_reason": "",
       "confirmed": true,
       "notes": "hand-transcribed reference; D (SOIC) column of the same row"
     },
@@ -145,53 +278,106 @@
       "kind": "pin_electrical",
       "parameter": "THRES voltage level",
       "symbol": "",
-      "limit": {"unit": "V", "min": 8.8, "typ": 10.0, "max": 11.2,
-                "conditions": "VCC = 15V, NA555, NE555, SA555, TA = 25°C"},
-      "pins": ["THRES"],
-      "provenance": {"page": 5, "section": "5.5 Electrical Characteristics",
-                     "quote": "THRES voltage level VCC = 15V NA555, NE555, SA555 8.8 10 11.2 V",
-                     "verified": false},
-      "confidence": 1.0, "needs_review": false, "review_reason": "",
-      "confirmed": true, "notes": "hand-transcribed reference"
+      "limit": {
+        "unit": "V",
+        "min": 8.8,
+        "typ": 10.0,
+        "max": 11.2,
+        "conditions": "VCC = 15V, NA555, NE555, SA555, TA = 25°C"
+      },
+      "pins": [
+        "THRES"
+      ],
+      "provenance": {
+        "page": 5,
+        "section": "5.5 Electrical Characteristics",
+        "quote": "THRES voltage level VCC = 15V NA555, NE555, SA555 8.8 10 11.2 V",
+        "verified": true
+      },
+      "confidence": 1.0,
+      "needs_review": false,
+      "review_reason": "",
+      "confirmed": true,
+      "notes": "hand-transcribed reference"
     },
     {
       "id": "pin.trig-level",
       "kind": "pin_electrical",
       "parameter": "TRIG voltage level",
       "symbol": "",
-      "limit": {"unit": "V", "min": 4.5, "typ": 5.0, "max": 5.6,
-                "conditions": "VCC = 15V, NA555, NE555, SA555, TA = 25°C"},
-      "pins": ["TRIG"],
-      "provenance": {"page": 5, "section": "5.5 Electrical Characteristics",
-                     "quote": "TRIG voltage level VCC = 15V NA555, NE555, SA555 4.5 5 5.6 V",
-                     "verified": false},
-      "confidence": 1.0, "needs_review": false, "review_reason": "",
-      "confirmed": true, "notes": "hand-transcribed reference"
+      "limit": {
+        "unit": "V",
+        "min": 4.5,
+        "typ": 5.0,
+        "max": 5.6,
+        "conditions": "VCC = 15V, NA555, NE555, SA555, TA = 25°C"
+      },
+      "pins": [
+        "TRIG"
+      ],
+      "provenance": {
+        "page": 5,
+        "section": "5.5 Electrical Characteristics",
+        "quote": "TRIG voltage level VCC = 15V NA555, NE555, SA555 4.5 5 5.6 V",
+        "verified": true
+      },
+      "confidence": 1.0,
+      "needs_review": false,
+      "review_reason": "",
+      "confirmed": true,
+      "notes": "hand-transcribed reference"
     },
     {
       "id": "pin.reset-level",
       "kind": "pin_electrical",
       "parameter": "RESET voltage level",
       "symbol": "",
-      "limit": {"unit": "V", "min": 0.3, "typ": 0.7, "max": 1.0,
-                "conditions": "TA = 25°C"},
-      "pins": ["RESET"],
-      "provenance": {"page": 5, "section": "5.5 Electrical Characteristics",
-                     "quote": "RESET voltage level 0.3 0.7 1 V", "verified": false},
-      "confidence": 1.0, "needs_review": false, "review_reason": "",
-      "confirmed": true, "notes": "hand-transcribed reference"
+      "limit": {
+        "unit": "V",
+        "min": 0.3,
+        "typ": 0.7,
+        "max": 1.0,
+        "conditions": "TA = 25°C"
+      },
+      "pins": [
+        "RESET"
+      ],
+      "provenance": {
+        "page": 5,
+        "section": "5.5 Electrical Characteristics",
+        "quote": "RESET voltage level 0.3 0.7 1 V",
+        "verified": true
+      },
+      "confidence": 1.0,
+      "needs_review": false,
+      "review_reason": "",
+      "confirmed": true,
+      "notes": "hand-transcribed reference"
     },
     {
       "id": "pin.thres-current",
       "kind": "pin_electrical",
       "parameter": "THRES current",
       "symbol": "",
-      "limit": {"unit": "nA", "min": null, "typ": 30.0, "max": 250.0,
-                "conditions": "TA = 25°C"},
-      "pins": ["THRES"],
-      "provenance": {"page": 5, "section": "5.5 Electrical Characteristics",
-                     "quote": "THRES current(1) 30 250 nA", "verified": false},
-      "confidence": 1.0, "needs_review": false, "review_reason": "",
+      "limit": {
+        "unit": "nA",
+        "min": null,
+        "typ": 30.0,
+        "max": 250.0,
+        "conditions": "TA = 25°C"
+      },
+      "pins": [
+        "THRES"
+      ],
+      "provenance": {
+        "page": 5,
+        "section": "5.5 Electrical Characteristics",
+        "quote": "THRES current(1) 30 250 nA",
+        "verified": true
+      },
+      "confidence": 1.0,
+      "needs_review": false,
+      "review_reason": "",
       "confirmed": true,
       "notes": "hand-transcribed reference; bounds the maximum usable timing resistance"
     }
@@ -207,10 +393,15 @@
       "max_distance_mm": null,
       "placement": "CONT to ground",
       "cap_type": "",
-      "provenance": {"page": 12, "section": "6.3.2 Astable Operation, Note A",
-                     "quote": "Decoupling CONT voltage to ground with a capacitor can improve operation. This should be evaluated for individual applications.",
-                     "verified": false},
-      "confidence": 1.0, "needs_review": false, "review_reason": "",
+      "provenance": {
+        "page": 12,
+        "section": "6.3.2 Astable Operation, Note A",
+        "quote": "Decoupling CONT voltage to ground with a capacitor can improve operation. This should be evaluated for individual applications.",
+        "verified": true
+      },
+      "confidence": 1.0,
+      "needs_review": false,
+      "review_reason": "",
       "confirmed": true,
       "notes": "hand-transcribed reference; ADVISORY, not required — the figure shows 0.01 µF, the note says 'can improve'. An extractor that presents this as a hard requirement is over-claiming."
     }
@@ -224,11 +415,17 @@
       "resistor_value": null,
       "resistor_unit": "",
       "condition": "when RESET is not used, to prevent false triggering",
-      "provenance": {"page": 11, "section": "6.3.1 Monostable Operation",
-                     "quote": "To prevent false triggering, when RESET is not used, connect RESET to VCC.",
-                     "verified": false},
-      "confidence": 1.0, "needs_review": false, "review_reason": "",
-      "confirmed": true, "notes": "hand-transcribed reference"
+      "provenance": {
+        "page": 11,
+        "section": "6.3.1 Monostable Operation",
+        "quote": "To prevent false triggering, when RESET is not used, connect RESET to VCC.",
+        "verified": true
+      },
+      "confidence": 1.0,
+      "needs_review": false,
+      "review_reason": "",
+      "confirmed": true,
+      "notes": "hand-transcribed reference"
     }
   ],
   "extracted_at": "2026-08-31",

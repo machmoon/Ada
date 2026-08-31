@@ -6,7 +6,7 @@
     "title": "STM32F030x4/x6/x8/xC datasheet (DS9773)",
     "revision": "DS9773 Rev 5",
     "url": "https://www.st.com/resource/en/datasheet/stm32f030f4.pdf",
-    "sha256": "",
+    "sha256": "f8039b4a4746829275f62d9d4955a29753a668ae3664ef34a18f14360c199d41",
     "page_count": 93
   },
   "ratings": [
@@ -15,39 +15,79 @@
       "kind": "absolute_maximum",
       "parameter": "External main supply voltage",
       "symbol": "VDD-VSS",
-      "limit": {"unit": "V", "min": -0.3, "typ": null, "max": 4.0, "conditions": ""},
-      "pins": ["VDD", "VSS"],
-      "provenance": {"page": 43, "section": "Table 18. Voltage characteristics",
-                     "quote": "VDD–VSS External main supply voltage -0.3 4.0 V",
-                     "verified": false},
-      "confidence": 1.0, "needs_review": false, "review_reason": "",
-      "confirmed": true, "notes": "hand-transcribed reference"
+      "limit": {
+        "unit": "V",
+        "min": -0.3,
+        "typ": null,
+        "max": 4.0,
+        "conditions": ""
+      },
+      "pins": [
+        "VDD",
+        "VSS"
+      ],
+      "provenance": {
+        "page": 43,
+        "section": "Table 18. Voltage characteristics",
+        "quote": "VDD–VSS External main supply voltage -0.3 4.0 V",
+        "verified": true
+      },
+      "confidence": 1.0,
+      "needs_review": false,
+      "review_reason": "",
+      "confirmed": true,
+      "notes": "hand-transcribed reference"
     },
     {
       "id": "abs-max.vdda",
       "kind": "absolute_maximum",
       "parameter": "External analog supply voltage",
       "symbol": "VDDA-VSS",
-      "limit": {"unit": "V", "min": -0.3, "typ": null, "max": 4.0, "conditions": ""},
-      "pins": ["VDDA", "VSSA"],
-      "provenance": {"page": 43, "section": "Table 18. Voltage characteristics",
-                     "quote": "VDDA–VSS External analog supply voltage -0.3 4.0 V",
-                     "verified": false},
-      "confidence": 1.0, "needs_review": false, "review_reason": "",
-      "confirmed": true, "notes": "hand-transcribed reference"
+      "limit": {
+        "unit": "V",
+        "min": -0.3,
+        "typ": null,
+        "max": 4.0,
+        "conditions": ""
+      },
+      "pins": [
+        "VDDA",
+        "VSSA"
+      ],
+      "provenance": {
+        "page": 43,
+        "section": "Table 18. Voltage characteristics",
+        "quote": "VDDA–VSS External analog supply voltage -0.3 4.0 V",
+        "verified": true
+      },
+      "confidence": 1.0,
+      "needs_review": false,
+      "review_reason": "",
+      "confirmed": true,
+      "notes": "hand-transcribed reference"
     },
     {
       "id": "abs-max.vin-ft",
       "kind": "absolute_maximum",
       "parameter": "Input voltage on FT and FTf pins",
       "symbol": "VIN",
-      "limit": {"unit": "V", "min": -0.3, "typ": null, "max": null,
-                "conditions": "min is VSS - 0.3; max is VDDIOx + 4.0, a rail-relative limit (VDDIOx is internally connected with VDD)"},
+      "limit": {
+        "unit": "V",
+        "min": -0.3,
+        "typ": null,
+        "max": null,
+        "conditions": "min is VSS - 0.3; max is VDDIOx + 4.0, a rail-relative limit (VDDIOx is internally connected with VDD)"
+      },
       "pins": [],
-      "provenance": {"page": 43, "section": "Table 18. Voltage characteristics",
-                     "quote": "Input voltage on FT and FTf pins VSS − 0.3 VDDIOx + 4.0",
-                     "verified": false},
-      "confidence": 1.0, "needs_review": false, "review_reason": "",
+      "provenance": {
+        "page": 43,
+        "section": "Table 18. Voltage characteristics",
+        "quote": "Input voltage on FT and FTf pins VSS − 0.3 VDDIOx + 4.0",
+        "verified": true
+      },
+      "confidence": 1.0,
+      "needs_review": false,
+      "review_reason": "",
       "confirmed": true,
       "notes": "hand-transcribed reference; rail-relative maximum kept in conditions, numeric max stays null"
     },
@@ -56,132 +96,254 @@
       "kind": "absolute_maximum",
       "parameter": "Input voltage on TTa pins",
       "symbol": "VIN",
-      "limit": {"unit": "V", "min": -0.3, "typ": null, "max": 4.0,
-                "conditions": "min is VSS - 0.3"},
+      "limit": {
+        "unit": "V",
+        "min": -0.3,
+        "typ": null,
+        "max": 4.0,
+        "conditions": "min is VSS - 0.3"
+      },
       "pins": [],
-      "provenance": {"page": 43, "section": "Table 18. Voltage characteristics",
-                     "quote": "Input voltage on TTa pins VSS − 0.3 4.0 V",
-                     "verified": false},
-      "confidence": 1.0, "needs_review": false, "review_reason": "",
-      "confirmed": true, "notes": "hand-transcribed reference"
+      "provenance": {
+        "page": 43,
+        "section": "Table 18. Voltage characteristics",
+        "quote": "Input voltage on TTa pins VSS − 0.3 4.0 V",
+        "verified": true
+      },
+      "confidence": 1.0,
+      "needs_review": false,
+      "review_reason": "",
+      "confirmed": true,
+      "notes": "hand-transcribed reference"
     },
     {
       "id": "abs-max.sum-ivdd",
       "kind": "absolute_maximum",
       "parameter": "Total current into sum of all VDD power lines (source)",
       "symbol": "ΣIVDD",
-      "limit": {"unit": "mA", "min": null, "typ": null, "max": 120.0, "conditions": ""},
-      "pins": ["VDD"],
-      "provenance": {"page": 44, "section": "Table 19. Current characteristics",
-                     "quote": "ΣIVDD Total current into sum of all VDD power lines (source)(1) 120",
-                     "verified": false},
-      "confidence": 1.0, "needs_review": false, "review_reason": "",
-      "confirmed": true, "notes": "hand-transcribed reference"
+      "limit": {
+        "unit": "mA",
+        "min": null,
+        "typ": null,
+        "max": 120.0,
+        "conditions": ""
+      },
+      "pins": [
+        "VDD"
+      ],
+      "provenance": {
+        "page": 44,
+        "section": "Table 19. Current characteristics",
+        "quote": "ΣIVDD Total current into sum of all VDD power lines (source)(1) 120",
+        "verified": true
+      },
+      "confidence": 1.0,
+      "needs_review": false,
+      "review_reason": "",
+      "confirmed": true,
+      "notes": "hand-transcribed reference"
     },
     {
       "id": "abs-max.iio-pin",
       "kind": "absolute_maximum",
       "parameter": "Output current sunk by any I/O and control pin",
       "symbol": "IIO(PIN)",
-      "limit": {"unit": "mA", "min": null, "typ": null, "max": 25.0,
-                "conditions": "sourced current is -25 mA"},
+      "limit": {
+        "unit": "mA",
+        "min": null,
+        "typ": null,
+        "max": 25.0,
+        "conditions": "sourced current is -25 mA"
+      },
       "pins": [],
-      "provenance": {"page": 44, "section": "Table 19. Current characteristics",
-                     "quote": "Output current sunk by any I/O and control pin 25",
-                     "verified": false},
-      "confidence": 1.0, "needs_review": false, "review_reason": "",
-      "confirmed": true, "notes": "hand-transcribed reference"
+      "provenance": {
+        "page": 44,
+        "section": "Table 19. Current characteristics",
+        "quote": "Output current sunk by any I/O and control pin 25",
+        "verified": true
+      },
+      "confidence": 1.0,
+      "needs_review": false,
+      "review_reason": "",
+      "confirmed": true,
+      "notes": "hand-transcribed reference"
     },
     {
       "id": "thermal.tstg",
       "kind": "thermal",
       "parameter": "Storage temperature range",
       "symbol": "TSTG",
-      "limit": {"unit": "°C", "min": -65.0, "typ": null, "max": 150.0, "conditions": ""},
+      "limit": {
+        "unit": "°C",
+        "min": -65.0,
+        "typ": null,
+        "max": 150.0,
+        "conditions": ""
+      },
       "pins": [],
-      "provenance": {"page": 44, "section": "Table 20. Thermal characteristics",
-                     "quote": "TSTG Storage temperature range –65 to +150 °C",
-                     "verified": false},
-      "confidence": 1.0, "needs_review": false, "review_reason": "",
-      "confirmed": true, "notes": "hand-transcribed reference"
+      "provenance": {
+        "page": 44,
+        "section": "Table 20. Thermal characteristics",
+        "quote": "TSTG Storage temperature range –65 to +150 °C",
+        "verified": true
+      },
+      "confidence": 1.0,
+      "needs_review": false,
+      "review_reason": "",
+      "confirmed": true,
+      "notes": "hand-transcribed reference"
     },
     {
       "id": "thermal.tj-max",
       "kind": "thermal",
       "parameter": "Maximum junction temperature",
       "symbol": "TJ",
-      "limit": {"unit": "°C", "min": null, "typ": null, "max": 150.0, "conditions": ""},
+      "limit": {
+        "unit": "°C",
+        "min": null,
+        "typ": null,
+        "max": 150.0,
+        "conditions": ""
+      },
       "pins": [],
-      "provenance": {"page": 44, "section": "Table 20. Thermal characteristics",
-                     "quote": "TJ Maximum junction temperature 150 °C",
-                     "verified": false},
-      "confidence": 1.0, "needs_review": false, "review_reason": "",
-      "confirmed": true, "notes": "hand-transcribed reference"
+      "provenance": {
+        "page": 44,
+        "section": "Table 20. Thermal characteristics",
+        "quote": "TJ Maximum junction temperature 150 °C",
+        "verified": true
+      },
+      "confidence": 1.0,
+      "needs_review": false,
+      "review_reason": "",
+      "confirmed": true,
+      "notes": "hand-transcribed reference"
     },
     {
       "id": "op.vdd",
       "kind": "operating_condition",
       "parameter": "Standard operating voltage",
       "symbol": "VDD",
-      "limit": {"unit": "V", "min": 2.4, "typ": null, "max": 3.6, "conditions": ""},
-      "pins": ["VDD"],
-      "provenance": {"page": 44, "section": "Table 21. General operating conditions",
-                     "quote": "VDD Standard operating voltage - 2.4 3.6 V",
-                     "verified": false},
-      "confidence": 1.0, "needs_review": false, "review_reason": "",
-      "confirmed": true, "notes": "hand-transcribed reference"
+      "limit": {
+        "unit": "V",
+        "min": 2.4,
+        "typ": null,
+        "max": 3.6,
+        "conditions": ""
+      },
+      "pins": [
+        "VDD"
+      ],
+      "provenance": {
+        "page": 44,
+        "section": "Table 21. General operating conditions",
+        "quote": "VDD Standard operating voltage - 2.4 3.6 V",
+        "verified": true
+      },
+      "confidence": 1.0,
+      "needs_review": false,
+      "review_reason": "",
+      "confirmed": true,
+      "notes": "hand-transcribed reference"
     },
     {
       "id": "op.vdda",
       "kind": "operating_condition",
       "parameter": "Analog operating voltage",
       "symbol": "VDDA",
-      "limit": {"unit": "V", "min": 2.4, "typ": null, "max": 3.6,
-                "conditions": "must have a potential equal to or higher than VDD"},
-      "pins": ["VDDA"],
-      "provenance": {"page": 45, "section": "Table 21. General operating conditions (continued)",
-                     "quote": "VDDA Analog operating voltage Must have a potential equal to or higher than VDD 2.4 3.6 V",
-                     "verified": false},
-      "confidence": 1.0, "needs_review": false, "review_reason": "",
-      "confirmed": true, "notes": "hand-transcribed reference"
+      "limit": {
+        "unit": "V",
+        "min": 2.4,
+        "typ": null,
+        "max": 3.6,
+        "conditions": "must have a potential equal to or higher than VDD"
+      },
+      "pins": [
+        "VDDA"
+      ],
+      "provenance": {
+        "page": 45,
+        "section": "Table 21. General operating conditions (continued)",
+        "quote": "VDDA Analog operating voltage Must have a potential equal to or higher than VDD 2.4 3.6 V",
+        "verified": true
+      },
+      "confidence": 1.0,
+      "needs_review": false,
+      "review_reason": "",
+      "confirmed": true,
+      "notes": "hand-transcribed reference"
     },
     {
       "id": "op.fhclk",
       "kind": "operating_condition",
       "parameter": "Internal AHB clock frequency",
       "symbol": "fHCLK",
-      "limit": {"unit": "MHz", "min": 0.0, "typ": null, "max": 48.0, "conditions": ""},
+      "limit": {
+        "unit": "MHz",
+        "min": 0.0,
+        "typ": null,
+        "max": 48.0,
+        "conditions": ""
+      },
       "pins": [],
-      "provenance": {"page": 44, "section": "Table 21. General operating conditions",
-                     "quote": "fHCLK Internal AHB clock frequency - 0 48 MHz",
-                     "verified": false},
-      "confidence": 1.0, "needs_review": false, "review_reason": "",
-      "confirmed": true, "notes": "hand-transcribed reference"
+      "provenance": {
+        "page": 44,
+        "section": "Table 21. General operating conditions",
+        "quote": "fHCLK Internal AHB clock frequency - 0 48 MHz",
+        "verified": true
+      },
+      "confidence": 1.0,
+      "needs_review": false,
+      "review_reason": "",
+      "confirmed": true,
+      "notes": "hand-transcribed reference"
     },
     {
       "id": "op.ta",
       "kind": "operating_condition",
       "parameter": "Ambient temperature for the suffix 6 version",
       "symbol": "TA",
-      "limit": {"unit": "°C", "min": -40.0, "typ": null, "max": 85.0,
-                "conditions": "maximum power dissipation; extendable to 105 °C at low power dissipation while TJ stays under TJmax"},
+      "limit": {
+        "unit": "°C",
+        "min": -40.0,
+        "typ": null,
+        "max": 85.0,
+        "conditions": "maximum power dissipation; extendable to 105 °C at low power dissipation while TJ stays under TJmax"
+      },
       "pins": [],
-      "provenance": {"page": 45, "section": "Table 21. General operating conditions (continued)",
-                     "quote": "TA Ambient temperature for the suffix 6 version Maximum power dissipation -40 85",
-                     "verified": false},
-      "confidence": 1.0, "needs_review": false, "review_reason": "",
-      "confirmed": true, "notes": "hand-transcribed reference"
+      "provenance": {
+        "page": 45,
+        "section": "Table 21. General operating conditions (continued)",
+        "quote": "TA Ambient temperature for the suffix 6 version Maximum power dissipation -40 85",
+        "verified": true
+      },
+      "confidence": 1.0,
+      "needs_review": false,
+      "review_reason": "",
+      "confirmed": true,
+      "notes": "hand-transcribed reference"
     },
     {
       "id": "op.pd-tssop20",
       "kind": "operating_condition",
       "parameter": "Power dissipation at TA = 85 °C for suffix 6, TSSOP20 package",
       "symbol": "PD",
-      "limit": {"unit": "mW", "min": null, "typ": null, "max": 263.0, "conditions": "TA = 85 °C, suffix 6"},
+      "limit": {
+        "unit": "mW",
+        "min": null,
+        "typ": null,
+        "max": 263.0,
+        "conditions": "TA = 85 °C, suffix 6"
+      },
       "pins": [],
-      "provenance": {"page": 45, "section": "Table 21. General operating conditions (continued)",
-                     "quote": "TSSOP20 - 263", "verified": false},
-      "confidence": 1.0, "needs_review": false, "review_reason": "",
+      "provenance": {
+        "page": 45,
+        "section": "Table 21. General operating conditions (continued)",
+        "quote": "PD Power dissipation at TA = 85 °C for suffix 6 TSSOP20 - 263",
+        "verified": true
+      },
+      "confidence": 1.0,
+      "needs_review": false,
+      "review_reason": "",
       "confirmed": true,
       "notes": "hand-transcribed reference; STM32F030F4 is the TSSOP20 part"
     },
@@ -190,26 +352,50 @@
       "kind": "thermal",
       "parameter": "Thermal resistance junction-ambient, TSSOP20 - 6.5 mm x 6.4 mm",
       "symbol": "ΘJA",
-      "limit": {"unit": "°C/W", "min": null, "typ": 76.0, "max": null, "conditions": ""},
+      "limit": {
+        "unit": "°C/W",
+        "min": null,
+        "typ": 76.0,
+        "max": null,
+        "conditions": ""
+      },
       "pins": [],
-      "provenance": {"page": 88, "section": "Table 63. Package thermal characteristics",
-                     "quote": "Thermal resistance junction-ambient TSSOP20 - 6.5 mm x 6.4 mm 76",
-                     "verified": false},
-      "confidence": 1.0, "needs_review": false, "review_reason": "",
-      "confirmed": true, "notes": "hand-transcribed reference"
+      "provenance": {
+        "page": 88,
+        "section": "Table 63. Package thermal characteristics",
+        "quote": "Thermal resistance junction-ambient TSSOP20 - 6.5 mm x 6.4 mm 76",
+        "verified": true
+      },
+      "confidence": 1.0,
+      "needs_review": false,
+      "review_reason": "",
+      "confirmed": true,
+      "notes": "hand-transcribed reference"
     },
     {
       "id": "thermal.theta-ja-lqfp48",
       "kind": "thermal",
       "parameter": "Thermal resistance junction-ambient, LQFP48 - 7 mm x 7 mm",
       "symbol": "ΘJA",
-      "limit": {"unit": "°C/W", "min": null, "typ": 55.0, "max": null, "conditions": ""},
+      "limit": {
+        "unit": "°C/W",
+        "min": null,
+        "typ": 55.0,
+        "max": null,
+        "conditions": ""
+      },
       "pins": [],
-      "provenance": {"page": 88, "section": "Table 63. Package thermal characteristics",
-                     "quote": "Thermal resistance junction-ambient LQFP48 - 7 mm x 7 mm 55",
-                     "verified": false},
-      "confidence": 1.0, "needs_review": false, "review_reason": "",
-      "confirmed": true, "notes": "hand-transcribed reference"
+      "provenance": {
+        "page": 88,
+        "section": "Table 63. Package thermal characteristics",
+        "quote": "Thermal resistance junction-ambient LQFP48 - 7 mm x 7 mm 55",
+        "verified": true
+      },
+      "confidence": 1.0,
+      "needs_review": false,
+      "review_reason": "",
+      "confirmed": true,
+      "notes": "hand-transcribed reference"
     }
   ],
   "decoupling": [
@@ -223,10 +409,15 @@
       "max_distance_mm": null,
       "placement": "as close as possible to, or below, the appropriate pins on the underside of the PCB",
       "cap_type": "filtering ceramic",
-      "provenance": {"page": 42, "section": "6.1.6 Power supply scheme, Figure 13",
-                     "quote": "Each power supply pair (VDD/VSS, VDDA/VSSA etc.) must be decoupled with filtering ceramic capacitors as shown above. These capacitors must be placed as close as possible to, or below, the appropriate pins",
-                     "verified": false},
-      "confidence": 1.0, "needs_review": false, "review_reason": "",
+      "provenance": {
+        "page": 42,
+        "section": "6.1.6 Power supply scheme, Figure 13",
+        "quote": "Each power supply pair (VDD/VSS, VDDA/VSSA etc.) must be decoupled with filtering ceramic capacitors as shown above. These capacitors must be placed as close as possible to, or below, the appropriate pins",
+        "verified": true
+      },
+      "confidence": 1.0,
+      "needs_review": false,
+      "review_reason": "",
       "confirmed": true,
       "notes": "hand-transcribed reference; Figure 13 shows 2 x 100 nF (one per VDD pin on the 2-VDD packages) plus the bulk capacitor below"
     },
@@ -240,11 +431,17 @@
       "max_distance_mm": null,
       "placement": "as close as possible to, or below, the appropriate pins on the underside of the PCB",
       "cap_type": "filtering ceramic",
-      "provenance": {"page": 42, "section": "6.1.6 Power supply scheme, Figure 13",
-                     "quote": "2 x 100 nF +1 x 4.7 μF",
-                     "verified": false},
-      "confidence": 1.0, "needs_review": false, "review_reason": "",
-      "confirmed": true, "notes": "hand-transcribed reference"
+      "provenance": {
+        "page": 42,
+        "section": "6.1.6 Power supply scheme, Figure 13",
+        "quote": "2 x 100 nF +1 x 4.7 μF",
+        "verified": true
+      },
+      "confidence": 1.0,
+      "needs_review": false,
+      "review_reason": "",
+      "confirmed": true,
+      "notes": "hand-transcribed reference"
     },
     {
       "id": "decouple.vdda",
@@ -256,10 +453,17 @@
       "max_distance_mm": null,
       "placement": "as close as possible to, or below, the appropriate pins on the underside of the PCB",
       "cap_type": "filtering ceramic",
-      "provenance": {"page": 42, "section": "6.1.6 Power supply scheme, Figure 13",
-                     "quote": "VDDA 10 nF +1 μF", "verified": false},
-      "confidence": 1.0, "needs_review": false, "review_reason": "",
-      "confirmed": true, "notes": "hand-transcribed reference"
+      "provenance": {
+        "page": 42,
+        "section": "6.1.6 Power supply scheme, Figure 13",
+        "quote": "VDDA 10 nF +1 μF",
+        "verified": true
+      },
+      "confidence": 1.0,
+      "needs_review": false,
+      "review_reason": "",
+      "confirmed": true,
+      "notes": "hand-transcribed reference"
     },
     {
       "id": "decouple.vdda-bulk",
@@ -271,21 +475,36 @@
       "max_distance_mm": null,
       "placement": "as close as possible to, or below, the appropriate pins on the underside of the PCB",
       "cap_type": "filtering ceramic",
-      "provenance": {"page": 42, "section": "6.1.6 Power supply scheme, Figure 13",
-                     "quote": "VDDA 10 nF +1 μF", "verified": false},
-      "confidence": 1.0, "needs_review": false, "review_reason": "",
-      "confirmed": true, "notes": "hand-transcribed reference"
+      "provenance": {
+        "page": 42,
+        "section": "6.1.6 Power supply scheme, Figure 13",
+        "quote": "VDDA 10 nF +1 μF",
+        "verified": true
+      },
+      "confidence": 1.0,
+      "needs_review": false,
+      "review_reason": "",
+      "confirmed": true,
+      "notes": "hand-transcribed reference"
     }
   ],
   "power_sequencing": [
     {
       "id": "power-seq",
-      "rails": ["VDD", "VDDA"],
+      "rails": [
+        "VDD",
+        "VDDA"
+      ],
       "requirement": "VDDA must have a potential equal to or higher than VDD",
-      "provenance": {"page": 45, "section": "Table 21. General operating conditions (continued)",
-                     "quote": "VDDA Analog operating voltage Must have a potential equal to or higher than VDD",
-                     "verified": false},
-      "confidence": 1.0, "needs_review": false, "review_reason": "",
+      "provenance": {
+        "page": 45,
+        "section": "Table 21. General operating conditions (continued)",
+        "quote": "VDDA Analog operating voltage Must have a potential equal to or higher than VDD",
+        "verified": true
+      },
+      "confidence": 1.0,
+      "needs_review": false,
+      "review_reason": "",
       "confirmed": true,
       "notes": "hand-transcribed reference; a level relation rather than an ordering, recorded because it constrains how the rails may be brought up"
     }

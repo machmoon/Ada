@@ -58,14 +58,21 @@ _FARAD_MULT = {
 }
 
 _VALUE_RE = re.compile(
-    r"^\s*(\d+(?:[.,]\d+)?)\s*([a-zµμ]*)\s*$", re.IGNORECASE
+    r"^\s*(\d+(?:[.,]\d+)?|[.,]\d+)\s*([a-zµμ]+)\s*$", re.IGNORECASE
 )
 # RKM style: 4u7, 2n2, 0R1-alike for caps.
 _RKM_RE = re.compile(r"^\s*(\d+)([umµμnpf])(\d+)\s*$", re.IGNORECASE)
 
 
 def parse_farads(text: str) -> float | None:
-    """``"100nF"``/``"0.1uF"``/``"4u7"`` -> farads. None when unparseable."""
+    """``"100nF"``/``".1uF"``/``"4u7"`` -> farads. None when unparseable.
+
+    A bare number ("100", or the marking code "104") is unparseable on
+    purpose: without a unit it could be picofarads, a marking code, or a
+    typo, and guessing farads would turn every such capacitor into a false
+    value-mismatch finding. Unparseable lands in ``unchecked``, where a
+    human can see it.
+    """
     if not text:
         return None
     s = text.strip()
@@ -82,7 +89,7 @@ def parse_farads(text: str) -> float | None:
     number, unit = match.groups()
     mult = _FARAD_MULT.get(unit.lower())
     if mult is None:
-        return None if unit else float(number.replace(",", "."))
+        return None
     return float(number.replace(",", ".")) * mult
 
 
@@ -96,11 +103,18 @@ def _close(a: float, b: float, rel: float = 0.05) -> bool:
 
 
 def _finding(constraint, **kwargs) -> Finding:
-    """A finding whose trust mirrors its constraint's trust."""
+    """A finding whose trust mirrors its constraint's trust.
+
+    ``PROVEN`` needs the whole ladder: quote mechanically verified, human
+    confirmed, and not awaiting review. Anything less is ``SUGGESTED`` --
+    and per the audit package's contract a suggested finding carries no
+    ``evidence``, so the measurement moves into ``detail`` where the report
+    will not label a model-sourced threshold's comparison as a measurement.
+    """
     prov = constraint.provenance
     origin = (
         Origin.PROVEN
-        if constraint.confirmed and prov.verified
+        if constraint.confirmed and prov.verified and not constraint.needs_review
         else Origin.SUGGESTED
     )
     cite = f'datasheet p.{prov.page}'
@@ -110,28 +124,39 @@ def _finding(constraint, **kwargs) -> Finding:
         f' Source: {cite}: "{prov.quote}"' if prov.quote else f" Source: {cite}."
     )
     kwargs.setdefault("origin", origin)
+    if kwargs["origin"] is Origin.SUGGESTED and kwargs.get("evidence"):
+        kwargs["detail"] += f" Comparison: {kwargs.pop('evidence')}."
     kwargs.setdefault("source", f"constraint:{constraint.id}")
     return Finding(rule=f"constraint:{constraint.id}", **kwargs)
 
 
-def _match_net(rail: str, net_names: list[str]) -> str | None:
-    """The board net a datasheet rail name refers to, if any.
+def _match_net(rail: str, net_names: list[str]) -> tuple[str | None, str]:
+    """``(net, "")`` for the board net a rail name refers to, or
+    ``(None, why)``.
 
     Exact (case-insensitive) first; then a net whose name contains the rail
-    as a word ("+3V3_VDD" for "VDD"). Ground rails are never matched -- a
-    decoupling constraint's rail is the supply side by construction.
+    as a word ("+3V3_VDD" for "VDD"). Ground nets are excluded -- a
+    decoupling constraint's rail is the supply side by construction. Two
+    plausible nets is an honest failure of its own kind, and the reason says
+    which nets tied.
     """
     rail_l = rail.strip().lower()
     if not rail_l:
-        return None
-    for net in net_names:
+        return None, "the constraint names no rail"
+    supply_nets = [n for n in net_names if not is_ground(n)]
+    for net in supply_nets:
         if net.lower() == rail_l:
-            return net
+            return net, ""
     word = re.compile(rf"(?:^|[^a-z0-9]){re.escape(rail_l)}(?:$|[^a-z0-9])")
-    candidates = [n for n in net_names if word.search(n.lower())]
+    candidates = [n for n in supply_nets if word.search(n.lower())]
     if len(candidates) == 1:
-        return candidates[0]
-    return None
+        return candidates[0], ""
+    if candidates:
+        return None, (
+            f"rail {rail!r} is ambiguous on this board: "
+            f"{', '.join(sorted(candidates))} all match"
+        )
+    return None, f"no board net matches rail {rail!r}"
 
 
 def _decoupling_caps(
@@ -159,11 +184,9 @@ def _supply_pads(board: AuditBoard, ref: str, net: str) -> list[AuditPad]:
 def _check_decoupling(
     board: AuditBoard, c: Decoupling, ref: str, result: CheckResult
 ) -> None:
-    net = _match_net(c.rail, board.net_names)
+    net, why = _match_net(c.rail, board.net_names)
     if net is None:
-        result.unchecked.append(
-            (c.id, f"no board net matches rail {c.rail!r}")
-        )
+        result.unchecked.append((c.id, why))
         return
 
     caps = _decoupling_caps(board, net)
@@ -196,46 +219,75 @@ def _check_decoupling(
             )
         )
 
-    if c.value is not None and c.unit:
+    # Value: the datasheet naming 100 nF is satisfied when SOME cap on the
+    # rail carries it. Other caps on the same rail (a bulk 4.7 uF beside the
+    # 100 nF) are not violations of this constraint -- flagging every
+    # non-matching cap would make any correctly built multi-cap rail read as
+    # riddled with errors.
+    if c.value is not None:
         want = parse_farads(f"{c.value}{c.unit}")
-        if want is not None:
-            for cap_part, _pad in caps:
-                have = parse_farads(cap_part.value)
-                if have is None:
-                    result.unchecked.append(
-                        (c.id,
-                         f"{cap_part.ref} value {cap_part.value!r} is "
-                         f"unparseable, cannot compare")
+        if want is None:
+            result.unchecked.append(
+                (c.id,
+                 f"the constraint's value {c.value:g} {c.unit!r} is not a "
+                 f"capacitance this checker can parse")
+            )
+        elif caps:
+            fitted = [(cap_part, parse_farads(cap_part.value))
+                      for cap_part, _pad in caps]
+            unparseable = [cp for cp, v in fitted if v is None]
+            satisfied = any(v is not None and _close(v, want)
+                            for _cp, v in fitted)
+            if satisfied:
+                pass
+            elif unparseable:
+                names = ", ".join(
+                    f"{cp.ref}={cp.value!r}" for cp in unparseable
+                )
+                result.unchecked.append(
+                    (c.id,
+                     f"no cap on {net} parses to {c.value:g} {c.unit}, but "
+                     f"{names} could not be read as capacitance")
+                )
+            else:
+                values = ", ".join(
+                    f"{cp.ref}={cp.value}" for cp, _v in fitted
+                )
+                result.findings.append(
+                    _finding(
+                        c,
+                        severity=Severity.NOTE,
+                        title=(
+                            f"no capacitor on {c.rail} carries the "
+                            f"datasheet's {c.value:g} {c.unit}"
+                        ),
+                        detail=(
+                            f"The capacitors bridging {net} to ground are "
+                            f"{values}; none is the stated "
+                            f"{c.value:g} {c.unit}."
+                        ),
+                        refs=tuple(cp.ref for cp, _v in fitted),
+                        nets=(net,),
+                        extent=fitted[0][0].extent,
+                        evidence=(
+                            f"fitted {values}; {c.value:g} {c.unit} specified"
+                        ),
+                        fix=(
+                            f"Fit a {c.value:g} {c.unit} capacitor on {net} "
+                            f"or confirm the substitution."
+                        ),
                     )
-                elif not _close(have, want):
-                    result.findings.append(
-                        _finding(
-                            c,
-                            severity=Severity.NOTE,
-                            title=(
-                                f"{cap_part.ref} is {cap_part.value}; the "
-                                f"datasheet names {c.value:g} {c.unit} "
-                                f"for {c.rail}"
-                            ),
-                            detail=(
-                                f"{cap_part.ref} decouples {net} with "
-                                f"{cap_part.value}. The datasheet's stated "
-                                f"value is {c.value:g} {c.unit}."
-                            ),
-                            refs=(cap_part.ref,),
-                            nets=(net,),
-                            extent=cap_part.extent,
-                            evidence=(
-                                f"{cap_part.value} fitted, "
-                                f"{c.value:g} {c.unit} specified"
-                            ),
-                            fix=(
-                                f"Use {c.value:g} {c.unit} for {cap_part.ref} "
-                                f"or confirm the substitution."
-                            ),
-                        )
-                    )
+                )
 
+    if c.max_distance_mm is not None and not supply_pads:
+        # The constraint carries a measurable distance and this board gives
+        # us nothing to measure from. Saying nothing here would read as
+        # "checked and fine".
+        result.unchecked.append(
+            (c.id,
+             f"cannot measure the {c.max_distance_mm:g} mm placement "
+             f"distance: {ref!r} has no pads on {net}")
+        )
     if c.max_distance_mm is not None and supply_pads and caps:
         limit_nm = mm(c.max_distance_mm)
         for pad in supply_pads:
@@ -284,23 +336,28 @@ def _check_decoupling(
 def _tied_level(board: AuditBoard, pad: AuditPad) -> str:
     """What defined level, if any, this pad's net is tied to.
 
-    ``"high"``/``"low"`` for a direct supply/ground net; ``"pulled"`` when a
-    two-pad R-part bridges the net to a supply or ground; ``""`` for a net
-    that defines nothing.
+    ``"high"``/``"low"`` for a direct supply/ground net;
+    ``"pulled-high"``/``"pulled-low"`` when a two-pad R-part bridges the net
+    to a supply or ground -- the direction matters, because a strap pulled to
+    the wrong rail is exactly the bug class strap checking exists for;
+    ``""`` for a net that defines nothing.
     """
     if is_supply(pad.net):
         return "high"
     if is_ground(pad.net):
         return "low"
+    pulled = ""
     for part in board.parts:
         if not part.ref.upper().startswith("R") or len(part.pads) != 2:
             continue
         nets = [p.net for p in part.pads]
         if pad.net in nets:
             other = nets[1] if nets[0] == pad.net else nets[0]
-            if is_supply(other) or is_ground(other):
-                return "pulled"
-    return ""
+            if is_supply(other):
+                pulled = "pulled-low" if pulled == "pulled-low" else "pulled-high"
+            elif is_ground(other):
+                pulled = "pulled-high" if pulled == "pulled-high" else "pulled-low"
+    return pulled
 
 
 def _check_strap(
@@ -365,8 +422,10 @@ def _check_strap(
 
     # Tied to something defined. Direction checks need the required state.
     want = c.required_state.lower()
-    if want in ("high", "pull-up") and level == "low" or \
-       want in ("low", "pull-down") and level == "high":
+    tied_low = level in ("low", "pulled-low")
+    tied_high = level in ("high", "pulled-high")
+    if want in ("high", "pull-up") and tied_low or \
+       want in ("low", "pull-down") and tied_high:
         result.findings.append(
             _finding(
                 c,
@@ -376,9 +435,9 @@ def _check_strap(
                     f"{c.required_state}"
                 ),
                 detail=(
-                    f"Pad {number} sits on net {pad.net}, a "
-                    f"{'supply' if level == 'high' else 'ground'} net, but the "
-                    f"datasheet requires {c.pin} {c.required_state}"
+                    f"Pad {number} is tied {level.replace('-', ' ')} via net "
+                    f"{pad.net}, but the datasheet requires {c.pin} "
+                    f"{c.required_state}"
                     + (f" {c.condition}" if c.condition else "") + "."
                 ),
                 refs=(ref,),

@@ -20,6 +20,7 @@ until a human sets it.
 
 from __future__ import annotations
 
+import math
 import re
 from dataclasses import replace
 from typing import Any
@@ -148,25 +149,50 @@ Notes:
 # --------------------------------------------------------------------------
 
 
+def _real(value: Any) -> float | None:
+    """A finite real number, or None. Never a bool: JSON ``true`` is not 1.0,
+    and a malformed field must degrade trust, not maximise it."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    value = float(value)
+    return value if math.isfinite(value) else None
+
+
+def _text(entry: dict, key: str) -> str:
+    """A string field, or empty. An explicit JSON null must not become the
+    four-letter string "None" -- which could even *verify* against a page."""
+    value = entry.get(key)
+    return value if isinstance(value, str) else ""
+
+
+def _str_list(entry: dict, key: str) -> tuple[str, ...]:
+    """A list of strings, or empty. A bare string is not one string -- it is
+    malformed, and iterating it would yield per-character 'pins'."""
+    value = entry.get(key)
+    if not isinstance(value, list):
+        return ()
+    return tuple(v for v in value if isinstance(v, str))
+
+
 def _provenance(entry: dict) -> Provenance:
     page = entry.get("page")
+    good_page = isinstance(page, int) and not isinstance(page, bool) and page > 0
     return Provenance(
-        page=page if isinstance(page, int) and page > 0 else 0,
-        section=str(entry.get("section", "")),
-        quote=str(entry.get("quote", "")),
+        page=page if good_page else 0,
+        section=_text(entry, "section"),
+        quote=_text(entry, "quote"),
     )
 
 
 def _confidence(entry: dict) -> float:
-    value = entry.get("confidence")
-    if isinstance(value, (int, float)) and 0.0 <= float(value) <= 1.0:
-        return float(value)
+    value = _real(entry.get("confidence"))
+    if value is not None and 0.0 <= value <= 1.0:
+        return value
     return 0.0  # an unusable confidence is no confidence
 
 
 def _number(entry: dict, key: str) -> float | None:
-    value = entry.get(key)
-    return float(value) if isinstance(value, (int, float)) else None
+    return _real(entry.get(key))
 
 
 def _slug(text: str) -> str:
@@ -207,24 +233,21 @@ def extract_ratings(model: Model, doc: Document, part_number: str) -> list[Ratin
             kind = RatingKind(str(entry.get("kind", "")))
         except ValueError:
             continue  # an entry of no known kind is not silently re-binned
-        name = str(entry.get("symbol") or entry["parameter"])
+        name = _text(entry, "symbol") or str(entry["parameter"])
         out.append(
             Rating(
                 id=_unique_id(f"{_KIND_PREFIX[kind]}.{_slug(name)}", taken),
                 kind=kind,
                 parameter=str(entry["parameter"]),
-                symbol=str(entry.get("symbol", "")),
+                symbol=_text(entry, "symbol"),
                 limit=Limit(
-                    unit=str(entry.get("unit", "")),
+                    unit=_text(entry, "unit"),
                     min=_number(entry, "min"),
                     typ=_number(entry, "typ"),
                     max=_number(entry, "max"),
-                    conditions=str(entry.get("conditions", "")),
+                    conditions=_text(entry, "conditions"),
                 ),
-                pins=tuple(
-                    str(p) for p in (entry.get("pins") or [])
-                    if isinstance(p, str)
-                ),
+                pins=_str_list(entry, "pins"),
                 provenance=_provenance(entry),
                 confidence=_confidence(entry),
             )
@@ -246,16 +269,17 @@ def extract_design_requirements(
 
     decoupling = [
         Decoupling(
-            id=_unique_id(f"decouple.{_slug(str(e.get('rail', '')))}", taken),
-            rail=str(e.get("rail", "")),
+            id=_unique_id(f"decouple.{_slug(_text(e, 'rail'))}", taken),
+            rail=_text(e, "rail"),
             value=_number(e, "value"),
-            unit=str(e.get("unit", "")),
-            count=(int(e["count"])
-                   if isinstance(e.get("count"), int) else None),
-            per_pin=bool(e.get("per_pin", False)),
+            unit=_text(e, "unit"),
+            count=(e["count"]
+                   if isinstance(e.get("count"), int)
+                   and not isinstance(e.get("count"), bool) else None),
+            per_pin=e.get("per_pin") is True,
             max_distance_mm=_number(e, "max_distance_mm"),
-            placement=str(e.get("placement", "")),
-            cap_type=str(e.get("cap_type", "")),
+            placement=_text(e, "placement"),
+            cap_type=_text(e, "cap_type"),
             provenance=_provenance(e),
             confidence=_confidence(e),
         )
@@ -266,9 +290,8 @@ def extract_design_requirements(
     sequencing = [
         PowerSequencing(
             id=_unique_id("power-seq", taken),
-            rails=tuple(str(r) for r in (e.get("rails") or [])
-                        if isinstance(r, str)),
-            requirement=str(e.get("requirement", "")),
+            rails=_str_list(e, "rails"),
+            requirement=_text(e, "requirement"),
             provenance=_provenance(e),
             confidence=_confidence(e),
         )
@@ -278,12 +301,12 @@ def extract_design_requirements(
 
     straps = [
         StrapPin(
-            id=_unique_id(f"strap.{_slug(str(e.get('pin', '')))}", taken),
-            pin=str(e.get("pin", "")),
-            required_state=str(e.get("required_state", "")),
+            id=_unique_id(f"strap.{_slug(_text(e, 'pin'))}", taken),
+            pin=_text(e, "pin"),
+            required_state=_text(e, "required_state"),
             resistor_value=_number(e, "resistor_value"),
-            resistor_unit=str(e.get("resistor_unit", "")),
-            condition=str(e.get("condition", "")),
+            resistor_unit=_text(e, "resistor_unit"),
+            condition=_text(e, "condition"),
             provenance=_provenance(e),
             confidence=_confidence(e),
         )
@@ -298,27 +321,59 @@ def extract_design_requirements(
 # mechanical provenance verification
 # --------------------------------------------------------------------------
 
-_TOKEN_RE = re.compile(r"[a-z0-9.µμ]+")
+_WORD_RE = re.compile(r"[a-z0-9.µμ]+")
+#: A signed number not glued to a letter ("SOT-223" yields 223, not -223).
+_NUMBER_RE = re.compile(r"(?<![a-z0-9])-?\d+(?:\.\d+)?")
 
 
-def _tokens(text: str) -> list[str]:
-    return [t for t in _TOKEN_RE.findall(text.lower()) if len(t) >= 2]
+def _normalise(text: str) -> str:
+    """One canonical form for quote and page alike, or nothing matches."""
+    text = text.casefold()                    # folds µ (U+00B5) to μ (U+03BC)
+    text = text.replace("–", "-").replace("−", "-")  # dashes
+    text = text.replace("±", "").replace("+", "")
+    text = re.sub(r"(\d),(?=\d{3})", r"\1", text)   # 1,100 -> 1100
+    text = re.sub(r"-\s+(?=\d)", "-", text)         # "- 65" -> "-65"
+    return text
+
+
+def _tokens(text: str) -> tuple[list[str], list[str]]:
+    """``(words, numbers)`` from normalised text.
+
+    Numbers are kept apart because they are the payload: a limit row with one
+    digit wrong is exactly the fabrication the check exists to catch, so
+    numbers are matched exactly and sign-sensitively, never by ratio.
+    """
+    text = _normalise(text)
+    numbers = _NUMBER_RE.findall(text)
+    words = [
+        t for t in _WORD_RE.findall(text)
+        if len(t) >= 2 and not re.fullmatch(r"[\d.]+", t)
+    ]
+    return words, numbers
 
 
 def quote_on_page(quote: str, page_text: str) -> bool:
     """Is the quote plausibly on this page?
 
-    Token overlap, not substring: pypdf turns table rows into column soup with
-    arbitrary whitespace and ordering, so equality would reject true quotes.
-    Requiring most tokens still rejects an invented one -- an invented row's
-    numbers and symbols will not all be sitting on the claimed page.
+    Two tests, both required. Every *number* in the quote must appear on the
+    page exactly (after shared normalisation), sign included -- ratings rows
+    share nearly all their vocabulary, so a wrong or invented number is the
+    one thing word overlap cannot catch, and it is also the payload. The
+    *words* then need 0.6 overlap, which tolerates pypdf's column soup while
+    still rejecting a row whose subject ("VBAT", "backup") is not on the page.
+    A quote too short to carry evidence (under three informative tokens)
+    never verifies -- unverifiable is the honest answer for it.
     """
-    needed = _tokens(quote)
-    if not needed:
+    words, numbers = _tokens(quote)
+    if len(words) + len(numbers) < 3 or not words:
         return False
-    have = set(_tokens(page_text))
-    found = sum(1 for t in needed if t in have)
-    return found / len(needed) >= _MATCH_THRESHOLD
+    page_words, page_numbers = _tokens(page_text)
+    have_numbers = set(page_numbers)
+    if any(n not in have_numbers for n in numbers):
+        return False
+    have_words = set(page_words)
+    found = sum(1 for t in words if t in have_words)
+    return found / len(words) >= _MATCH_THRESHOLD
 
 
 def verify_provenance(constraint: Any, pages: list[str]) -> Any:
@@ -368,14 +423,19 @@ def gate(constraint: Any, pages: list[str] | None = None) -> Any:
             if elsewhere is not None:
                 reason += f" (found on page {elsewhere})"
         reasons.append(reason)
-    if constraint.confidence < CONFIDENCE_FLOOR:
+    if not constraint.confidence >= CONFIDENCE_FLOOR:  # NaN-safe ordering
         reasons.append(
             f"extractor confidence {constraint.confidence:.2f} is below "
             f"{CONFIDENCE_FLOOR:.2f}"
         )
 
-    if reasons:
+    # Additive for real: a reason already on the constraint -- a human's
+    # annotation, or a prior gate's -- survives re-gating. Only a constraint
+    # with no reasons from anywhere may pass.
+    existing = [r for r in constraint.review_reason.split("; ") if r]
+    merged = list(dict.fromkeys(existing + reasons))
+    if merged:
         return replace(
-            constraint, needs_review=True, review_reason="; ".join(reasons)
+            constraint, needs_review=True, review_reason="; ".join(merged)
         )
     return replace(constraint, needs_review=False, review_reason="")

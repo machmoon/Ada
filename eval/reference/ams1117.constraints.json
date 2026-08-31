@@ -6,7 +6,7 @@
     "title": "AMS1117 1A Low Dropout Voltage Regulator",
     "revision": "",
     "url": "http://www.advanced-monolithic.com/pdf/ds1117.pdf",
-    "sha256": "",
+    "sha256": "189a2651878a87d590b768eaa9b44217a3fdf460352ce6ecaff127221282a3f0",
     "page_count": 8
   },
   "ratings": [
@@ -15,11 +15,25 @@
       "kind": "absolute_maximum",
       "parameter": "Input Voltage",
       "symbol": "VIN",
-      "limit": {"unit": "V", "min": null, "typ": null, "max": 15.0, "conditions": ""},
-      "pins": ["VIN"],
-      "provenance": {"page": 2, "section": "Absolute Maximum Ratings",
-                     "quote": "Input Voltage 15V", "verified": false},
-      "confidence": 1.0, "needs_review": false, "review_reason": "",
+      "limit": {
+        "unit": "V",
+        "min": null,
+        "typ": null,
+        "max": 15.0,
+        "conditions": ""
+      },
+      "pins": [
+        "VIN"
+      ],
+      "provenance": {
+        "page": 2,
+        "section": "Absolute Maximum Ratings",
+        "quote": "Input Voltage 15V",
+        "verified": true
+      },
+      "confidence": 1.0,
+      "needs_review": false,
+      "review_reason": "",
       "confirmed": true,
       "notes": "hand-transcribed reference"
     },
@@ -28,150 +42,277 @@
       "kind": "absolute_maximum",
       "parameter": "Operating Junction Temperature Range",
       "symbol": "TJ",
-      "limit": {"unit": "°C", "min": -40.0, "typ": null, "max": 125.0,
-                "conditions": "control section and power transistor"},
+      "limit": {
+        "unit": "°C",
+        "min": -40.0,
+        "typ": null,
+        "max": 125.0,
+        "conditions": "control section and power transistor"
+      },
       "pins": [],
-      "provenance": {"page": 2, "section": "Absolute Maximum Ratings",
-                     "quote": "Control Section -40°C to 125°C",
-                     "verified": false},
-      "confidence": 1.0, "needs_review": false, "review_reason": "",
-      "confirmed": true, "notes": "hand-transcribed reference"
+      "provenance": {
+        "page": 2,
+        "section": "Absolute Maximum Ratings",
+        "quote": "Control Section -40°C to 125°C",
+        "verified": true
+      },
+      "confidence": 1.0,
+      "needs_review": false,
+      "review_reason": "",
+      "confirmed": true,
+      "notes": "hand-transcribed reference"
     },
     {
       "id": "abs-max.tstg",
       "kind": "absolute_maximum",
       "parameter": "Storage temperature",
       "symbol": "Tstg",
-      "limit": {"unit": "°C", "min": -65.0, "typ": null, "max": 150.0, "conditions": ""},
+      "limit": {
+        "unit": "°C",
+        "min": -65.0,
+        "typ": null,
+        "max": 150.0,
+        "conditions": ""
+      },
       "pins": [],
-      "provenance": {"page": 2, "section": "Absolute Maximum Ratings",
-                     "quote": "Storage temperature - 65°C to +150°C",
-                     "verified": false},
-      "confidence": 1.0, "needs_review": false, "review_reason": "",
-      "confirmed": true, "notes": "hand-transcribed reference"
+      "provenance": {
+        "page": 2,
+        "section": "Absolute Maximum Ratings",
+        "quote": "Storage temperature - 65°C to +150°C",
+        "verified": true
+      },
+      "confidence": 1.0,
+      "needs_review": false,
+      "review_reason": "",
+      "confirmed": true,
+      "notes": "hand-transcribed reference"
     },
     {
       "id": "abs-max.tlead",
       "kind": "absolute_maximum",
       "parameter": "Lead Temperature",
       "symbol": "",
-      "limit": {"unit": "°C", "min": null, "typ": null, "max": 265.0,
-                "conditions": "25 sec"},
+      "limit": {
+        "unit": "°C",
+        "min": null,
+        "typ": null,
+        "max": 265.0,
+        "conditions": "25 sec"
+      },
       "pins": [],
-      "provenance": {"page": 2, "section": "Absolute Maximum Ratings",
-                     "quote": "Lead Temperature (25 sec) 265°C",
-                     "verified": false},
-      "confidence": 1.0, "needs_review": false, "review_reason": "",
-      "confirmed": true, "notes": "hand-transcribed reference"
+      "provenance": {
+        "page": 2,
+        "section": "Absolute Maximum Ratings",
+        "quote": "Lead Temperature (25 sec) 265°C",
+        "verified": true
+      },
+      "confidence": 1.0,
+      "needs_review": false,
+      "review_reason": "",
+      "confirmed": true,
+      "notes": "hand-transcribed reference"
     },
     {
       "id": "thermal.theta-ja-sot-223",
       "kind": "thermal",
       "parameter": "Thermal Resistance junction-to-ambient, SOT-223 package",
       "symbol": "θJA",
-      "limit": {"unit": "°C/W", "min": null, "typ": 90.0, "max": null,
-                "conditions": "with package soldered to copper area over backside ground plane; varies 46 to >90 °C/W with mounting"},
+      "limit": {
+        "unit": "°C/W",
+        "min": null,
+        "typ": 90.0,
+        "max": null,
+        "conditions": "with package soldered to copper area over backside ground plane; varies 46 to >90 °C/W with mounting"
+      },
       "pins": [],
-      "provenance": {"page": 2, "section": "Absolute Maximum Ratings / Thermal Resistance",
-                     "quote": "SOT-223 package ϕ JA = 90 °C/W",
-                     "verified": false},
-      "confidence": 1.0, "needs_review": false, "review_reason": "",
-      "confirmed": true, "notes": "hand-transcribed reference"
+      "provenance": {
+        "page": 2,
+        "section": "Absolute Maximum Ratings / Thermal Resistance",
+        "quote": "SOT-223 package ϕ JA = 90 °C/W",
+        "verified": true
+      },
+      "confidence": 1.0,
+      "needs_review": false,
+      "review_reason": "",
+      "confirmed": true,
+      "notes": "hand-transcribed reference"
     },
     {
       "id": "thermal.theta-ja-to-252",
       "kind": "thermal",
       "parameter": "Thermal Resistance junction-to-ambient, TO-252 package",
       "symbol": "θJA",
-      "limit": {"unit": "°C/W", "min": null, "typ": 80.0, "max": null, "conditions": ""},
+      "limit": {
+        "unit": "°C/W",
+        "min": null,
+        "typ": 80.0,
+        "max": null,
+        "conditions": ""
+      },
       "pins": [],
-      "provenance": {"page": 2, "section": "Absolute Maximum Ratings / Thermal Resistance",
-                     "quote": "TO-252 package ϕ JA = 80 °C/W",
-                     "verified": false},
-      "confidence": 1.0, "needs_review": false, "review_reason": "",
-      "confirmed": true, "notes": "hand-transcribed reference"
+      "provenance": {
+        "page": 2,
+        "section": "Absolute Maximum Ratings / Thermal Resistance",
+        "quote": "TO-252 package ϕ JA = 80 °C/W",
+        "verified": true
+      },
+      "confidence": 1.0,
+      "needs_review": false,
+      "review_reason": "",
+      "confirmed": true,
+      "notes": "hand-transcribed reference"
     },
     {
       "id": "thermal.theta-ja-so-8",
       "kind": "thermal",
       "parameter": "Thermal Resistance junction-to-ambient, SO-8 package",
       "symbol": "θJA",
-      "limit": {"unit": "°C/W", "min": null, "typ": 160.0, "max": null, "conditions": ""},
+      "limit": {
+        "unit": "°C/W",
+        "min": null,
+        "typ": 160.0,
+        "max": null,
+        "conditions": ""
+      },
       "pins": [],
-      "provenance": {"page": 2, "section": "Absolute Maximum Ratings / Thermal Resistance",
-                     "quote": "SO-8 package ϕ JA = 160 °C/W",
-                     "verified": false},
-      "confidence": 1.0, "needs_review": false, "review_reason": "",
-      "confirmed": true, "notes": "hand-transcribed reference"
+      "provenance": {
+        "page": 2,
+        "section": "Absolute Maximum Ratings / Thermal Resistance",
+        "quote": "SO-8 package ϕ JA = 160 °C/W",
+        "verified": true
+      },
+      "confidence": 1.0,
+      "needs_review": false,
+      "review_reason": "",
+      "confirmed": true,
+      "notes": "hand-transcribed reference"
     },
     {
       "id": "thermal.theta-jc",
       "kind": "thermal",
       "parameter": "Thermal Resistance Junction-to-Case",
       "symbol": "θJC",
-      "limit": {"unit": "°C/W", "min": null, "typ": 15.0, "max": null,
-                "conditions": "all packages"},
+      "limit": {
+        "unit": "°C/W",
+        "min": null,
+        "typ": 15.0,
+        "max": null,
+        "conditions": "all packages"
+      },
       "pins": [],
-      "provenance": {"page": 3, "section": "Electrical Characteristics",
-                     "quote": "Thermal Resistance Junction-to-Case All packages 15 °C/W",
-                     "verified": false},
-      "confidence": 1.0, "needs_review": false, "review_reason": "",
-      "confirmed": true, "notes": "hand-transcribed reference"
+      "provenance": {
+        "page": 3,
+        "section": "Electrical Characteristics",
+        "quote": "Thermal Resistance Junction-to-Case All packages 15 °C/W",
+        "verified": true
+      },
+      "confidence": 1.0,
+      "needs_review": false,
+      "review_reason": "",
+      "confirmed": true,
+      "notes": "hand-transcribed reference"
     },
     {
       "id": "op.vref",
       "kind": "operating_condition",
       "parameter": "Reference Voltage",
       "symbol": "VREF",
-      "limit": {"unit": "V", "min": 1.232, "typ": 1.25, "max": 1.268,
-                "conditions": "IOUT = 10 mA, 1.5V ≤ (VIN - VOUT) ≤ 12V, TJ = 25°C"},
-      "pins": ["ADJ"],
-      "provenance": {"page": 2, "section": "Electrical Characteristics",
-                     "quote": "Reference Voltage AMS1117 I OUT = 10 mA 1.232 1.250 1.268 V",
-                     "verified": false},
-      "confidence": 1.0, "needs_review": false, "review_reason": "",
-      "confirmed": true, "notes": "hand-transcribed reference; adjustable variant, 25°C row"
+      "limit": {
+        "unit": "V",
+        "min": 1.232,
+        "typ": 1.25,
+        "max": 1.268,
+        "conditions": "IOUT = 10 mA, 1.5V ≤ (VIN - VOUT) ≤ 12V, TJ = 25°C"
+      },
+      "pins": [
+        "ADJ"
+      ],
+      "provenance": {
+        "page": 2,
+        "section": "Electrical Characteristics",
+        "quote": "Reference Voltage AMS1117 I OUT = 10 mA 1.232 1.250 1.268 V",
+        "verified": true
+      },
+      "confidence": 1.0,
+      "needs_review": false,
+      "review_reason": "",
+      "confirmed": true,
+      "notes": "hand-transcribed reference; adjustable variant, 25°C row"
     },
     {
       "id": "op.vout-3v3",
       "kind": "operating_condition",
       "parameter": "Output Voltage, AMS1117-3.3",
       "symbol": "VOUT",
-      "limit": {"unit": "V", "min": 3.251, "typ": 3.3, "max": 3.349,
-                "conditions": "VIN = 4.8V, TJ = 25°C"},
-      "pins": ["VOUT"],
-      "provenance": {"page": 2, "section": "Electrical Characteristics",
-                     "quote": "AMS1117-3.3 V IN = 4.8V 3.251 3.300 3.349 V",
-                     "verified": false},
-      "confidence": 1.0, "needs_review": false, "review_reason": "",
-      "confirmed": true, "notes": "hand-transcribed reference; 25°C row"
+      "limit": {
+        "unit": "V",
+        "min": 3.251,
+        "typ": 3.3,
+        "max": 3.349,
+        "conditions": "VIN = 4.8V, TJ = 25°C"
+      },
+      "pins": [
+        "VOUT"
+      ],
+      "provenance": {
+        "page": 2,
+        "section": "Electrical Characteristics",
+        "quote": "AMS1117-3.3 V IN = 4.8V 3.251 3.300 3.349 V",
+        "verified": true
+      },
+      "confidence": 1.0,
+      "needs_review": false,
+      "review_reason": "",
+      "confirmed": true,
+      "notes": "hand-transcribed reference; 25°C row"
     },
     {
       "id": "op.dropout",
       "kind": "operating_condition",
       "parameter": "Dropout Voltage",
       "symbol": "VIN - VOUT",
-      "limit": {"unit": "V", "min": null, "typ": 1.1, "max": 1.3,
-                "conditions": "ΔVOUT, ΔVREF = 1%, IOUT = 0.8A"},
+      "limit": {
+        "unit": "V",
+        "min": null,
+        "typ": 1.1,
+        "max": 1.3,
+        "conditions": "ΔVOUT, ΔVREF = 1%, IOUT = 0.8A"
+      },
       "pins": [],
-      "provenance": {"page": 3, "section": "Electrical Characteristics",
-                     "quote": "Dropout Voltage (VIN - VOUT) 1.1 1.3 V",
-                     "verified": false},
-      "confidence": 1.0, "needs_review": false, "review_reason": "",
-      "confirmed": true, "notes": "hand-transcribed reference"
+      "provenance": {
+        "page": 3,
+        "section": "Electrical Characteristics",
+        "quote": "Dropout Voltage (VIN - VOUT) 1.1 1.3 V",
+        "verified": true
+      },
+      "confidence": 1.0,
+      "needs_review": false,
+      "review_reason": "",
+      "confirmed": true,
+      "notes": "hand-transcribed reference"
     },
     {
       "id": "op.min-load",
       "kind": "operating_condition",
       "parameter": "Minimum Load Current",
       "symbol": "",
-      "limit": {"unit": "mA", "min": null, "typ": 5.0, "max": 10.0,
-                "conditions": "(VIN - VOUT) = 1.5V; adjustable device"},
+      "limit": {
+        "unit": "mA",
+        "min": null,
+        "typ": 5.0,
+        "max": 10.0,
+        "conditions": "(VIN - VOUT) = 1.5V; adjustable device"
+      },
       "pins": [],
-      "provenance": {"page": 3, "section": "Electrical Characteristics",
-                     "quote": "Minimum Load Current AMS1117 (V IN - VOUT) = 1.5V (Note 5) 5 10 mA",
-                     "verified": false},
-      "confidence": 1.0, "needs_review": false, "review_reason": "",
+      "provenance": {
+        "page": 3,
+        "section": "Electrical Characteristics",
+        "quote": "Minimum Load Current AMS1117 (V IN - VOUT) = 1.5V (Note 5) 5 10 mA",
+        "verified": true
+      },
+      "confidence": 1.0,
+      "needs_review": false,
+      "review_reason": "",
       "confirmed": true,
       "notes": "hand-transcribed reference; the max column is the guaranteed worst-case minimum load the design must supply"
     },
@@ -180,42 +321,77 @@
       "kind": "operating_condition",
       "parameter": "Current Limit",
       "symbol": "",
-      "limit": {"unit": "mA", "min": 900.0, "typ": 1100.0, "max": 1500.0,
-                "conditions": "(VIN - VOUT) = 1.5V"},
-      "pins": ["VOUT"],
-      "provenance": {"page": 3, "section": "Electrical Characteristics",
-                     "quote": "Current Limit (V IN - VOUT) = 1.5V 900 1,100 1,500 mA",
-                     "verified": false},
-      "confidence": 1.0, "needs_review": false, "review_reason": "",
-      "confirmed": true, "notes": "hand-transcribed reference"
+      "limit": {
+        "unit": "mA",
+        "min": 900.0,
+        "typ": 1100.0,
+        "max": 1500.0,
+        "conditions": "(VIN - VOUT) = 1.5V"
+      },
+      "pins": [
+        "VOUT"
+      ],
+      "provenance": {
+        "page": 3,
+        "section": "Electrical Characteristics",
+        "quote": "Current Limit (V IN - VOUT) = 1.5V 900 1,100 1,500 mA",
+        "verified": true
+      },
+      "confidence": 1.0,
+      "needs_review": false,
+      "review_reason": "",
+      "confirmed": true,
+      "notes": "hand-transcribed reference"
     },
     {
       "id": "op.quiescent",
       "kind": "operating_condition",
       "parameter": "Quiescent Current",
       "symbol": "",
-      "limit": {"unit": "mA", "min": null, "typ": 5.0, "max": 11.0,
-                "conditions": "(VIN - VOUT) = 1.5V; fixed-voltage variants"},
+      "limit": {
+        "unit": "mA",
+        "min": null,
+        "typ": 5.0,
+        "max": 11.0,
+        "conditions": "(VIN - VOUT) = 1.5V; fixed-voltage variants"
+      },
       "pins": [],
-      "provenance": {"page": 3, "section": "Electrical Characteristics",
-                     "quote": "Quiescent Current (V IN - VOUT) = 1.5V 5 11 mA",
-                     "verified": false},
-      "confidence": 1.0, "needs_review": false, "review_reason": "",
-      "confirmed": true, "notes": "hand-transcribed reference"
+      "provenance": {
+        "page": 3,
+        "section": "Electrical Characteristics",
+        "quote": "Quiescent Current (V IN - VOUT) = 1.5V 5 11 mA",
+        "verified": true
+      },
+      "confidence": 1.0,
+      "needs_review": false,
+      "review_reason": "",
+      "confirmed": true,
+      "notes": "hand-transcribed reference"
     },
     {
       "id": "thermal.tj-continuous",
       "kind": "thermal",
       "parameter": "Maximum junction temperature under continuous normal load",
       "symbol": "TJ",
-      "limit": {"unit": "°C", "min": null, "typ": null, "max": 125.0,
-                "conditions": "continuous normal load conditions"},
+      "limit": {
+        "unit": "°C",
+        "min": null,
+        "typ": null,
+        "max": 125.0,
+        "conditions": "continuous normal load conditions"
+      },
       "pins": [],
-      "provenance": {"page": 5, "section": "Application Hints / Thermal Considerations",
-                     "quote": "maximum junction temperature ratings of 125°C should not be exceeded under continuous normal load conditions",
-                     "verified": false},
-      "confidence": 1.0, "needs_review": false, "review_reason": "",
-      "confirmed": true, "notes": "hand-transcribed reference"
+      "provenance": {
+        "page": 5,
+        "section": "Application Hints / Thermal Considerations",
+        "quote": "maximum junction temperature ratings of 125°C should not be exceeded under continuous normal load conditions",
+        "verified": true
+      },
+      "confidence": 1.0,
+      "needs_review": false,
+      "review_reason": "",
+      "confirmed": true,
+      "notes": "hand-transcribed reference"
     }
   ],
   "decoupling": [
@@ -229,10 +405,15 @@
       "max_distance_mm": null,
       "placement": "on the output",
       "cap_type": "solid tantalum",
-      "provenance": {"page": 4, "section": "Application Hints / Stability",
-                     "quote": "The addition of 22µF solid tantalum on the output will ensure stability for all operating conditions",
-                     "verified": false},
-      "confidence": 1.0, "needs_review": false, "review_reason": "",
+      "provenance": {
+        "page": 4,
+        "section": "Application Hints / Stability",
+        "quote": "The addition of 22µF solid tantalum on the output will ensure stability for all operating conditions",
+        "verified": true
+      },
+      "confidence": 1.0,
+      "needs_review": false,
+      "review_reason": "",
       "confirmed": true,
       "notes": "hand-transcribed reference; required for frequency compensation, not optional. Larger values allowed; smaller allowed only when ADJ is not bypassed."
     }

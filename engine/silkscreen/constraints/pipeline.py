@@ -82,6 +82,8 @@ def extract_constraints(
         document=DocumentInfo(
             url=pdf_url or "",
             sha256=hashlib.sha256(pdf_bytes).hexdigest(),
+            # Pages of *extracted text*: 0 means text extraction failed, not
+            # that the pinned document is empty.
             page_count=len(pages),
         ),
         ratings=settle(ratings),

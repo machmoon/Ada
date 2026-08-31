@@ -461,7 +461,10 @@ def test_check_decoupling_missing_cap():
     f = result.findings[0]
     assert f.severity is Severity.MARGINAL
     assert f.origin is Origin.SUGGESTED  # trusted but not human-confirmed
-    assert "0 found, 1 required" in f.evidence
+    # A suggested finding carries no evidence (audit contract); the
+    # comparison lives in the detail instead.
+    assert f.evidence == ""
+    assert "0 found, 1 required" in f.detail
     assert 'p.3' in f.detail and "VDD max 3.6 V" in f.detail  # provenance shown
 
 
@@ -480,7 +483,7 @@ def test_check_decoupling_per_pin_counts_supply_pads():
     result = check_board(board, ConstraintSet(part_number="X",
                                               decoupling=[c]), ref="U1")
     assert len(result.findings) == 1
-    assert "1 found, 2 required" in result.findings[0].evidence
+    assert "1 found, 2 required" in result.findings[0].detail
 
 
 def test_check_decoupling_wrong_value_is_a_note():
@@ -489,9 +492,24 @@ def test_check_decoupling_wrong_value_is_a_note():
     result = check_board(_mcu_board(cap_value="10uF"),
                          ConstraintSet(part_number="X", decoupling=[c]),
                          ref="U1")
-    titles = [f.title for f in result.findings]
-    assert any("C1 is 10uF" in t for t in titles)
-    assert all(f.severity is Severity.NOTE for f in result.findings)
+    assert len(result.findings) == 1
+    f = result.findings[0]
+    assert f.severity is Severity.NOTE
+    assert "no capacitor on VDD carries" in f.title
+    assert "C1=10uF" in f.detail
+
+
+def test_check_decoupling_value_satisfied_by_any_cap():
+    """A bulk cap beside the required 100nF is not a violation of it."""
+    c = _trusted(Decoupling(id="d", rail="VDD", value=100.0, unit="nF",
+                            provenance=_prov()))
+    board = _mcu_board(extra_parts=[
+        _part("C2", "4.7uF", [_pad("C2", "1", "VDD", 9.0, 0.0),
+                              _pad("C2", "2", "GND", 9.0, 1.5)]),
+    ])
+    result = check_board(board, ConstraintSet(part_number="X",
+                                              decoupling=[c]), ref="U1")
+    assert result.findings == [] and result.unchecked == []
 
 
 def test_check_decoupling_unparseable_value_goes_to_unchecked():
@@ -501,7 +519,7 @@ def test_check_decoupling_unparseable_value_goes_to_unchecked():
                          ConstraintSet(part_number="X", decoupling=[c]),
                          ref="U1")
     assert result.findings == []
-    assert any("unparseable" in reason for _, reason in result.unchecked)
+    assert any("could not be read" in reason for _, reason in result.unchecked)
 
 
 def test_check_decoupling_distance_measured_against_limit():
@@ -515,7 +533,7 @@ def test_check_decoupling_distance_measured_against_limit():
                       ConstraintSet(part_number="X", decoupling=[c]),
                       ref="U1")
     assert len(far.findings) == 1
-    assert "20.000 mm measured, limit 3.000 mm" in far.findings[0].evidence
+    assert "20.000 mm measured, limit 3.000 mm" in far.findings[0].detail
 
 
 def test_check_decoupling_unknown_rail_is_unchecked_not_silent():
@@ -662,3 +680,220 @@ def test_cli_writes_json_and_tallies(tmp_path, monkeypatch, capsys):
     err = capsys.readouterr()
     assert "1 passed the gate" in err.err
     assert "Review worksheet" in err.out
+
+
+# --------------------------------------------------------------------------
+# regression tests from the adversarial review (2026-08-31, two agents)
+# --------------------------------------------------------------------------
+
+_DENSE_PAGE = (
+    "Table 18. Voltage characteristics\n"
+    "VDD-VSS External main supply voltage -0.3 4.0 V\n"
+    "VDDA-VSS External analog supply voltage -0.3 4.0 V\n"
+    "Input voltage on TTa pins VSS - 0.3 4.0 V\n"
+)
+
+
+def test_quote_with_wrong_number_does_not_verify():
+    """Rating rows share vocabulary; the number IS the payload."""
+    assert not quote_on_page(
+        "VDD External main supply voltage -0.3 3.6 V", _DENSE_PAGE
+    )
+
+
+def test_invented_row_on_dense_page_does_not_verify():
+    assert not quote_on_page(
+        "VBAT Backup supply voltage -0.3 4.0 V", _DENSE_PAGE
+    )
+
+
+def test_signs_are_part_of_the_number():
+    assert quote_on_page("supply voltage limit VDD -0.3 max", "VDD supply "
+                         "voltage limit is -0.3 max")
+    assert not quote_on_page("supply voltage limit VDD 0.3 max",
+                             "VDD supply voltage limit is -0.3 max")
+
+
+def test_too_short_a_quote_never_verifies():
+    assert not quote_on_page("TJ 150", "TJ anything 150")
+    assert not quote_on_page("VDD", "VDD VDD VDD")
+
+
+def test_micro_sign_variants_fold_together():
+    # U+00B5 MICRO SIGN vs U+03BC GREEK SMALL LETTER MU
+    assert quote_on_page("output capacitor 22µF solid tantalum",
+                         "a 22μF solid tantalum output capacitor")
+
+
+def test_model_booleans_never_become_numbers():
+    """JSON true must degrade trust, not maximise it (bool is an int)."""
+    model = ScriptedModel(responses=[json.dumps({"ratings": [
+        {"kind": "thermal", "parameter": "TJ", "max": True, "unit": "°C",
+         "page": True, "quote": "x y z", "confidence": True},
+    ]})])
+    out = extract_ratings(model, _doc(), "X")
+    assert out[0].limit.max is None
+    assert out[0].provenance.page == 0
+    assert out[0].confidence == 0.0
+
+
+def test_model_nulls_never_become_the_string_none():
+    model = ScriptedModel(responses=[json.dumps({"ratings": [
+        {"kind": "thermal", "parameter": "TJ", "unit": None, "symbol": None,
+         "page": 4, "section": None, "quote": None, "confidence": 0.9},
+    ]})])
+    out = extract_ratings(model, _doc(), "X")
+    assert out[0].provenance.quote == ""
+    assert out[0].provenance.section == ""
+    assert out[0].symbol == ""
+    assert out[0].limit.unit == ""
+
+
+def test_string_pins_do_not_explode_into_characters():
+    model = ScriptedModel(responses=[json.dumps({"ratings": [
+        {"kind": "thermal", "parameter": "TJ", "unit": "°C", "pins": "PA1",
+         "page": 4, "quote": "q", "confidence": 0.9},
+    ]})])
+    assert extract_ratings(model, _doc(), "X")[0].pins == ()
+
+
+def test_design_booleans_and_strings_are_disciplined():
+    model = ScriptedModel(responses=[json.dumps({
+        "decoupling": [
+            {"rail": "VDD", "count": True, "per_pin": "false",
+             "value": float("nan") if False else 100, "unit": "nF",
+             "page": 2, "quote": "q", "confidence": 0.9},
+        ],
+        "power_sequencing": [
+            {"rails": "VDD", "requirement": "r", "page": 2, "quote": "q",
+             "confidence": 0.9},
+        ],
+        "strap_pins": [],
+    })])
+    dec, seq, _ = extract_design_requirements(model, _doc(), "X")
+    assert dec[0].count is None          # bool is not an int count
+    assert dec[0].per_pin is False       # "false" is not JSON true
+    assert seq[0].rails == ()            # a bare string is not a rail list
+
+
+def test_gate_preserves_a_human_review_reason():
+    from dataclasses import replace
+
+    flagged = replace(
+        _trusted(Decoupling(id="d", rail="VDD", provenance=_prov())),
+        needs_review=True,
+        review_reason="HUMAN: value looks wrong against the table",
+    )
+    gated = gate(flagged)
+    assert gated.needs_review
+    assert "HUMAN: value looks wrong" in gated.review_reason
+    # And re-gating does not duplicate its own reasons.
+    again = gate(gate(flagged))
+    assert again.review_reason == gated.review_reason
+
+
+@pytest.mark.parametrize("mutate", [
+    lambda d: d["ratings"][0].__setitem__("confidence", "high"),
+    lambda d: d["ratings"][0].__setitem__("confidence", True),
+    lambda d: d["ratings"][0].__setitem__("confidence", float("nan")),
+    lambda d: d["ratings"][0].__setitem__("needs_review", 0),
+    lambda d: d["ratings"][0].__setitem__("id", None),
+    lambda d: d["ratings"][0].__setitem__("pins", "PA1"),
+    lambda d: d["ratings"][0]["limit"].__setitem__("min", "x"),
+    lambda d: d["ratings"][0]["provenance"].__setitem__("verified", "no"),
+    lambda d: d["decoupling"][0].__setitem__("count", True),
+])
+def test_schema_rejects_corrupt_scalars(mutate):
+    """Corrupt trust fields must fail at the boundary as ValueError, not
+    load into more trust than the pipeline granted."""
+    data = _full_set().to_dict()
+    mutate(data)
+    with pytest.raises(ValueError):
+        ConstraintSet.from_dict(data)
+
+
+def test_distance_with_no_supply_pads_is_unchecked_not_silent():
+    """A wrong ref must not make the only geometric requirement vanish."""
+    c = _trusted(Decoupling(id="d", rail="VDD", max_distance_mm=2.0,
+                            provenance=_prov()))
+    result = check_board(_mcu_board(),
+                         ConstraintSet(part_number="X", decoupling=[c]),
+                         ref="U9")  # not on the board
+    assert any("cannot measure" in reason for _, reason in result.unchecked)
+
+
+def test_pull_to_the_wrong_rail_is_a_blocker():
+    c = _trusted(StrapPin(id="s", pin="BOOT0", required_state="pull-down",
+                          provenance=_prov()))
+    board = _mcu_board(extra_parts=[
+        _part("R1", "10k", [_pad("R1", "1", "BOOT", 8.0, 4.0),
+                            _pad("R1", "2", "VCC", 8.0, 5.5)]),
+    ])
+    result = check_board(board, ConstraintSet(part_number="X",
+                                              strap_pins=[c]),
+                         ref="U1", pin_map={"BOOT0": "3"})
+    assert len(result.findings) == 1
+    assert result.findings[0].severity is Severity.BLOCKER
+    assert "pulled high" in result.findings[0].detail
+
+
+def test_needs_review_constraint_never_proven_even_if_confirmed():
+    from dataclasses import replace
+
+    c = replace(_confirmed(Decoupling(id="d", rail="VDDA",
+                                      provenance=_prov())),
+                needs_review=True, review_reason="await human")
+    board = _mcu_board(extra_parts=[
+        _part("J2", "hdr", [_pad("J2", "1", "VDDA", 12.0, 0.0),
+                            _pad("J2", "2", "VDDA", 12.0, 2.0)]),
+    ])
+    result = check_board(board, ConstraintSet(part_number="X",
+                                              decoupling=[c]),
+                         ref="U1", include_needs_review=True)
+    assert result.findings[0].origin is Origin.SUGGESTED
+
+
+def test_proven_findings_keep_their_evidence():
+    c = _confirmed(Decoupling(id="d", rail="VDDA", provenance=_prov()))
+    board = _mcu_board(extra_parts=[
+        _part("J2", "hdr", [_pad("J2", "1", "VDDA", 12.0, 0.0),
+                            _pad("J2", "2", "VDDA", 12.0, 2.0)]),
+    ])
+    result = check_board(board, ConstraintSet(part_number="X",
+                                              decoupling=[c]), ref="U1")
+    f = result.findings[0]
+    assert f.origin is Origin.PROVEN
+    assert "0 found, 1 required" in f.evidence
+
+
+def test_ambiguous_rail_reports_the_ambiguity():
+    c = _trusted(Decoupling(id="d", rail="VDD", provenance=_prov()))
+    board = _board([
+        _part("U1", "MCU", [_pad("U1", "1", "VDD_1", 0.0, 0.0),
+                            _pad("U1", "2", "3V3_VDD", 0.0, 2.0)]),
+    ])
+    result = check_board(board, ConstraintSet(part_number="X",
+                                              decoupling=[c]), ref="U1")
+    assert len(result.unchecked) == 1
+    assert "ambiguous" in result.unchecked[0][1]
+    assert "3V3_VDD" in result.unchecked[0][1]
+
+
+def test_ground_nets_never_match_a_rail():
+    c = _trusted(Decoupling(id="d", rail="PGND", provenance=_prov()))
+    board = _board([
+        _part("U1", "MCU", [_pad("U1", "1", "PGND", 0.0, 0.0),
+                            _pad("U1", "2", "VDD", 0.0, 2.0)]),
+    ])
+    result = check_board(board, ConstraintSet(part_number="X",
+                                              decoupling=[c]), ref="U1")
+    assert any("no board net matches" in r for _, r in result.unchecked)
+
+
+@pytest.mark.parametrize("text", ["100", "104", "0", "47"])
+def test_parse_farads_refuses_bare_numbers(text):
+    assert parse_farads(text) is None
+
+
+def test_parse_farads_leading_dot():
+    assert parse_farads(".1uF") == pytest.approx(100e-9)

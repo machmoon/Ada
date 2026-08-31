@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import sys
 from pathlib import Path
 
@@ -88,6 +89,12 @@ def main(argv: list[str] | None = None) -> int:
 
     from ..agents.model import DEFAULT_MODEL, GeminiModel, ModelError
 
+    if not args.part.strip():
+        # from_dict refuses a set without a part number; refuse before the
+        # paid calls rather than writing a file the schema rejects.
+        print("error: --part must not be empty", file=sys.stderr)
+        return 2
+
     pdf_path = Path(args.pdf)
     if not pdf_path.exists():
         print(f"error: no such file: {pdf_path}", file=sys.stderr)
@@ -107,7 +114,10 @@ def main(argv: list[str] | None = None) -> int:
         print(f"error: {exc}", file=sys.stderr)
         return 1
 
-    out_path = Path(args.output or f"{args.part}.constraints.json")
+    # A part number is not a path: "SN74/LVC" must not crash (or escape the
+    # working directory) via the default filename.
+    safe_part = re.sub(r"[^A-Za-z0-9._-]+", "_", args.part.strip())
+    out_path = Path(args.output or f"{safe_part}.constraints.json")
     out_path.write_text(
         json.dumps(cset.to_dict(), indent=2, ensure_ascii=False) + "\n",
         encoding="utf-8",

@@ -34,6 +34,9 @@ is a real miss or a real error.
   reference's `document.url`.
 - `reference/*.constraints.json` — the hand-checked sets, schema
   `silkscreen.constraints` v1.0. Every entry has `confirmed: true` and a
-  `notes` field saying it is a hand transcription.
+  `notes` field saying it is a hand transcription. `provenance.verified` and
+  `document.sha256` were stamped mechanically by the same `quote_on_page`
+  check the extractor uses, against the recorded PDFs — the self-check
+  re-verifies both on every run.
 - `results/` — live-extraction output written by
   `python scripts/constraints_eval.py --live` (needs `GOOGLE_API_KEY`).

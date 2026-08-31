@@ -100,7 +100,7 @@ Every stage is a real KiCad file you can open and inspect on its own, so you can
 where a design went wrong instead of only seeing the last artifact.
 
 ```
-754 tests collected — no network, no API key, no KiCad install
+785 tests collected — no network, no API key, no KiCad install
 ```
 
 **Next:** [full install guide and troubleshooting](docs/install.md) ·
@@ -170,7 +170,7 @@ Platform-by-platform commands are in [docs/install.md](docs/install.md#kicad-opt
 | `order.py` — order options, manufacturability preflight | **Working** · blocks an unrouted board |
 | `mcp/` — MCP server over stdio | **Working** · 43 tests |
 | `audit/` — optional visual design review | **Working** · 52 tests |
-| `constraints/` — datasheet PDF → checkable, provenance-carrying constraints | **Working** · 48 tests |
+| `constraints/` — datasheet PDF → checkable, provenance-carrying constraints | **Working** · 79 tests |
 | `service/` — Cloud Run + Firestore cache | **Working** · 108 tests · not deployed anywhere yet; no live URL |
 | `frontend/` — Svelte review UI, served by the service | **Working** · persistent orchestrator chat, expandable model/tool traces, session JSON, review, schematic and board tabs |
 | Voice / talk input | Not built |
@@ -371,7 +371,7 @@ treats the board file as the interface.
 | Requires KiCad running | Yes | **No** |
 | Headless / CI | Hard | **Native** |
 | Platform lock | KiCad's plugin loader | **None — pure Python** |
-| Testable without KiCad | No | **Yes, all 754 tests** |
+| Testable without KiCad | No | **Yes, all 785 tests** |
 
 ### What it reads
 
@@ -752,7 +752,7 @@ engine/
       adk/          ADK dynamic workflow over the same stage bodies
     audit/        optional visual review of a finished board
     constraints/  datasheet PDF -> versioned, provenance-carrying constraints
-  tests/          754 tests — no network, no API keys, no KiCad
+  tests/          785 tests — no network, no API keys, no KiCad
     fixtures/     ref.kicad_pcb -- 11-footprint board fixture
 scripts/
   demo.py         end-to-end: read -> place -> write -> verify
@@ -840,7 +840,7 @@ docker build .                                      # the `docker` job
 
 ### Expected output
 
-**1. Test suite** — 754 tests (live-model and local-simulator cases skip when
+**1. Test suite** — 785 tests (live-model and local-simulator cases skip when
 their optional dependency is unavailable):
 
 ```

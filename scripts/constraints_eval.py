@@ -80,17 +80,29 @@ def _pdf_pages(stem: str) -> tuple[bytes, list[str]] | None:
         return None
 
 
-def self_check(stem: str) -> bool:
-    """Verify every reference quote sits on its claimed page. True = clean."""
+def self_check(stem: str) -> bool | None:
+    """Verify every reference quote sits on its claimed page.
+
+    True = clean, False = quotes failed, None = could not check (no PDF on
+    disk) -- three different answers, because "the PDF is not fetched" must
+    not read as either "verified" or "the references are wrong".
+    """
     ref = _load_reference(stem)
     if ref is None:
-        return True
+        print(f"  {stem}: NO REFERENCE FILE -- was it deleted or renamed?")
+        return False
     loaded = _pdf_pages(stem)
     if loaded is None:
-        return False
-    _data, pages = loaded
+        print(f"  {stem}: PDF not on disk; quotes UNVERIFIED this run "
+              f"(fetch via the reference's document.url)")
+        return None
+    data, pages = loaded
 
     ok = True
+    if ref.document.sha256 and ref.document.sha256 != _sha256(data):
+        print(f"  FAIL {stem}: PDF sha256 does not match the reference's "
+              f"document.sha256 -- different document revision?")
+        ok = False
     for c in ref.all_constraints():
         prov = c.provenance
         if not (1 <= prov.page <= len(pages)):
@@ -102,7 +114,7 @@ def self_check(stem: str) -> bool:
             ok = False
     total = len(ref.all_constraints())
     print(f"  {stem}: {total} reference constraints, "
-          f"{'all quotes verify' if ok else 'QUOTES FAILED'}")
+          f"{'all quotes verify' if ok else 'CHECK FAILED'}")
     return ok
 
 
@@ -123,18 +135,18 @@ def _corresponds(ref, ext) -> bool:
     if isinstance(ref, Rating):
         if ref.kind != ext.kind:
             return False
+        # A symbol is an identity: when both rows carry one and they differ
+        # (θJA vs θJC), they are different parameters, whatever the words say.
         if ref.symbol and ext.symbol and \
-                ref.symbol.lower() == ext.symbol.lower():
-            # Same symbol can appear in several rows (per package/condition);
-            # demand parameter overlap too when both have distinct wording.
-            pass
+                ref.symbol.strip().lower() != ext.symbol.strip().lower():
+            return False
+        if ref.limit.unit.strip().lower() != ext.limit.unit.strip().lower():
+            return False
         a = _key_tokens(ref.parameter) | _key_tokens(ref.symbol)
         b = _key_tokens(ext.parameter) | _key_tokens(ext.symbol)
         if not a or not b:
             return False
-        overlap = len(a & b) / min(len(a), len(b))
-        return overlap >= 0.5 and ref.limit.unit.strip().lower().rstrip("w") \
-            == ext.limit.unit.strip().lower().rstrip("w")
+        return len(a & b) / min(len(a), len(b)) >= 0.5
     if isinstance(ref, Decoupling):
         return ref.rail.strip().lower() == ext.rail.strip().lower()
     if isinstance(ref, StrapPin):
@@ -172,10 +184,33 @@ def _values_agree(ref, ext) -> tuple[bool, str]:
 
 
 def compare(ref: ConstraintSet, ext: ConstraintSet) -> dict:
+    """Pair reference and extracted constraints, then judge the pairs.
+
+    Two rounds, deliberately: round one pairs rows that correspond AND agree
+    on values, round two pairs what is left by correspondence alone. Greedy
+    single-pass pairing is order-dependent -- a byte-identical extraction in
+    reversed order came out "riddled with value mismatches" (adversarial
+    review, 2026-08-31), with per-package thermal rows cross-paired. The
+    dangerous class ("value mismatch") must contain real disagreements, not
+    pairing artifacts.
+    """
     matched, mismatched, missed = [], [], []
     ext_all = list(ext.all_constraints())
-    used = set()
+    used: set[int] = set()
+    refs_left = []
     for rc in ref.all_constraints():
+        partner = None
+        for i, ec in enumerate(ext_all):
+            if i not in used and _corresponds(rc, ec) \
+                    and _values_agree(rc, ec)[0]:
+                partner = (i, ec)
+                break
+        if partner is None:
+            refs_left.append(rc)
+            continue
+        used.add(partner[0])
+        matched.append((rc, partner[1]))
+    for rc in refs_left:
         partner = None
         for i, ec in enumerate(ext_all):
             if i not in used and _corresponds(rc, ec):
@@ -185,11 +220,8 @@ def compare(ref: ConstraintSet, ext: ConstraintSet) -> dict:
             missed.append(rc)
             continue
         used.add(partner[0])
-        agree, why = _values_agree(rc, partner[1])
-        if agree:
-            matched.append((rc, partner[1]))
-        else:
-            mismatched.append((rc, partner[1], why))
+        _agree, why = _values_agree(rc, partner[1])
+        mismatched.append((rc, partner[1], why))
     extra = [ec for i, ec in enumerate(ext_all) if i not in used]
     return {"matched": matched, "mismatched": mismatched,
             "missed": missed, "extra": extra}
@@ -260,9 +292,9 @@ def main(argv: list[str] | None = None) -> int:
 
     stems = [args.part] if args.part else sorted(PARTS)
     print("reference self-check:")
-    clean = all([self_check(stem) for stem in stems])
-    if not clean:
-        print("reference quotes failed verification; fix them before "
+    results = [self_check(stem) for stem in stems]
+    if any(r is False for r in results):
+        print("reference self-check FAILED; fix the references before "
               "trusting any comparison")
         return 1
     if args.live:
