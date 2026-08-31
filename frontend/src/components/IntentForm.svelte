@@ -172,11 +172,11 @@
     </div>
   </details>
 
-  <section class="orchestrator" data-testid="intent-form-orchestrator" data-material="panel">
-    <div class="orchestrator-heading">
-      <span class="lbl">orchestrator</span>
-      <span class="orchestrator-note">Chooses clarification and calls the board generator</span>
-    </div>
+  <!-- Power-user controls whose defaults are already correct: closed by
+       default so the first screen reads intent → run, like the datasheets
+       disclosure above. -->
+  <details class="orchestrator" data-testid="intent-form-orchestrator" data-material="panel">
+    <summary class="lbl" data-testid="intent-form-orchestrator-summary">orchestrator · advanced</summary>
     <div class="orchestrator-controls">
       <label class="orchestrator-control">
         <span>Model</span>
@@ -215,10 +215,12 @@
         <small>Spaces Gemini calls across this service instance. It cannot increase daily or token quota.</small>
       </label>
     </div>
-    {#if selectedUnavailable}
-      <p class="model-warning" role="status">This model is not advertised by the configured API key.</p>
-    {/if}
-  </section>
+  </details>
+  <!-- Outside the disclosure: the submit button is disabled by this, so the
+       reason must be visible even while the panel is closed. -->
+  {#if selectedUnavailable}
+    <p class="model-warning" role="status">This model is not advertised by the configured API key.</p>
+  {/if}
 
   <div class="controls">
     <label class="control">
@@ -265,7 +267,7 @@
     <div class="spacer"></div>
     <MicButton />
     <button type="submit" class="run" data-testid="intent-form-submit" disabled={!canSubmit}>
-      {review ? 'Run review' : 'Place board'}
+      Generate board
     </button>
   </div>
 </form>
@@ -348,8 +350,6 @@
     border: 1px solid var(--rule);
     background: var(--well);
   }
-  .orchestrator-heading { display: flex; align-items: baseline; gap: 10px; }
-  .orchestrator-note { color: var(--ink-soft); font-size: var(--fs-ui); }
   .orchestrator-controls { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; margin-top: 12px; }
   .orchestrator-control { display: flex; flex-direction: column; gap: 6px; color: var(--ink-mid); font-size: var(--fs-ui); }
   .orchestrator-control select {
