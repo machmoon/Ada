@@ -13,13 +13,16 @@ not validate, **draws a schematic**, generates the footprints, places the board 
 CP-SAT solver, **routes the copper**, and then argues against its own design and tells
 you what it thinks is wrong.
 
+![Ada desktop workflow demo](docs/img/ada-desktop-demo.gif)
+
+![Generated STM32 board layout in KiCad](docs/img/board.png)
+
 **Silkscreen is a Python program you run.** The command line is the product; the web UI
 is a viewer for what it produced, and is the less-supported path — see
 [Which interface](#which-interface).
 
 <!-- SCREENSHOTS WANTED — do not uncomment until the files exist under docs/img/:
      docs/img/review.png    the review pane with findings and citations
-     docs/img/board.png     the Board tab: courtyards, pads, silkscreen refs
      docs/img/schematic.png the Schematic tab
 -->
 
