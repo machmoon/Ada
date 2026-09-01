@@ -177,7 +177,6 @@ Platform-by-platform commands are in [docs/install.md](docs/install.md#kicad-opt
 | `audit/` — optional visual design review | **Working** · 52 tests |
 | `service/` — Cloud Run + Firestore cache | **Working** · 146 tests · live at <https://silkscreen-vqdj4x5qbq-uc.a.run.app> |
 | `slackbot/` — Slack bot over the pipeline | **Working** · untested against a live workspace |
-| `googleapps/` — Chat, Gmail and Calendar delivery over the pipeline | **Working** · untested against live Google APIs |
 | `frontend/` — Svelte review UI, served by the service | **Working** · persistent orchestrator chat, expandable traces, session JSON, review, schematic, placement and board tabs |
 | `engine/silkscreen/placement/` — verifier-grounded repair and company profiles | **Working** · deterministic and Gemini policies; experimental providers are opt-in |
 | `constraints.py` — approved build contract and post-route receipt | **Working** · opt-in, fail-closed, and deterministically tested |
