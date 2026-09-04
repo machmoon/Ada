@@ -133,6 +133,36 @@ def _evaluation_dict(evaluation: Any) -> dict[str, Any]:
     }
 
 
+def _receipt_dict(receipt: Any) -> dict[str, Any]:
+    return {**asdict(receipt), "action": asdict(receipt.action)}
+
+
+def _candidate_dict(candidate: Any) -> dict[str, Any]:
+    return {
+        "lane": candidate.lane,
+        "prompt": candidate.prompt,
+        "response": candidate.response,
+        "proposed": [asdict(action) for action in candidate.proposed],
+        "accepted": [asdict(action) for action in candidate.accepted],
+        "receipts": [_receipt_dict(receipt) for receipt in candidate.receipts],
+        "hard_after": candidate.hard_after,
+        "soft_after": candidate.soft_after,
+        "elapsed_ms": candidate.elapsed_ms,
+        "error": candidate.error,
+    }
+
+
+def _speculation_dict(step: Any) -> dict[str, Any] | None:
+    if not step.candidates:
+        return None
+    return {
+        "width": len(step.candidates),
+        "winner_lane": step.winner_lane,
+        "wall_ms": step.speculative_wall_ms,
+        "candidates": [_candidate_dict(item) for item in step.candidates],
+    }
+
+
 def run_to_dict(
     run: PlacementRun, feedback: dict[str, Any] | None = None
 ) -> dict[str, Any]:
@@ -165,18 +195,13 @@ def run_to_dict(
                 "board_before": board_to_dict(step.board_before),
                 "proposed": [asdict(action) for action in step.proposed],
                 "accepted": [asdict(action) for action in step.accepted],
-                "receipts": [
-                    {
-                        **asdict(receipt),
-                        "action": asdict(receipt.action),
-                    }
-                    for receipt in step.receipts
-                ],
+                "receipts": [_receipt_dict(receipt) for receipt in step.receipts],
                 "hard_before": step.hard_before,
                 "hard_after": step.hard_after,
                 "soft_before": step.soft_before,
                 "soft_after": step.soft_after,
                 "reason": step.reason,
+                "speculation": _speculation_dict(step),
             }
             for step in run.steps
         ],
@@ -214,6 +239,7 @@ def repair_request(
         model,
         fallback_model=fallback_model,
         max_turns=payload.get("max_turns", 8),
+        speculative_width=payload.get("speculative_width", 3),
     ).run(board, profile, policy=policy)
     result = run_to_dict(run, supplied)
     result["profile_memory"] = "request-only" if supplied else "none"
