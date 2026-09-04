@@ -196,6 +196,7 @@ def placement_repair_stage(
     feedback: dict[str, Any] | None,
     model: TextModel | None,
     fallback_model: TextModel | None,
+    lane_model_factory: Callable[[], TextModel] | None,
     max_turns: int,
     emit: Emit,
     enter: Enter,
@@ -219,6 +220,7 @@ def placement_repair_stage(
         feedback=feedback,
         model=model,
         fallback_model=fallback_model,
+        lane_model_factory=lane_model_factory,
         max_turns=max_turns,
     )
     before = result.run.start

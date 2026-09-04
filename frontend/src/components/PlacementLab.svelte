@@ -37,6 +37,12 @@
   const accepted = $derived(receipts.filter((item) => item.receipt.accepted))
   const teachRef = $derived(accepted.length ? accepted[0].action.ref : '')
   const availablePolicies = $derived(placementCapabilities?.policies || {})
+  const speculativeStep = $derived(
+    result ? result.steps.find((step) => step.speculation)?.speculation : null,
+  )
+  const recoveryUsed = $derived(
+    result ? result.steps.some((step) => step.proposer === 'gemini-recovery') : false,
+  )
 
   function mergeFeedback(current = {}, supplied = {}) {
     const merged = { ...current, ...supplied }
@@ -213,6 +219,16 @@
               <span>Hard <MetricHelp label="Hard score" explanation={hardExplanation} align="left" /></span>
               <span>Soft <MetricHelp label="Soft score" explanation={softExplanation} /></span>
             </div>
+            {#if speculativeStep}
+              <div class="speculation">
+                {speculativeStep.width} move batches ran together ·
+                {speculativeStep.winner_lane ? `lane ${speculativeStep.winner_lane} committed` : 'all stalled'} ·
+                {Math.round(speculativeStep.wall_ms)} ms
+                {speculativeStep.cancelled_lanes?.length ? ` · ${speculativeStep.cancelled_lanes.length} cancelled` : ''}
+                {speculativeStep.timed_out_lanes?.length ? ` · ${speculativeStep.timed_out_lanes.length} timed out` : ''} ·
+                Gemini recovery {recoveryUsed ? 'used' : 'not needed'}
+              </div>
+            {/if}
           </div>
           <div class="actions">
             {#if teachRef}
@@ -271,6 +287,7 @@
   h2 { margin-top: 5px; font-size: 18px; font-weight: 550; }
   .score-key { display: flex; gap: 16px; margin-top: 10px; color: var(--ink-mid); font-size: var(--fs-ui); }
   .score-key span { display: inline-flex; align-items: center; gap: 6px; }
+  .speculation { margin-top: 8px; color: var(--ink-soft); font-family: var(--font-mono); font-size: var(--fs-mono-sm); }
   .actions { display: flex; gap: 8px; }
   ol { list-style: none; margin: 0; padding: 0; }
   .trace li { min-height: 52px; display: grid; grid-template-columns: 42px 1fr auto; align-items: center; gap: 14px; padding: 11px 20px; border-bottom: 1px solid var(--rule-soft); }

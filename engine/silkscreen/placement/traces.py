@@ -142,8 +142,10 @@ def _trace_record(
     input_origin: str,
     recorded_at: float,
     trace_id: str,
+    chosen_override: tuple[str, str] | None = None,
+    candidate_lane: int | None = None,
 ) -> dict[str, Any]:
-    chosen, chosen_source = _chosen_response(
+    chosen, chosen_source = chosen_override or _chosen_response(
         step, recovery, result["profile"]
     )
     prompt = step.get("prompt", "")
@@ -158,6 +160,7 @@ def _trace_record(
         "input_origin": input_origin,
         "failure_kind": failure_kind,
         "turn": step.get("turn"),
+        "candidate_lane": candidate_lane,
         "profile": result.get("profile"),
         "board_before": step.get("board_before"),
         "prompt": prompt,
@@ -175,6 +178,33 @@ def _trace_record(
             "rejected": rejected,
         },
     }
+
+
+def _speculative_failures(
+    step: dict[str, Any],
+) -> tuple[list[tuple[dict[str, Any], str]], tuple[str, str] | None]:
+    speculation = step.get("speculation") or {}
+    candidates = list(speculation.get("candidates") or [])
+    if not candidates:
+        return [], None
+    winner_lane = speculation.get("winner_lane")
+    winner = next(
+        (candidate for candidate in candidates if candidate.get("lane") == winner_lane),
+        None,
+    )
+    chosen = (
+        (str(winner.get("response", "")), "speculative-winner")
+        if winner is not None
+        else None
+    )
+    failures = []
+    for candidate in candidates:
+        if candidate.get("error"):
+            continue
+        failure_kind = _failure_kind(candidate)
+        if failure_kind is not None:
+            failures.append((candidate, failure_kind))
+    return failures, chosen
 
 
 def build_failure_traces(
@@ -195,6 +225,30 @@ def build_failure_traces(
     for index, step in enumerate(steps):
         if not _is_policy_step(step):
             continue
+        recovery = _recovery(steps, index)
+        speculative_failures, speculative_winner = _speculative_failures(step)
+        if speculative_failures:
+            for candidate, failure_kind in speculative_failures:
+                candidate_step = {
+                    **step,
+                    **candidate,
+                    "prompt": candidate.get("prompt", step.get("prompt", "")),
+                }
+                traces.append(
+                    _trace_record(
+                        result,
+                        candidate_step,
+                        failure_kind=failure_kind,
+                        recovery=recovery,
+                        model_id=model_id,
+                        input_origin=input_origin,
+                        recorded_at=now(),
+                        trace_id=str(id_factory()),
+                        chosen_override=speculative_winner,
+                        candidate_lane=candidate.get("lane"),
+                    )
+                )
+            continue
         failure_kind = _step_failure_kind(
             step,
             index=index,
@@ -203,7 +257,6 @@ def build_failure_traces(
         )
         if failure_kind is None:
             continue
-        recovery = _recovery(steps, index)
         traces.append(
             _trace_record(
                 result,

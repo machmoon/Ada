@@ -387,6 +387,7 @@ def test_placement_repair_is_model_free_and_geometry_grounded(server):
         ({"hybrid": True, "tinker": True, "ollama": True}, "hybrid"),
         ({"tinker": True, "ollama": True}, "tinker"),
         ({"ollama": True}, "ollama"),
+        ({"opencode": True}, "opencode"),
         ({}, "deterministic"),
     ],
 )
@@ -402,6 +403,19 @@ def test_tinker_is_advertised_only_with_a_promoted_checkpoint(monkeypatch):
 
     monkeypatch.setenv("TINKER_PLACEMENT_MODEL", "tinker://run/checkpoint")
     assert placement_policy_status(experimental=True)["tinker"] is True
+
+
+def test_opencode_is_advertised_only_with_model_and_binary(monkeypatch):
+    monkeypatch.setenv("SILKSCREEN_EXPERIMENTAL_PLACEMENT", "1")
+    monkeypatch.setenv("OPENCODE_PLACEMENT_MODEL", "opencode-go/glm-5.3-flash")
+    monkeypatch.setattr("service.app.shutil.which", lambda binary: f"/bin/{binary}")
+
+    status = placement_policy_status(experimental=True)
+
+    assert status["opencode"] is True
+
+    monkeypatch.setenv("OPENCODE_PLACEMENT_MODEL", "missing-provider-prefix")
+    assert placement_policy_status(experimental=True)["opencode"] is False
 
 
 def test_fast_policy_falls_back_safely(server, monkeypatch):
@@ -2256,9 +2270,10 @@ def test_models_lists_the_server_catalog(server, monkeypatch):
         "policies": {
             "deterministic": True,
             "gemini": False,
-            "tinker": False,
-            "ollama": False,
-            "hybrid": False,
+                "tinker": False,
+                "ollama": False,
+                "opencode": False,
+                "hybrid": False,
         },
     }
 

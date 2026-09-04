@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib
+import threading
 from typing import Any
 
 from .agent import PlacementPolicyError
@@ -41,6 +42,16 @@ class TinkerPlacementModel:
             base_model=base_model,
         )
         self._tokenizer = self._sampling.get_tokenizer()
+        self._future = None
+        self._future_lock = threading.Lock()
+        self.last_usage: dict[str, int] = {}
+
+    def cancel(self) -> None:
+        with self._future_lock:
+            future = self._future
+        cancel = getattr(future, "cancel", None)
+        if callable(cancel):
+            cancel()
 
     def _render(self, prompt: str, system: str | None) -> str:
         messages = []
@@ -77,18 +88,29 @@ class TinkerPlacementModel:
             seed=0,
         )
         try:
-            response = self._sampling.sample(
+            future = self._sampling.sample(
                 prompt=model_input,
                 sampling_params=params,
                 num_samples=1,
-            ).result()
+            )
+            with self._future_lock:
+                self._future = future
+            response = future.result()
             if not response.sequences:
                 raise PlacementPolicyError("Tinker returned no sequences")
+            output_tokens = response.sequences[0].tokens
+            self.last_usage = {
+                "input_tokens": len(token_ids),
+                "output_tokens": len(output_tokens),
+            }
             return self._tokenizer.decode(
-                response.sequences[0].tokens,
+                output_tokens,
                 skip_special_tokens=True,
             ).strip()
         except PlacementPolicyError:
             raise
         except Exception as exc:
             raise PlacementPolicyError("Tinker placement request failed") from exc
+        finally:
+            with self._future_lock:
+                self._future = None

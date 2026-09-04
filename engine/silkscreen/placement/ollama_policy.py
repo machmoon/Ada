@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 import json
+import threading
 import urllib.request
 from collections.abc import Callable
 from typing import Any
 
-from .agent import PlacementPolicyError
+from .agent import PlacementPolicyError, PlacementPolicyTimeout
 
 __all__ = ["OllamaPlacementModel"]
 
@@ -29,6 +30,15 @@ class OllamaPlacementModel:
         self.model = model
         self.timeout_s = timeout_s
         self._opener = opener
+        self._response = None
+        self._response_lock = threading.Lock()
+        self.last_usage: dict[str, int] = {}
+
+    def cancel(self) -> None:
+        with self._response_lock:
+            response = self._response
+        if response is not None:
+            response.close()
 
     def generate(
         self,
@@ -62,12 +72,23 @@ class OllamaPlacementModel:
         )
         try:
             with self._opener(request, timeout=self.timeout_s) as response:
+                with self._response_lock:
+                    self._response = response
                 result = json.loads(response.read())
+        except TimeoutError as exc:
+            raise PlacementPolicyTimeout("Ollama placement request timed out") from exc
         except Exception as exc:
             raise PlacementPolicyError("Ollama placement request failed") from exc
+        finally:
+            with self._response_lock:
+                self._response = None
         content = result.get("message", {}).get("content")
         if not isinstance(content, str):
             raise PlacementPolicyError(
                 "Ollama response did not contain message.content"
             )
+        self.last_usage = {
+            "input_tokens": int(result.get("prompt_eval_count") or 0),
+            "output_tokens": int(result.get("eval_count") or 0),
+        }
         return content.strip()

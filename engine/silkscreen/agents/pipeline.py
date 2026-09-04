@@ -367,6 +367,7 @@ def _generate_pcb_sdk(
     placement_feedback: dict[str, Any] | None = None,
     placement_model: Model | None = None,
     placement_fallback_model: Model | None = None,
+    placement_lane_model_factory: Callable[[], Model] | None = None,
     placement_max_turns: int = 8,
 ) -> PipelineResult:
     """Run the stages as a straight line. See :func:`generate_pcb`."""
@@ -404,6 +405,7 @@ def _generate_pcb_sdk(
         feedback=placement_feedback,
         model=placement_model,
         fallback_model=placement_fallback_model,
+        lane_model_factory=placement_lane_model_factory,
         max_turns=placement_max_turns,
         emit=emit,
         enter=enter,
@@ -456,6 +458,7 @@ def generate_pcb(
     placement_feedback: dict[str, Any] | None = None,
     placement_model: Model | None = None,
     placement_fallback_model: Model | None = None,
+    placement_lane_model_factory: Callable[[], Model] | None = None,
     placement_max_turns: int = 8,
     engine: str = "",
 ) -> PipelineResult:
@@ -500,6 +503,8 @@ def generate_pcb(
         placement_feedback: Structured request-local company-profile corrections.
         placement_model: Proposal model for a non-deterministic placement policy.
         placement_fallback_model: Recovery model used by the hybrid policy.
+        placement_lane_model_factory: Creates an isolated fast-policy client per
+            speculative lane. Omit it for non-speculative policies.
         placement_max_turns: Bounded number of placement proposal turns.
         engine: Which driver runs the stages -- ``"sdk"`` for the straight line
             in this module, ``"adk"`` for the Google ADK workflow in
@@ -536,6 +541,7 @@ def generate_pcb(
             placement_feedback=placement_feedback,
             placement_model=placement_model,
             placement_fallback_model=placement_fallback_model,
+            placement_lane_model_factory=placement_lane_model_factory,
             placement_max_turns=placement_max_turns,
         )
     if chosen == "adk":
@@ -565,6 +571,7 @@ def generate_pcb(
             placement_feedback=placement_feedback,
             placement_model=placement_model,
             placement_fallback_model=placement_fallback_model,
+            placement_lane_model_factory=placement_lane_model_factory,
             placement_max_turns=placement_max_turns,
         )
     # RuntimeError, not ValueError: the service answers a pipeline ValueError as

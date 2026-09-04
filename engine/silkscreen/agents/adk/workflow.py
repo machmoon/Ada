@@ -86,6 +86,7 @@ def placement_repair(node_input: str) -> str:
             feedback=run.placement_feedback,
             model=run.placement_model,
             fallback_model=run.placement_fallback_model,
+            lane_model_factory=run.placement_lane_model_factory,
             max_turns=run.placement_max_turns,
             emit=run.emit,
             enter=run.enter,

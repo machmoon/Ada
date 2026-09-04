@@ -2,6 +2,9 @@ from __future__ import annotations
 
 import json
 import math
+import re
+import threading
+import time
 from dataclasses import dataclass, field
 from types import SimpleNamespace
 
@@ -53,6 +56,25 @@ class QueueModel:
     def generate(self, prompt: str, **kwargs) -> str:
         self.calls.append({"prompt": prompt, **kwargs})
         return self.responses.pop(0)
+
+
+@dataclass
+class ParallelLaneModel:
+    responses: dict[int, str]
+    width: int = 3
+    calls: list[int] = field(default_factory=list)
+
+    def __post_init__(self) -> None:
+        self.barrier = threading.Barrier(self.width)
+
+    def generate(self, prompt: str, **kwargs) -> str:
+        match = re.search(r"SPECULATIVE LANE (\d+)/(\d+)", prompt)
+        assert match is not None
+        lane, width = (int(value) for value in match.groups())
+        assert width == self.width
+        self.calls.append(lane)
+        self.barrier.wait(timeout=2)
+        return self.responses[lane]
 
 
 def test_demo_board_is_corrupted_and_repair_is_legal() -> None:
@@ -351,6 +373,17 @@ def test_non_finite_feedback_values_are_rejected() -> None:
         )
 
 
+def test_speculative_width_is_bounded() -> None:
+    with pytest.raises(ValueError, match="between 2 and 4"):
+        PlacementAgent(speculative_width=1)
+
+
+@pytest.mark.parametrize("value", [True, 3.0, "3"])
+def test_speculative_width_rejects_coerced_values(value: object) -> None:
+    with pytest.raises(ValueError, match="must be an integer"):
+        repair_request({"speculative_width": value})
+
+
 def test_scripted_agent_accepts_improving_move_and_ignores_hallucination() -> None:
     profile = CompanyProfile("simple", clearance=0.5, edge_margin=0.5)
     board = Board(
@@ -400,6 +433,170 @@ def test_hybrid_policy_uses_gemini_only_after_fast_policy_stalls() -> None:
     assert [step.proposer for step in run.steps] == ["tinker", "gemini-recovery"]
     assert run.steps[0].accepted == ()
     assert run.steps[1].accepted
+
+
+def test_hybrid_policy_runs_parallel_lanes_and_commits_best_candidate() -> None:
+    profile = CompanyProfile("simple", clearance=0.5, edge_margin=0.5)
+    board = Board(
+        20,
+        12,
+        (Component("U1", 2, 2, 5, 5), Component("C1", 4, 3, 3, 3)),
+    )
+    fast = ParallelLaneModel(
+        responses={
+            1: "PLACE C1 3 3",
+            2: "PLACE C1 12 3",
+            3: "PLACE C1 9 3",
+        }
+    )
+    recovery = QueueModel(responses=["PLACE C1 10 3"])
+
+    run = PlacementAgent(fast, fallback_model=recovery, max_turns=1).run(
+        board, profile, policy="hybrid"
+    )
+    result = run_to_dict(run)
+
+    assert run.completed
+    assert sorted(fast.calls) == [1, 2, 3]
+    assert recovery.calls == []
+    assert len(run.steps) == 1
+    assert run.steps[0].winner_lane == 3
+    assert run.board.component("C1").x == 9
+    assert result["steps"][0]["speculation"]["width"] == 3
+    assert result["steps"][0]["speculation"]["winner_lane"] == 3
+    assert result["steps"][0]["speculation"]["wall_ms"] > 0
+    assert len(result["steps"][0]["speculation"]["candidates"]) == 3
+
+    traces = build_failure_traces(
+        result,
+        model_id="Qwen/Qwen3.5-4B",
+        input_origin="demo-board",
+        now=lambda: 123.0,
+        id_factory=lambda: "lane-trace",
+    )
+    assert len(traces) == 1
+    assert traces[0]["candidate_lane"] == 1
+    assert traces[0]["chosen_source"] == "speculative-winner"
+    assert traces[0]["rejected_response"] == "PLACE C1 3 3"
+    assert traces[0]["chosen_response"] == "PLACE C1 9 3"
+
+
+def test_speculative_lanes_use_isolated_model_instances() -> None:
+    profile = CompanyProfile("simple", clearance=0.5, edge_margin=0.5)
+    board = Board(
+        20,
+        12,
+        (Component("U1", 2, 2, 5, 5), Component("C1", 4, 3, 3, 3)),
+    )
+    barrier = threading.Barrier(3)
+    instance_ids = []
+    created = 0
+
+    class IsolatedModel:
+        def __init__(self, instance_id: int) -> None:
+            self.instance_id = instance_id
+
+        def generate(self, prompt: str, **kwargs) -> str:
+            del prompt, kwargs
+            instance_ids.append(self.instance_id)
+            barrier.wait(timeout=2)
+            return "PLACE C1 12 3"
+
+    def factory() -> IsolatedModel:
+        nonlocal created
+        created += 1
+        return IsolatedModel(created)
+
+    run = PlacementAgent(
+        QueueModel(responses=[]),
+        lane_model_factory=factory,
+        max_turns=1,
+        speculative_early_commit=False,
+    ).run(board, profile, policy="hybrid")
+
+    assert run.completed
+    assert sorted(instance_ids) == [1, 2, 3]
+    assert created == 3
+
+
+def test_speculative_deadline_returns_and_marks_slow_lanes() -> None:
+    profile = CompanyProfile("simple", clearance=0.5, edge_margin=0.5)
+    board = Board(
+        20,
+        12,
+        (Component("U1", 2, 2, 5, 5), Component("C1", 4, 3, 3, 3)),
+    )
+
+    class SlowModel:
+        def generate(self, prompt: str, **kwargs) -> str:
+            del prompt, kwargs
+            time.sleep(0.3)
+            return "PLACE C1 12 3"
+
+    recovery = QueueModel(responses=["PLACE C1 12 3"])
+    started = time.perf_counter()
+    run = PlacementAgent(
+        SlowModel(),
+        fallback_model=recovery,
+        lane_model_factory=SlowModel,
+        max_turns=1,
+        speculative_timeout_s=0.1,
+    ).run(board, profile, policy="hybrid")
+    elapsed = time.perf_counter() - started
+
+    assert elapsed < 0.25
+    assert run.completed
+    assert recovery.calls
+    assert {candidate.status for candidate in run.steps[0].candidates} == {
+        "deadline"
+    }
+
+
+def test_speculative_early_commit_cancels_remaining_lanes() -> None:
+    profile = CompanyProfile(
+        "legality-only",
+        clearance=0.5,
+        edge_margin=0.5,
+        compactness_weight=0,
+        grouping_weight=0,
+        connector_edge_weight=0,
+        thermal_weight=0,
+    )
+    board = Board(
+        20,
+        12,
+        (Component("U1", 2, 2, 5, 5), Component("C1", 4, 3, 3, 3)),
+    )
+
+    class EarlyModel:
+        def generate(self, prompt: str, **kwargs) -> str:
+            del kwargs
+            lane = int(re.search(r"SPECULATIVE LANE (\d+)/", prompt).group(1))
+            if lane != 1:
+                time.sleep(0.3)
+            return "PLACE C1 12 3"
+
+    started = time.perf_counter()
+    run = PlacementAgent(
+        EarlyModel(),
+        lane_model_factory=EarlyModel,
+        max_turns=1,
+        speculative_timeout_s=1,
+    ).run(board, profile, policy="hybrid")
+    elapsed = time.perf_counter() - started
+    speculation = run_to_dict(run)["steps"][0]["speculation"]
+
+    assert elapsed < 0.25
+    assert run.completed
+    assert speculation["early_commit"] is True
+    assert speculation["winner_lane"] == 1
+    assert speculation["timed_out_lanes"] == []
+    assert speculation["cancelled_lanes"] == [2, 3]
+    objectives = {
+        candidate["prompt"].split("LANE OBJECTIVE: ", 1)[1].splitlines()[0]
+        for candidate in speculation["candidates"]
+    }
+    assert len(objectives) == 3
 
 
 def test_failed_policy_step_becomes_recovery_training_pair(tmp_path) -> None:
